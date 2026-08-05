@@ -4,7 +4,7 @@ aliases: [rust-read-commands]
 kind: story
 parent: rust-port
 title: Port read-only commands (lint, board, review)
-status: todo
+status: done
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
