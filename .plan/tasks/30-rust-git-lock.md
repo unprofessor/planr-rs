@@ -96,73 +96,40 @@ All acceptance boxes checked.
 
 ## Review
 
-verdict: changes-requested
+verdict: approved
 reviewer: The Clanker
 date: 2026-08-05
 
-### What was checked
+### Re-check of `branch_list` prefix fix (commit 5e69651)
+
+**What was verified**:
 
 - `cargo test` — 38/38 passing ✓
-- `cargo build` — clean compile, expected dead-code warnings (git + lock not
-  consumed by any command yet) ✓
-- `src/git.rs` — all 14 wrappers present (`ls_tree_md`, `show_ref`,
-  `worktree_add`, `worktree_remove`, `branch_delete`, `merge_no_ff`,
-  `checkout`, `commit`, `diff_refs`, `branch_list`, `worktree_list`,
-  `rev_parse_verify`, `git_common_dir` + internal `git`/`git_in`/`run_git`)
+- `branch_list` at `src/git.rs:124-131` now uses exact prefix matching:
+  `if l.len() >= 2 && (&l[..2] == "* " || &l[..2] == "  ")` before
+  slicing `l[2..].trim()`. This matches the TS original:
+  `l.replace(/^\*\s/, '').replace(/^\s{2}/, '').trim()`.
+
+**Expected results (verified by reading the code)**:
+- `"* main"` → stripped prefix → `"main"` ✓
+- `"  feature-a"` → stripped two-space prefix → `"feature-a"` ✓
+  (was broken: old code did `trim_start()` then `[2..]` → `"ature-a"`)
+- `"feature-a"` (no prefix) → falls through to `l.trim()` → `"feature-a"` ✓
+
+**Residual observations** (carried from prior review, non-blocking):
+- `test_branch_list_format` still has an unused `sample` variable and
+  doesn't exercise the public function — low-risk since the fix is
+  inspectable locally. Could benefit from a future integration test.
+- Dead-code warnings on many git wrappers are expected (not yet consumed
+  by any command).
+
+### Prior review items (unchanged, verified clean)
+
 - `src/lock.rs` — `PlanrLock::shared`/`PlanrLock::exclusive` RAII guards,
-  `lock_path` resolves to `<git-common-dir>/planr.lock`, flock released on
-  Drop, parent dirs created via `create_dir_all` ✓
-- `git_common_dir` — trims trailing `/`, resolves relative paths against
-  cwd ✓
-- Lock semantics — shared doesn't block shared; exclusive serializes with
-  timing assertion ≥40ms ✓
-- Lock file path asserted as `planr.lock` under `.git` ✓
-
-### Issue: `branch_list` prefix-stripping bug
-
-**Location**: `src/git.rs` lines 119–138, `branch_list()` function
-
-**Problem**: The prefix-stripping logic does `l.trim_start()` before slicing
-`[2..]`. For non-current branches, `git branch --list` outputs:
-```
-  feature-a
-  feature-b
-* main
-```
-For `"  feature-a"`, `trim_start()` removes the two leading spaces entirely,
-leaving `"feature-a"`, then `s[2..]` produces `"ature-a"` — the first two
-characters of the branch name are eaten. Current branches (`"* main"`) work
-correctly because `trim_start()` leaves the `"* "` prefix intact.
-
-The TS original uses two `replace()` calls targeting the exact two-char
-prefix before trimming:
-```ts
-l.replace(/^\*\s/, '').replace(/^\s{2}/, '').trim()
-```
-
-**Fix**: Check for `"* "` or `"  "` prefix explicitly before slicing,
-without `trim_start()`:
-```rust
-let trimmed = if l.len() >= 2 && (&l[..2] == "* " || &l[..2] == "  ") {
-    l[2..].trim()
-} else {
-    l.trim()
-};
-```
-
-**Severity**: medium — latent bug (no current command calls `branch_list`
-outside tests, and the existing test `test_branch_list_format` doesn't
-invoke the public function). Would corrupt branch names once wired.
-
-### Minor observations (non-blocking)
-
-- `test_branch_list_format` has an unused variable `sample` and doesn't
-  actually test `branch_list`. Consider adding an integration test.
-- The git wrappers all use OS-level cwd (via `git()`) rather than accepting
-  an explicit cwd parameter, making them hard to unit-test in temp repos.
-  The `git_in` helper exists but only `git_common_dir` uses it. This is
-  acceptable by design (matching TS behavior) but means the wrappers can
-  only be exercised by integration tests that `cd` into the temp repo first.
+  lock path = `<git-common-dir>/planr.lock`, flock released on Drop ✓
+- `git_common_dir` — resolves relative `.git` against cwd ✓
+- Lock semantics — shared doesn't block shared; exclusive serializes ✓
+- All 14 git wrappers present, with proper error return ✓
 
 ## Notes
 
