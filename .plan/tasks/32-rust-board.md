@@ -79,6 +79,38 @@ All acceptance criteria verified in worktree at
 
 All acceptance boxes checked.
 
+## Review
+
+- Correct:
+  - Pure `render_board(BoardInput)` → formatted board string. All sections
+    (epics, stories, tasks, in-flight, summary) rendered with exact column
+    padding: ID(30), STATUS(12), PARENT(22), BLOCKED-BY(22) for sections;
+    BRANCH(30), STATUS(14) for in-flight; STATUS(12)/COUNT for summary.
+  - Sections omitted when empty (epics/stories/tasks/in-flight). Summary
+    always rendered.
+  - BLOCKED-BY tasks-only; ` -` placeholder when empty; unmet deps joined
+    by space. Verified on live output: `rust-e2e` shows
+    `rust-board rust-review rust-new-ticket rust-claim rust-close-cmd`.
+  - Parent `None` renders as `-`. Confirmed on all epics.
+  - Summary counting: trunk task with in-flight branch skipped (`rust-board`
+    trunk `todo` skipped in favor of branch `review`); non-done task with
+    unmet deps counts as `blocked` (6 blocked computed correctly).
+  - CLI: `cargo run -- board` produces correct output on this repo with
+    `plan/rust-board` shown as in-flight, exit 0, stderr clean (binary only).
+  - `cargo test`: 55/55 passing. `cargo build`: clean (expected dead-code
+    warnings).
+  - Working-tree and ref mode both handled (empty-string arg → working tree).
+  - In-flight branch scan: `branch_list("plan/*")` with regex task-file
+    matching and tolerant error paths (`(no task file)`, `(unreadable)`).
+
+- Fixed: None — no issues found.
+
+- Blocker: None.
+
+- Note: The blocked-by test (`test_blocked_by_shown`) only verifies the
+  placeholder case (all deps met → ` -`). It does not assert the unmet-dep
+  display path. The logic is nonetheless verified correct by live output.
+
 ## Notes
 
 - 2026-08-05 created
