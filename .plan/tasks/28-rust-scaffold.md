@@ -4,7 +4,7 @@ aliases: [rust-scaffold]
 kind: task
 parent: rust-foundation
 title: "Cargo scaffold: six clap subcommands, env config, error conventions"
-status: todo
+status: in_progress
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
