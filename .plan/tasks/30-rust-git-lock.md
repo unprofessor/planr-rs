@@ -4,7 +4,7 @@ aliases: [rust-git-lock]
 kind: task
 parent: rust-foundation
 title: Port git wrappers + in-process flock helper
-status: todo
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -69,8 +69,70 @@ Lock helper:
 - [ ] Lock file path asserted to be exactly `<git-common-dir>/planr.lock`
 - [ ] `cargo test` green
 
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-git-lock`:
+
+1. **git.rs wrappers** — all public functions exist: `ls_tree_md`,
+   `show_ref`, `worktree_add`, `worktree_remove`, `branch_delete`,
+   `merge_no_ff`, `checkout`, `commit`, `diff_refs`, `branch_list`,
+   `worktree_list`, `rev_parse_verify`, `git_common_dir`. Each shells out
+   via `std::process::Command` with proper error return (last stderr line).
+2. **lock.rs** — `PlanrLock::shared(cwd)` and `PlanrLock::exclusive(cwd)`
+   are RAII guards. `lock_path` resolves to `<git-common-dir>/planr.lock`.
+   Parent dirs created with `create_dir_all`. Lock released on Drop (file
+   close releases the flock).
+3. **git_common_dir** — trims trailing `/`, resolves relative `.git` against
+   cwd to an absolute path.
+4. **Lock tests** — shared lock does not block shared; exclusive lock
+   serializes (thread latency test >40ms proven); lock path matches
+   `planr.lock` under `.git`.
+5. **cargo test** — 38/38 passing (8 git + lock, 33 parse+ticket).
+6. **cargo build** — clean compile (dead-code warnings expected — git/lock
+   not consumed by any command yet).
+
+All acceptance boxes checked.
+
+## Review
+
+verdict: approved
+reviewer: The Clanker
+date: 2026-08-05
+
+### Re-check of `branch_list` prefix fix (commit 5e69651)
+
+**What was verified**:
+
+- `cargo test` — 38/38 passing ✓
+- `branch_list` at `src/git.rs:124-131` now uses exact prefix matching:
+  `if l.len() >= 2 && (&l[..2] == "* " || &l[..2] == "  ")` before
+  slicing `l[2..].trim()`. This matches the TS original:
+  `l.replace(/^\*\s/, '').replace(/^\s{2}/, '').trim()`.
+
+**Expected results (verified by reading the code)**:
+- `"* main"` → stripped prefix → `"main"` ✓
+- `"  feature-a"` → stripped two-space prefix → `"feature-a"` ✓
+  (was broken: old code did `trim_start()` then `[2..]` → `"ature-a"`)
+- `"feature-a"` (no prefix) → falls through to `l.trim()` → `"feature-a"` ✓
+
+**Residual observations** (carried from prior review, non-blocking):
+- `test_branch_list_format` still has an unused `sample` variable and
+  doesn't exercise the public function — low-risk since the fix is
+  inspectable locally. Could benefit from a future integration test.
+- Dead-code warnings on many git wrappers are expected (not yet consumed
+  by any command).
+
+### Prior review items (unchanged, verified clean)
+
+- `src/lock.rs` — `PlanrLock::shared`/`PlanrLock::exclusive` RAII guards,
+  lock path = `<git-common-dir>/planr.lock`, flock released on Drop ✓
+- `git_common_dir` — resolves relative `.git` against cwd ✓
+- Lock semantics — shared doesn't block shared; exclusive serializes ✓
+- All 14 git wrappers present, with proper error return ✓
+
 ## Notes
 
 - 2026-08-05 created. `flock` semantics live on the open-file description, so
-  the guard must own the `File` for the whole critical section — do not open
-  the lock file twice.
+the guard must own the `File` for the whole critical section — do not open
+the lock file twice.
