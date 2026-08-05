@@ -105,8 +105,18 @@ fn main() {
         Command::Board { .. } => {
             fail("board: not yet implemented");
         }
-        Command::Lint { .. } => {
-            fail("lint: not yet implemented");
+        Command::Lint { r#ref } => {
+            let report = match r#ref {
+                Some(ref_) if !ref_.is_empty() => lint::lint_ref(&ref_, &cli.plan_dir),
+                _ => lint::lint_working_tree(&cli.plan_dir),
+            };
+            let out = lint::render_report(&report);
+            if !out.is_empty() {
+                print!("{out}");
+            }
+            if report.error_count > 0 {
+                process::exit(1);
+            }
         }
         Command::New { .. } => {
             fail("new: not yet implemented");

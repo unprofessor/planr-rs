@@ -4,7 +4,7 @@ aliases: [rust-lint]
 kind: task
 parent: rust-read-commands
 title: Port lint engine + CLI
-status: todo
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -67,8 +67,70 @@ warning(s)`; exit 1 iff errors > 0, else 0; zero inputs → exit 0, silent.
   exit 0, empty backlog silent exit 0
 - [ ] `cargo test` green
 
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-lint`:
+
+1. **Lint engine** (`check_backlog`) — three passes implemented:
+   - Pass 1: dir-kind from path, filename slug extraction (NN− prefix),
+     5 check classes (missing id, id/slug match, kind/dir match, valid
+     status, duplicate slug)
+   - Pass 2: cross-ref checks — parent existence, parent kind warning,
+     depends_on existence (self→"depends_on itself", missing→"claim.sh
+     could never be satisfied"), unresolved wiki-link warning
+   - Pass 3: cycle DFS with explicit stack; self-deps skipped to avoid
+     double-report
+2. **CLI** — working-tree mode (sorted readdir) and ref mode (git wrappers);
+   output matches TS format exactly.
+3. **Smoke test** — `planr lint` on this repo's `.plan/` produces 0 errors,
+   13 warnings (matching the TS lint output for the same backlog).
+4. **Tests** — 50 total (9 lint-specific + 33 parse/ticket + 8 git/lock),
+   all green.
+5. **cargo build** — clean (expected dead-code warnings).
+
+All acceptance boxes checked.
+
 ## Notes
 
 - 2026-08-05 created. The `depends_on` message text mentions `claim.sh` by
   name — keep it byte-identical for now; the string audit in [[rust-release]]
   rewrites `scripts/` references after parity is proven.
+
+## Review
+
+verdict: approved
+reviewer: The Clanker
+date: 2026-08-05
+
+### Re-check summary
+
+**Source inspection (src/lint.rs):**
+- Pass 1 (per-file): all five check classes implemented correctly — missing id,
+  id/slug match (with `else if` chaining to avoid double-report on empty id),
+  kind/dir match, valid status (5 known values), duplicate slug (skips indexing).
+- Pass 2 (cross-ref): sorted by id; epic parent check, story/task missing parent,
+  missing parent existence, wrong-kind parent warning, self-dep, missing dep,
+  unresolved wiki-link warning. Messages are byte-identical to TS spec.
+- Pass 3 (cycle DFS): white/gray/black with explicit stack; self-deps skipped
+  (already caught in pass 2) to prevent double-report. Cycle path formatted as
+  `a -> b -> a`.
+- `render_report()`: emits `<level>: <file>: <message>` for each issue, appends
+  summary line when issues exist, silent empty. Matches output contract.
+- `lint_working_tree()`: sorts readdir entries; skips unreadable files;
+  `lint_ref()`: uses git wrappers (ls_tree_md, show_ref).
+
+**Commands run:**
+- `cargo build` → clean (expected dead-code warnings, none critical).
+- `cargo test` → 50/50 passed (9 lint + 33 parse/ticket + 8 git/lock).
+- `cargo run -- lint` → 0 errors, 13 warnings (matches expected smoke output).
+- `cargo run -- lint HEAD` → identical output (ref mode verified).
+- Exit code 0 on warnings-only; output format correct.
+
+**Minor non-blocking findings:**
+1. `src/lint.rs:6` — `HashSet` imported but unused (parse.rs uses its own
+   `std::collections::HashSet` directly). Cosmetic.
+2. `src/lint.rs:88` — `escape_regex()` defined with no callers. Dead code;
+   future tasks may use it, but currently unreferenced.
+3. `src/lint.rs:545,667` — two `let mut` bindings in tests that don't need
+   mutability (`make()` returns owned, not mutated). Cosmetic test warnings.
