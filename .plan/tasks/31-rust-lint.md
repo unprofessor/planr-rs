@@ -4,7 +4,7 @@ aliases: [rust-lint]
 kind: task
 parent: rust-read-commands
 title: Port lint engine + CLI
-status: todo
+status: in_progress
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
