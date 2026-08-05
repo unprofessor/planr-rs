@@ -4,7 +4,7 @@ aliases: [rust-parse-core]
 kind: task
 parent: rust-foundation
 title: Port parser core (parse.rs, ticket.rs) + fixtures + unit tests
-status: todo
+status: in_progress
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
