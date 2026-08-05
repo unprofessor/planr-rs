@@ -102,8 +102,21 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Board { .. } => {
-            fail("board: not yet implemented");
+        Command::Board { r#ref } => {
+            let tickets = match r#ref {
+                Some(ref_) if ref_.is_empty() => board::read_working_tree_tickets(&cli.plan_dir),
+                Some(ref_) => board::read_ref_tickets(&ref_, &cli.plan_dir),
+                None => board::read_ref_tickets(&cli.trunk, &cli.plan_dir),
+            };
+            let branches = board::read_in_flight_branches(&cli.plan_dir);
+            let input = board::BoardInput {
+                trunk_tickets: tickets,
+                branch_statuses: branches,
+            };
+            let out = board::render_board(&input);
+            if !out.is_empty() {
+                print!("{out}");
+            }
         }
         Command::Lint { r#ref } => {
             let report = match r#ref {

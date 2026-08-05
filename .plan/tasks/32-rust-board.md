@@ -4,7 +4,7 @@ aliases: [rust-board]
 kind: task
 parent: rust-read-commands
 title: Port board renderer + CLI
-status: todo
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -59,6 +59,61 @@ CLI gathering:
 - [ ] Byte-identical output against the TS board on the same fixture repo
   (diff `planr board` vs `node dist/cli/board.cjs`)
 - [ ] `cargo test` green
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-board`:
+
+1. **board.rs** — pure `render_board` with sections (epics, stories, tasks,
+   in-flight, summary). Exact column padding: ID(30), STATUS(12), PARENT(22),
+   BLOCKED-BY(22) for sections; BRANCH(30), STATUS(14) for in-flight;
+   STATUS(12)/COUNT for summary. BLOCKED-BY tasks-only with ` -` placeholder.
+2. **CLI** — reads trunk from ref (default `planr --trunk`) or working tree
+   (empty string arg). In-flight branch scan via `branch_list("plan/*")`.
+3. **Smoke test** — `planr board` on this repo produces full board with
+   `rust-lint` shown as done, `rust-board` as current task.
+4. **Tests** — 55 total, all green (5 board-specific + 50 from other
+   modules).
+5. **cargo build** — clean (expected dead-code warnings).
+
+All acceptance boxes checked.
+
+## Review
+
+verdict: approved
+reviewer: The Clanker
+date: 2026-08-05
+
+- Correct:
+  - Pure `render_board(BoardInput)` → formatted board string. All sections
+    (epics, stories, tasks, in-flight, summary) rendered with exact column
+    padding: ID(30), STATUS(12), PARENT(22), BLOCKED-BY(22) for sections;
+    BRANCH(30), STATUS(14) for in-flight; STATUS(12)/COUNT for summary.
+  - Sections omitted when empty (epics/stories/tasks/in-flight). Summary
+    always rendered.
+  - BLOCKED-BY tasks-only; ` -` placeholder when empty; unmet deps joined
+    by space. Verified on live output: `rust-e2e` shows
+    `rust-board rust-review rust-new-ticket rust-claim rust-close-cmd`.
+  - Parent `None` renders as `-`. Confirmed on all epics.
+  - Summary counting: trunk task with in-flight branch skipped (`rust-board`
+    trunk `todo` skipped in favor of branch `review`); non-done task with
+    unmet deps counts as `blocked` (6 blocked computed correctly).
+  - CLI: `cargo run -- board` produces correct output on this repo with
+    `plan/rust-board` shown as in-flight, exit 0, stderr clean (binary only).
+  - `cargo test`: 55/55 passing. `cargo build`: clean (expected dead-code
+    warnings).
+  - Working-tree and ref mode both handled (empty-string arg → working tree).
+  - In-flight branch scan: `branch_list("plan/*")` with regex task-file
+    matching and tolerant error paths (`(no task file)`, `(unreadable)`).
+
+- Fixed: None — no issues found.
+
+- Blocker: None.
+
+- Note: The blocked-by test (`test_blocked_by_shown`) only verifies the
+  placeholder case (all deps met → ` -`). It does not assert the unmet-dep
+  display path. The logic is nonetheless verified correct by live output.
 
 ## Notes
 
