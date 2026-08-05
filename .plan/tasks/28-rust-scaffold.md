@@ -27,10 +27,10 @@ positionals:
 
 - `board [ref]` — ref defaults to the trunk; `board ""` reads the working tree
 - `lint [ref]` — no arg = working tree; arg = lint that ref
-- `new-ticket <kind> <slug> <title> [parent-slug]`
+- `new <kind> <slug> <title> [parent-slug]`
 - `claim <slug> [worktree] [trunk]` — worktree default `../wt-<slug>`
 - `review <slug>`
-- `merge-task <slug> [worktree] [trunk]`
+- `close <kind> <slug>` — task (branch-backed) or story/epic (trunk-local)
 
 Conventions to establish once in a shared module (every TS CLI does this ad
 hoc): user-facing failures print a plain message to stderr and exit 1 — never
@@ -39,7 +39,7 @@ result; missing required args print usage to stderr and exit 1.
 
 Suggested crate layout: `src/main.rs` (clap + dispatch) plus modules
 `parse.rs`, `ticket.rs`, `git.rs`, `lock.rs`, `lint.rs`, `board.rs`,
-`review.rs`, `new_ticket.rs`, `claim.rs`, `merge_task.rs`.
+`review.rs`, `new_cmd.rs`, `claim.rs`, `close_cmd.rs`.
 
 Dependency selection (record the choices in Cargo.toml comments or README):
 
@@ -51,7 +51,7 @@ Dependency selection (record the choices in Cargo.toml comments or README):
 - `regex` — wiki-links, slug patterns, filename matching
 - `fs2` — `lock_shared`/`lock_exclusive` for the flock (see [[rust-git-lock]])
 - a civil-date crate (`jiff` or `time`) — `YYYY-MM-DD` in both UTC
-  (new-ticket) and local (claim/merge-task) flavors
+  (new) and local (claim/close-task) flavors
 - dev-deps: `assert_cmd`, `tempfile` for the CLI/integration tests
 
 ## Acceptance

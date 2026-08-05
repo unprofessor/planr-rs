@@ -27,7 +27,7 @@ disappear.
   path resolution, no node).
 - Ported: parser core (`parse.ts` + `ticket.ts`), git wrappers (`git.ts`),
   lint engine, board renderer, review brief, and the three writers
-  (new-ticket / claim / merge-task) with their `flock` serialization — held
+  (`new` / `claim` / `close`) with their `flock` serialization — held
   **in-process** instead of the TS `flock … node -e <script>` child pattern.
 - Preserved: the ticket format, env vars (`PLANR_TRUNK`, `PLANR_DIR`),
   positional-arg CLI shapes, all user-facing strings (initially
@@ -57,7 +57,7 @@ throwaway git repo). Target interface: this repo's README.md usage block.
 
 Stories: [[rust-foundation]] (scaffold, parser, git+flock) →
 [[rust-read-commands]] (lint, board, review) and [[rust-write-commands]]
-(new-ticket, claim, merge-task) in parallel → [[rust-e2e-release]].
+`(`new`, claim, `close`) in parallel → [[rust-e2e-release]].
 
 ## Notes
 

@@ -9,9 +9,9 @@ mod lock;
 mod lint;
 mod board;
 mod review;
-mod new_ticket;
+mod new_cmd;
 mod claim;
-mod merge_task;
+mod close_cmd;
 
 // ---------------------------------------------------------------------------
 // Shared error/exit convention: every command calls `fail()` for user-facing
@@ -62,8 +62,8 @@ enum Command {
     },
 
     /// Scaffold a new ticket file
-    NewTicket {
-        /// one of: epic, story, task
+    New {
+        /// kind: epic, story, or task
         kind: String,
         /// kebab-case slug (becomes the file identity)
         slug: String,
@@ -89,14 +89,12 @@ enum Command {
         slug: String,
     },
 
-    /// Merge a reviewed task branch into trunk
-    MergeTask {
-        /// task slug
+    /// Complete a ticket: gate-check children, flip to done, merge
+    Close {
+        /// ticket kind: task, story, or epic
+        kind: String,
+        /// ticket slug
         slug: String,
-        /// worktree path (default: ../wt-<slug>)
-        worktree: Option<String>,
-        /// override trunk branch for this invocation
-        trunk_override: Option<String>,
     },
 }
 
@@ -110,8 +108,8 @@ fn main() {
         Command::Lint { .. } => {
             fail("lint: not yet implemented");
         }
-        Command::NewTicket { .. } => {
-            fail("new-ticket: not yet implemented");
+        Command::New { .. } => {
+            fail("new: not yet implemented");
         }
         Command::Claim { .. } => {
             fail("claim: not yet implemented");
@@ -119,8 +117,8 @@ fn main() {
         Command::Review { .. } => {
             fail("review: not yet implemented");
         }
-        Command::MergeTask { .. } => {
-            fail("merge-task: not yet implemented");
+        Command::Close { .. } => {
+            fail("close: not yet implemented");
         }
     }
 }

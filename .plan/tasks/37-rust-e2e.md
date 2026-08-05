@@ -9,7 +9,7 @@ assignee: null
 created: 2026-08-05
 updated: 2026-08-05
 tags: [rust, e2e, tests, flock]
-depends_on: [rust-lint, rust-board, rust-review, rust-new-ticket, rust-claim, rust-merge-task]
+depends_on: [rust-lint, rust-board, rust-review, rust-new-ticket, rust-claim, rust-close-cmd]
 ---
 
 ## Goal
@@ -45,8 +45,9 @@ Check classes to port from `run-tests.sh` (every one):
   distinct sequential prefixes, lint clean afterwards
 - board: `## summary` present, six status rows, expected `total`/`done`
   counts on the seeded backlog
-- merge-task end-to-end: claim → validate → review approve → merge flips
-  `done` on trunk (this exercises [[rust-merge-task]] beyond its unit tests)
+- close-task end-to-end: claim → validate → review approve →
+  `planr close task <slug>` flips done on branch then merges
+  (this exercises [[rust-close-cmd]] beyond its unit tests)
 
 Plus the interop test (env-gated, skipped with a note when
 `PLANR_TS_DIST` is unset): point at an agent-skills checkout's

@@ -37,14 +37,14 @@ Work items:
 3. **Release profile** — `[profile.release]` with `lto = true`, `strip =
    true` (`panic = "abort"` optional); record the resulting stripped binary
    size in the README (sanity target: single-digit MB).
-4. **String audit** — the port kept user-facing strings byte-identical,
-   including references to the old script paths; now rewrite them:
-   `assign a reviewer: scripts/review.sh <slug>` → `assign a reviewer: planr
-   review <slug>`; `# then re-run: scripts/merge-task.sh <slug>` → `# then
-   re-run: planr merge-task <slug>`; grep the whole `src/` for `scripts/` and
-   `.sh` to catch the rest (the `depends_on … claim.sh could never be
-   satisfied` lint message included — decide `planr claim` wording). Update
-   any test that asserts the old strings.
+4. **String audit** — The `close` command (unlike the old TS merge-task) is
+   green-field Rust code, so its messages should use `planr close task
+   <slug>` from the start — no `scripts/*.sh` references to audit (they
+   never existed in this codebase). However, the `lint` message
+   `depends_on '<dep>' does not exist — claim.sh could never be satisfied`
+   still carries the old `claim.sh` name from the TS port; rewrite it to
+   `claim` or `planr claim` wording. Also audit any other `src/` references
+   to `.sh` or `scripts/`.
 5. **Tag** — `git tag v0.1.0` on main once green; push is the owner's call.
 
 ## Acceptance

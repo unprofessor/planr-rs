@@ -3,21 +3,21 @@ id: rust-new-ticket
 aliases: [rust-new-ticket]
 kind: task
 parent: rust-write-commands
-title: "Port new-ticket: embedded templates, exclusive-flock prefix allocation"
+title: "Port `new` command: embedded templates, exclusive-flock prefix allocation"
 status: todo
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
-tags: [rust, new-ticket, flock, templates]
+tags: [rust, new, flock, templates]
 depends_on: [rust-lint, rust-git-lock]
 ---
 
 ## Goal
 
-Port `src/new-ticket.ts` + `src/cli/new-ticket.ts` (~380 LOC TS): ticket
-scaffolding with slug/kind/parent guards, template substitution, and
-flock-serialized prefix allocation — with the templates compiled into the
-binary.
+Port `src/new-ticket.ts` + `src/cli/new-ticket.ts` (~380 LOC TS) to a `new`
+subcommand: ticket scaffolding with slug/kind/parent guards, template
+substitution, and flock-serialized prefix allocation — with the templates
+compiled into the binary.
 
 ## Context
 
@@ -42,7 +42,7 @@ an installed single binary cannot do — embedding keeps one self-contained
 artifact and removes a whole failure mode. Substitute `__SLUG__`,
 `__TITLE__`, `__PARENT__` (empty string for epics), `__DATE__` globally.
 `__DATE__` is **UTC** `YYYY-MM-DD` (TS uses `toISOString()`) — note that
-claim/merge-task use the *local* date; this inconsistency is preserved
+claim/close-task use the *local* date; this inconsistency is preserved
 deliberately for parity.
 
 Exclusive-flock critical section (replaces the TS `LOCKED_WRITE_SCRIPT`
@@ -60,13 +60,13 @@ Output contract: stdout is EXACTLY one line — the created path as a relative
 path (e.g. `.plan/tasks/03-x.md`). After creation, run the lint engine
 in-process over the working tree and echo findings to stderr (informational
 only, never fails; TS spawns the `lint.cjs` subprocess — in Rust this is a
-function call). Usage error (missing args) → usage line to stderr, exit 1.
+function call). Usage error (missing args) → `planr new` usage line to stderr, exit 1.
 
 ## Acceptance
 
 - [ ] Ported `new-ticket.test.ts` cases green (all four guard classes,
   template substitution incl. `aliases: [<slug>]`, prefix allocation)
-- [ ] Three concurrent `planr new-ticket` invocations produce three distinct
+- [ ] Three concurrent `planr new` invocations produce three distinct
   sequential prefixes (the flock serializes allocation) and one-line stdouts
 - [ ] Pre-existing lint errors surface on stderr while stdout stays a single
   path line, exit 0

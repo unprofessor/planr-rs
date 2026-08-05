@@ -13,12 +13,12 @@ From source: (coming soon — language-specific instructions)
 ## Usage
 
 ```bash
-planr new-ticket <kind> <slug> <title>      # Scaffold a ticket file
+planr new <kind> <slug> <title>              # Scaffold a ticket file
 planr board                                   # Backlog + in-flight board
 planr lint                                    # Structural checks
 planr claim <task>                            # Create worktree, set in_progress
 planr review <task>                           # Brief a reviewer
-planr merge-task <task>                       # Gate check → merge → done
+planr close <kind> <slug>                     # Gate check -> done -> merge
 ```
 
 ## Development
