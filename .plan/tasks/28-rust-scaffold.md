@@ -4,7 +4,7 @@ aliases: [rust-scaffold]
 kind: task
 parent: rust-foundation
 title: "Cargo scaffold: six clap subcommands, env config, error conventions"
-status: in_progress
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -66,6 +66,33 @@ Dependency selection (record the choices in Cargo.toml comments or README):
   path for expected failures
 - [ ] Dependency choices recorded (one line each: what + why)
 - [ ] `cargo build && cargo test` green
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-scaffold`:
+
+1. **Cargo.toml + src/ module skeleton** — `cargo build` succeeds with 9 deps
+   compiled. Module stubs for all 11 modules exist under `src/`. `.gitignore`
+   ignores `target/`.
+2. **planr --help** — lists all six subcommands (board, lint, new-ticket,
+   claim, review, merge-task). Each subcommand `--help` renders correct
+   positional args matching the TS interface:
+   - `new-ticket <KIND> <SLUG> <TITLE> [PARENT_SLUG]`
+   - `claim <SLUG> [WORKTREE] [TRUNK_OVERRIDE]`
+   - `merge-task <SLUG> [WORKTREE] [TRUNK_OVERRIDE]`
+   - `board [REF]`, `lint [REF]`, `review <SLUG>`
+3. **PLANR_DIR / PLANR_TRUNK** — clap reads env vars with defaults `.plan`
+   and `main`, shown in `--help` as `[env: PLANR_DIR=] [default: .plan]`.
+4. **Shared error helper** — `src/main.rs` exports `pub fn fail(msg: &str)
+   -> !` which prints to stderr and exits 1. Used in all six stub
+   implementations. No panic paths for user-facing errors.
+5. **Dependency choices** — recorded in `Cargo.toml` comments with rationale
+   per crate: clap (derive), serde_yaml, regex, fs2, jiff. Dev-deps:
+   assert_cmd, tempfile.
+6. **cargo build && cargo test** — both green. No warnings.
+
+All acceptance boxes checked.
 
 ## Notes
 

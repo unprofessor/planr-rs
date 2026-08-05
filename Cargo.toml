@@ -1,0 +1,32 @@
+[package]
+name = "planr"
+version = "0.1.0"
+edition = "2021"
+description = "CLI tool for planr — trunk-based backlog for multi-agent development"
+authors = ["The Clanker", "unprofessor"]
+
+[profile.release]
+lto = true
+strip = true
+
+# --- why each dependency? ---
+# clap (derive)  — arg parsing + --help + --version
+# serde_yaml     — YAML frontmatter parser; plain scalars, inline & block lists,
+#                  quoted strings, null — same subset eemeli/yaml handles in TS.
+#                  Works via serde_yaml::Value which maps straight from
+#                  Record<string, unknown> used in the TypeScript port.
+# regex          — wiki-link extraction, slug validation, filename matching
+# fs2            — flock (lock_shared / lock_exclusive) on <git-common-dir>/planr.lock
+# jiff           — civil date formatting (YYYY-MM-DD) with UTC/local offset
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+serde_yaml = "0.9"
+regex = "1"
+fs2 = "0.4"
+jiff = { version = "0.2", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# assert_cmd & tempfile — end-to-end CLI tests in throwaway git repos
+assert_cmd = "2"
+tempfile = "3"
