@@ -1,1 +1,462 @@
-// stub — implemented in later tasks
+//! Board renderer — pure function that turns structured ticket data into
+//! the formatted board view.
+//!
+//! Port of `skills/planr/src/board.ts`.
+
+use crate::ticket::{Kind, ParsedTicket};
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct BranchStatus {
+    pub branch: String,
+    pub status: String,
+    pub slug: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoardInput {
+    /// All trunk tickets (epics, stories, tasks) from .plan/.
+    pub trunk_tickets: Vec<ParsedTicket>,
+    /// In-flight branch statuses from plan/* branches.
+    pub branch_statuses: Vec<BranchStatus>,
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn pad_right(s: &str, width: usize) -> String {
+    if s.len() >= width {
+        s.to_string()
+    } else {
+        let mut out = String::with_capacity(width);
+        out.push_str(s);
+        for _ in 0..(width - s.len()) {
+            out.push(' ');
+        }
+        out
+    }
+}
+
+/// Build a lookup map: slug → status (from trunk tickets, all kinds).
+fn trunk_status_map(tickets: &[ParsedTicket]) -> std::collections::HashMap<String, String> {
+    let mut m = std::collections::HashMap::new();
+    for t in tickets {
+        m.insert(t.id.clone(), t.status.clone());
+    }
+    m
+}
+
+/// Compute BLOCKED-BY for a task: slugs of unmet depends_on.
+fn blocked_by(task: &ParsedTicket, status_map: &std::collections::HashMap<String, String>) -> String {
+    if task.depends_on.is_empty() {
+        return String::new();
+    }
+    let unmet: Vec<&str> = task
+        .depends_on
+        .iter()
+        .filter(|dep| status_map.get(dep.as_str()).map_or(true, |s| s != "done"))
+        .map(|s| s.as_str())
+        .collect();
+    unmet.join(" ")
+}
+
+// ---------------------------------------------------------------------------
+// Section rendering
+// ---------------------------------------------------------------------------
+
+fn render_section(
+    label: &str,
+    tickets: &[&ParsedTicket],
+    status_map: &std::collections::HashMap<String, String>,
+    is_tasks: bool,
+) -> String {
+    if tickets.is_empty() {
+        return String::new();
+    }
+
+    let mut out = format!("## {label}\n");
+    out.push_str(&format!(
+        "{} {} {} {} {}\n",
+        pad_right("ID", 30),
+        pad_right("STATUS", 12),
+        pad_right("PARENT", 22),
+        pad_right("BLOCKED-BY", 22),
+        "TITLE",
+    ));
+
+    for t in tickets {
+        let blocked = if is_tasks {
+            blocked_by(t, status_map)
+        } else {
+            String::new()
+        };
+        let parent_display = t.parent.as_deref().unwrap_or("-");
+        let blocked_display = if blocked.is_empty() {
+            " -".to_string()
+        } else {
+            blocked
+        };
+        out.push_str(&format!(
+            "{} {} {} {} {}\n",
+            pad_right(&t.id, 30),
+            pad_right(&t.status, 12),
+            pad_right(parent_display, 22),
+            pad_right(&blocked_display, 22),
+            t.title,
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+fn render_in_flight(branches: &[BranchStatus]) -> String {
+    if branches.is_empty() {
+        return String::new();
+    }
+
+    let mut out = "## in flight (worktree branches)\n".to_string();
+    out.push_str(&format!(
+        "{} {} {}\n",
+        pad_right("BRANCH", 30),
+        pad_right("STATUS", 14),
+        "TASK",
+    ));
+
+    for b in branches {
+        out.push_str(&format!(
+            "{} {} {}\n",
+            pad_right(&b.branch, 30),
+            pad_right(&b.status, 14),
+            b.slug,
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+fn render_summary(
+    trunk_tickets: &[ParsedTicket],
+    branches: &[BranchStatus],
+    status_map: &std::collections::HashMap<String, String>,
+) -> String {
+    let in_flight_slugs: std::collections::HashSet<&str> =
+        branches.iter().map(|b| b.slug.as_str()).collect();
+
+    let mut t_todo = 0usize;
+    let mut t_ip = 0;
+    let mut t_review = 0;
+    let mut t_done = 0;
+    let mut t_blocked = 0;
+
+    for t in trunk_tickets {
+        // Skip trunk entry if there's an in-flight branch for this slug (only tasks)
+        if t.kind == Some(Kind::Task) && in_flight_slugs.contains(t.id.as_str()) {
+            continue;
+        }
+
+        // Check if a non-done task is blocked by unmet deps
+        if t.kind == Some(Kind::Task) && t.status != "done" {
+            let unmet = blocked_by(t, status_map);
+            if !unmet.is_empty() {
+                t_blocked += 1;
+                continue;
+            }
+        }
+
+        match t.status.as_str() {
+            "todo" => t_todo += 1,
+            "in_progress" => t_ip += 1,
+            "review" => t_review += 1,
+            "done" => t_done += 1,
+            "blocked" => t_blocked += 1,
+            _ => {}
+        }
+    }
+
+    // Count in-flight branch statuses
+    for b in branches {
+        match b.status.as_str() {
+            "todo" => t_todo += 1,
+            "in_progress" => t_ip += 1,
+            "review" => t_review += 1,
+            "done" => t_done += 1,
+            "blocked" => t_blocked += 1,
+            _ => {}
+        }
+    }
+
+    let total = t_todo + t_ip + t_review + t_done + t_blocked;
+
+    let mut out = "## summary\n".to_string();
+    out.push_str(&format!("{} {}\n", pad_right("STATUS", 12), "COUNT"));
+    out.push_str(&format!("{} {}\n", pad_right("total", 12), total));
+    out.push_str(&format!("{} {}\n", pad_right("todo", 12), t_todo));
+    out.push_str(&format!("{} {}\n", pad_right("in_progress", 12), t_ip));
+    out.push_str(&format!("{} {}\n", pad_right("review", 12), t_review));
+    out.push_str(&format!("{} {}\n", pad_right("done", 12), t_done));
+    out.push_str(&format!("{} {}\n", pad_right("blocked", 12), t_blocked));
+
+    out
+}
+
+/// Render the full board view: epics, stories, tasks, in-flight, summary.
+/// Pure function — no I/O.
+pub fn render_board(input: &BoardInput) -> String {
+    let status_map = trunk_status_map(&input.trunk_tickets);
+
+    let epics: Vec<&ParsedTicket> = input.trunk_tickets.iter().filter(|t| t.kind == Some(Kind::Epic)).collect();
+    let stories: Vec<&ParsedTicket> = input.trunk_tickets.iter().filter(|t| t.kind == Some(Kind::Story)).collect();
+    let tasks: Vec<&ParsedTicket> = input.trunk_tickets.iter().filter(|t| t.kind == Some(Kind::Task)).collect();
+
+    let mut out = String::new();
+    out.push_str(&render_section("epics", &epics, &status_map, false));
+    out.push_str(&render_section("stories", &stories, &status_map, false));
+    out.push_str(&render_section("tasks", &tasks, &status_map, true));
+    out.push_str(&render_in_flight(&input.branch_statuses));
+    out.push_str(&render_summary(&input.trunk_tickets, &input.branch_statuses, &status_map));
+
+    out
+}
+
+// ---------------------------------------------------------------------------
+// CLI I/O helpers (used by main.rs)
+// ---------------------------------------------------------------------------
+
+/// Gather trunk tickets from a git ref using the git wrappers.
+pub fn read_ref_tickets(ref_: &str, plan_dir: &str) -> Vec<ParsedTicket> {
+    let kinds = ["epics", "stories", "tasks"];
+    let mut results = Vec::new();
+
+    for kind in &kinds {
+        let dir = format!("{plan_dir}/{kind}");
+        let files = match crate::git::ls_tree_md(ref_, &dir) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        for f in &files {
+            if !f.ends_with(".md") {
+                continue;
+            }
+            let blob = match crate::git::show_ref(ref_, f) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let ticket = crate::ticket::parse_ticket(&blob);
+            results.push(ticket);
+        }
+    }
+    results
+}
+
+/// Gather trunk tickets from the local working tree.
+pub fn read_working_tree_tickets(plan_dir: &str) -> Vec<ParsedTicket> {
+    let kinds = ["epics", "stories", "tasks"];
+    let mut results = Vec::new();
+
+    for kind in &kinds {
+        let dir = format!("{plan_dir}/{kind}");
+        let dir_path = std::path::Path::new(&dir);
+        if !dir_path.exists() {
+            continue;
+        }
+        let mut entries: Vec<_> = match std::fs::read_dir(dir_path) {
+            Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
+            Err(_) => continue,
+        };
+        entries.sort();
+        for entry in &entries {
+            if entry.extension().map_or(true, |e| e != "md") {
+                continue;
+            }
+            if !entry.is_file() {
+                continue;
+            }
+            let blob = match std::fs::read_to_string(entry) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let ticket = crate::ticket::parse_ticket(&blob);
+            results.push(ticket);
+        }
+    }
+    results
+}
+
+/// Scan in-flight branches and return their statuses.
+pub fn read_in_flight_branches(plan_dir: &str) -> Vec<BranchStatus> {
+    let branches = match crate::git::branch_list(Some("plan/*")) {
+        Ok(b) => b,
+        Err(_) => return vec![],
+    };
+
+    let mut results = Vec::new();
+    for b in &branches {
+        let slug = b.strip_prefix("plan/").unwrap_or(b);
+        let files = match crate::git::ls_tree_md(b, &format!("{plan_dir}/tasks")) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        // Match /[0-9]+-<slug>.md$
+        let re_str = format!(r"/[0-9]+-{}\.md$", regex::escape(slug));
+        let re = match regex::Regex::new(&re_str) {
+            Ok(r) => r,
+            Err(_) => {
+                results.push(BranchStatus {
+                    branch: b.clone(),
+                    status: "(no task file)".to_string(),
+                    slug: slug.to_string(),
+                });
+                continue;
+            }
+        };
+        let task_file = files.iter().find(|f| re.is_match(f));
+        match task_file {
+            Some(f) => {
+                let blob = match crate::git::show_ref(b, f) {
+                    Ok(bl) => bl,
+                    Err(_) => {
+                        results.push(BranchStatus {
+                            branch: b.clone(),
+                            status: "(unreadable)".to_string(),
+                            slug: slug.to_string(),
+                        });
+                        continue;
+                    }
+                };
+                let ticket = crate::ticket::parse_ticket(&blob);
+                results.push(BranchStatus {
+                    branch: b.clone(),
+                    status: ticket.status,
+                    slug: slug.to_string(),
+                });
+            }
+            None => {
+                results.push(BranchStatus {
+                    branch: b.clone(),
+                    status: "(no task file)".to_string(),
+                    slug: slug.to_string(),
+                });
+            }
+        }
+    }
+
+    results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn t(id: &str, kind: &str, parent: Option<&str>, status: &str,
+         deps: Vec<&str>) -> ParsedTicket {
+        let k = match kind {
+            "epic" => Some(Kind::Epic),
+            "story" => Some(Kind::Story),
+            "task" => Some(Kind::Task),
+            _ => None,
+        };
+        ParsedTicket {
+            id: id.to_string(),
+            kind: k,
+            status: status.to_string(),
+            parent: parent.map(|s| s.to_string()),
+            title: format!("Ticket {id}"),
+            depends_on: deps.into_iter().map(|s| s.to_string()).collect(),
+            aliases: vec![],
+            links: vec![],
+            raw: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_empty_board() {
+        let input = BoardInput {
+            trunk_tickets: vec![],
+            branch_statuses: vec![],
+        };
+        let out = render_board(&input);
+        assert!(out.contains("## summary"));
+        assert!(out.contains("total"));
+    }
+
+    #[test]
+    fn test_sections() {
+        let tickets = vec![
+            t("v1", "epic", None, "todo", vec![]),
+            t("net", "story", Some("v1"), "todo", vec![]),
+            t("proxy", "task", Some("net"), "todo", vec![]),
+        ];
+        let input = BoardInput {
+            trunk_tickets: tickets,
+            branch_statuses: vec![],
+        };
+        let out = render_board(&input);
+        assert!(out.contains("## epics"));
+        assert!(out.contains("## stories"));
+        assert!(out.contains("## tasks"));
+        assert!(out.contains("v1"));
+        assert!(out.contains("net"));
+        assert!(out.contains("proxy"));
+    }
+
+    #[test]
+    fn test_blocked_by_shown() {
+        let tickets = vec![
+            t("v1", "epic", None, "done", vec![]),
+            t("net", "story", Some("v1"), "todo", vec![]),
+            t("proxy", "task", Some("net"), "todo", vec!["v1"]),
+            t("other", "task", Some("net"), "todo", vec!["v1"]),
+        ];
+        let input = BoardInput {
+            trunk_tickets: tickets,
+            branch_statuses: vec![],
+        };
+        let out = render_board(&input);
+        // proxy has no unmet deps (v1 is done), so should show " -" for BLOCKED-BY
+        assert!(out.contains(" -"), "done dep should not block: {out}");
+    }
+
+    #[test]
+    fn test_summary_counts() {
+        let tickets = vec![
+            t("e", "epic", None, "done", vec![]),
+            t("s", "story", Some("e"), "done", vec![]),
+            t("a", "task", Some("s"), "done", vec![]),
+            t("b", "task", Some("s"), "todo", vec![]),
+        ];
+        let input = BoardInput {
+            trunk_tickets: tickets,
+            branch_statuses: vec![],
+        };
+        let out = render_board(&input);
+        // total = 4, done = 3 (epic e + story s + task a), todo = 1 (task b)
+        assert!(out.lines().any(|l| l.starts_with("total") && l.contains("4")), "total=4: {out}");
+        assert!(out.lines().any(|l| l.starts_with("done") && l.contains("3")), "done=3: {out}");
+        assert!(out.lines().any(|l| l.starts_with("todo") && l.contains("1")), "todo=1: {out}");
+    }
+
+    #[test]
+    fn test_in_flight_section() {
+        let tickets = vec![
+            t("proxy", "task", Some("net"), "in_progress", vec![]),
+        ];
+        let branches = vec![
+            BranchStatus {
+                branch: "plan/proxy".to_string(),
+                status: "in_progress".to_string(),
+                slug: "proxy".to_string(),
+            },
+        ];
+        let input = BoardInput {
+            trunk_tickets: tickets,
+            branch_statuses: branches,
+        };
+        let out = render_board(&input);
+        assert!(out.contains("## in flight (worktree branches)"));
+        assert!(out.contains("plan/proxy"));
+    }
+}
