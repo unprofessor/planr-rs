@@ -98,3 +98,43 @@ All acceptance boxes checked.
 
 - 2026-08-05 created. Keep the binary name `planr`; the subcommand names
   (`new-ticket`, `merge-task`) are hyphenated to match the README usage block.
+
+## Review
+
+verdict: approved
+reviewer: The Clanker
+date: 2026-08-05
+
+Re-checked every acceptance criterion from scratch in worktree
+`/home/exfed/projects/wt-rust-scaffold`:
+
+1. **Cargo.toml + src/ skeleton** — verified 11 modules under `src/`
+   (`main.rs`, `parse.rs`, `ticket.rs`, `git.rs`, `lock.rs`, `lint.rs`,
+   `board.rs`, `review.rs`, `new_ticket.rs`, `claim.rs`, `merge_task.rs`).
+   `.gitignore` contains `target/`. `cargo build` completes without warnings.
+2. **planr --help** — ran `cargo run -- --help`: lists all six subcommands
+   (board, lint, new-ticket, claim, review, merge-task). Each subcommand's
+   `--help` was invoked individually:
+   - `board [REF]` — optional ref, no-arg = working tree
+   - `lint [REF]` — optional ref, omit = working tree
+   - `new-ticket <KIND> <SLUG> <TITLE> [PARENT_SLUG]`
+   - `claim <SLUG> [WORKTREE] [TRUNK_OVERRIDE]` — worktree default `../wt-<slug>`
+   - `review <SLUG>` — required slug
+   - `merge-task <SLUG> [WORKTREE] [TRUNK_OVERRIDE]`
+   Positionals match the spec exactly.
+3. **PLANR_DIR / PLANR_TRUNK** — help shows `[env: PLANR_DIR=] [default: .plan]`
+   and `[env: PLANR_TRUNK=] [default: main]`. Tested with env vars set:
+   `PLANR_DIR=custom_dir PLANR_TRUNK=custom_trunk` — help displayed the
+   overridden values. Overridable per command via `-D` / `-t` global flags.
+4. **Shared error helper** — `src/main.rs` contains `pub fn fail(msg: &str)
+   -> !` that calls `eprintln!` then `process::exit(1)`. Verified by running
+   `cargo run -- board` (stub) — printed "board: not yet implemented" to stderr
+   and exited with code 1. No panic/stack trace paths.
+5. **Dependency choices** — `Cargo.toml` comments document each choice:
+   clap (derive) for CLI; serde_yaml for YAML frontmatter; regex for text
+   patterns; fs2 for flock; jiff for civil dates. Dev-deps: assert_cmd,
+   tempfile. All choices are justified.
+6. **cargo build && cargo test** — both succeeded with zero warnings. Release
+   build (`cargo build --release`) also succeeds.
+
+No issues found. All acceptance criteria satisfied.
