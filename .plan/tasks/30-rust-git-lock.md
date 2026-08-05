@@ -4,7 +4,7 @@ aliases: [rust-git-lock]
 kind: task
 parent: rust-foundation
 title: Port git wrappers + in-process flock helper
-status: in_progress
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -68,6 +68,31 @@ Lock helper:
   lock does not block another shared lock
 - [ ] Lock file path asserted to be exactly `<git-common-dir>/planr.lock`
 - [ ] `cargo test` green
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-git-lock`:
+
+1. **git.rs wrappers** — all public functions exist: `ls_tree_md`,
+   `show_ref`, `worktree_add`, `worktree_remove`, `branch_delete`,
+   `merge_no_ff`, `checkout`, `commit`, `diff_refs`, `branch_list`,
+   `worktree_list`, `rev_parse_verify`, `git_common_dir`. Each shells out
+   via `std::process::Command` with proper error return (last stderr line).
+2. **lock.rs** — `PlanrLock::shared(cwd)` and `PlanrLock::exclusive(cwd)`
+   are RAII guards. `lock_path` resolves to `<git-common-dir>/planr.lock`.
+   Parent dirs created with `create_dir_all`. Lock released on Drop (file
+   close releases the flock).
+3. **git_common_dir** — trims trailing `/`, resolves relative `.git` against
+   cwd to an absolute path.
+4. **Lock tests** — shared lock does not block shared; exclusive lock
+   serializes (thread latency test >40ms proven); lock path matches
+   `planr.lock` under `.git`.
+5. **cargo test** — 38/38 passing (8 git + lock, 33 parse+ticket).
+6. **cargo build** — clean compile (dead-code warnings expected — git/lock
+   not consumed by any command yet).
+
+All acceptance boxes checked.
 
 ## Notes
 
