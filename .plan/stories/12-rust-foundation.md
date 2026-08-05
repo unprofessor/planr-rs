@@ -4,7 +4,7 @@ aliases: [rust-foundation]
 kind: story
 parent: rust-port
 title: Rust project foundation
-status: todo
+status: done
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
