@@ -16,16 +16,17 @@ depends_on: [rust-read-commands, rust-write-commands]
 
 Prove the ported binary end-to-end in throwaway git repos (covering every
 check class the TS `tests/run-tests.sh` exercises, plus flock interop with
-the TS tooling), then package v0.1.0: README, `--version`, release profile,
-string audit, tag.
+the TS tooling), package v0.1.0, then reconcile the planr skill in
+`agent-skills` to consume the shipped binary — removing the TS scaffolding
+and updating all documentation for the new subcommand names and sequencing.
 
 ## Context
 
 Parent epic: [[rust-port]]. [[rust-e2e]] depends on all six subcommands and
-is the gate for [[rust-release]]. The release task also performs the
-user-facing string audit (`scripts/*.sh` → `planr <subcommand>` in refusal
-and guidance messages) — deliberately deferred so the port lands
-byte-compatible first.
+is the gate for [[rust-release]]. The [[rust-skill-handoff]] task is the
+final integration step that wires the shipped binary into the agent-skills
+tap, coordinating with the existing TS-cleanup PR and the v0.1.0 release
+tag.
 
 ## Acceptance
 
@@ -33,6 +34,9 @@ byte-compatible first.
   parity with `run-tests.sh`, flock-interop test included
 - [ ] [[rust-release]] done: README install/usage complete, `--version`,
   release profile, no user-facing `scripts/` references, v0.1.0 tagged
+- [ ] [[rust-skill-handoff]] done: agent-skills PR ready — SKILL.md,
+  README, process docs updated; scripts and TS scaffolding removed;
+  coordinated with v0.1.0
 - [ ] `cargo test` green on main
 
 ## Notes
