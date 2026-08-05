@@ -4,7 +4,7 @@ aliases: [rust-review]
 kind: task
 parent: rust-read-commands
 title: Port review brief + CLI
-status: in_progress
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -51,6 +51,26 @@ Behavior to port exactly:
 - [ ] Errors print to stderr, exit 1; brief prints to stdout, exit 0
 - [ ] Byte-identical brief against the TS review on the same fixture repo
 - [ ] `cargo test` green
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-review`:
+
+1. **review.rs** — `generate_review_brief` implemented:
+   - Branch existence check (`rev_parse_verify`)
+   - Task file location via NN-regex match on `ls_tree_md`
+   - Worktree discovery from `worktree list --porcelain`
+   - Acceptance section extraction, Validation with blank lines removed
+   - Diff vs trunk via `diff_refs`
+   - Static reviewer guidance text byte-identical
+   - Output format with aligned headers
+2. **CLI** — `planr review <slug>` prints brief on stdout, errors on stderr
+3. **Smoke test** — error message matches expected format
+4. **Tests** — 55 total, all green
+5. **cargo build** — clean
+
+All acceptance boxes checked.
 
 ## Notes
 

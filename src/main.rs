@@ -137,8 +137,11 @@ fn main() {
         Command::Claim { .. } => {
             fail("claim: not yet implemented");
         }
-        Command::Review { .. } => {
-            fail("review: not yet implemented");
+        Command::Review { slug } => {
+            match review::generate_review_brief(&slug, &cli.trunk, &cli.plan_dir) {
+                Ok(brief) => print!("{brief}"),
+                Err(e) => fail(&e),
+            }
         }
         Command::Close { .. } => {
             fail("close: not yet implemented");
