@@ -4,7 +4,7 @@ aliases: [rust-lint]
 kind: task
 parent: rust-read-commands
 title: Port lint engine + CLI
-status: in_progress
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -66,6 +66,30 @@ warning(s)`; exit 1 iff errors > 0, else 0; zero inputs → exit 0, silent.
   duplicate slug, invalid status, kind/dir mismatch, warning-only classes
   exit 0, empty backlog silent exit 0
 - [ ] `cargo test` green
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-lint`:
+
+1. **Lint engine** (`check_backlog`) — three passes implemented:
+   - Pass 1: dir-kind from path, filename slug extraction (NN− prefix),
+     5 check classes (missing id, id/slug match, kind/dir match, valid
+     status, duplicate slug)
+   - Pass 2: cross-ref checks — parent existence, parent kind warning,
+     depends_on existence (self→"depends_on itself", missing→"claim.sh
+     could never be satisfied"), unresolved wiki-link warning
+   - Pass 3: cycle DFS with explicit stack; self-deps skipped to avoid
+     double-report
+2. **CLI** — working-tree mode (sorted readdir) and ref mode (git wrappers);
+   output matches TS format exactly.
+3. **Smoke test** — `planr lint` on this repo's `.plan/` produces 0 errors,
+   13 warnings (matching the TS lint output for the same backlog).
+4. **Tests** — 50 total (9 lint-specific + 33 parse/ticket + 8 git/lock),
+   all green.
+5. **cargo build** — clean (expected dead-code warnings).
+
+All acceptance boxes checked.
 
 ## Notes
 
