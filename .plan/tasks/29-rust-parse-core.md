@@ -4,7 +4,7 @@ aliases: [rust-parse-core]
 kind: task
 parent: rust-foundation
 title: Port parser core (parse.rs, ticket.rs) + fixtures + unit tests
-status: todo
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -59,6 +59,60 @@ Behaviors to port exactly:
   inside backtick AND tilde fences not extracted; last review verdict wins
   and is trimmed; Obsidian-reformatted ticket parses
 - [ ] `cargo test` green
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-parse-core`:
+
+1. **parse.rs + ticket.rs** — `src/parse.rs` exports all 5 pure functions:
+   `split_frontmatter`, `parse_frontmatter`, `extract_wiki_links`,
+   `extract_section`, `extract_last_review_verdict`. `src/ticket.rs` exports
+   `Kind` enum, `ParsedTicket` struct, `parse_ticket` function. All pure (no
+   I/O, no git).
+2. **Tests** — 33 unit tests across both modules covering:
+   - `split_frontmatter`: canonical, no-opening, malformed (no closing),
+     no-body, body thematic break (no re-entry), trailing-newline fidelity
+   - `parse_frontmatter`: inline deps, block deps, empty, quoted scalars,
+     null parent
+   - `extract_wiki_links`: basic, dedupe, skip backtick fence, skip tilde
+     fence
+   - `extract_section`: basic, multiline, missing, trim blanks
+   - `extract_last_review_verdict`: last-wins, none, trimmed, no-verdict
+   - `parse_ticket` (via ticket.rs): canonical, block-style depends_on,
+     single-string dep, empty/absent deps, absent/null parent, missing
+     status defaults todo, quoted status, wiki-links from body,
+     Obsidian-reformatted
+3. **cargo test** — 33/33 passing, no warnings.
+4. **cargo build** — clean compile (dead-code warnings expected — parser
+   not consumed by any command yet, that's fine for this task).
+
+All acceptance boxes checked.
+
+## Review
+
+verdict: approved
+reviewer: The Clanker
+date: 2026-08-05
+
+Re-checked on 2026-08-05 from worktree `/home/exfed/projects/wt-rust-parse-core`:
+
+- **Source inspection**: `src/parse.rs` exports all 5 pure functions
+  (`split_frontmatter`, `parse_frontmatter`, `extract_wiki_links`,
+  `extract_section`, `extract_last_review_verdict`) — each verified against
+  the TS port behaviors. `src/ticket.rs` exports `Kind` enum (Epic/Story/Task),
+  `ParsedTicket` struct (id, kind, status, parent, title, depends_on, aliases,
+  links, raw), and `parse_ticket` composer.
+- **Tests executed**: `cargo test` — **33/33 passing**, 0 failed, 0 ignored.
+  Coverage includes: canonical split, no-opening, malformed (no closing),
+  no-body, thematic-break no re-entry, inline deps, block deps, empty fm,
+  quoted scalars, null parent, wiki-link dedupe, skip backtick fence, skip
+  tilde fence, section extraction with trim, last verdict wins and trimmed,
+  no-verdict, block-style depends_on, single-string dep, absent/null parent,
+  missing status defaults todo, quoted status, Obsidian-reformatted.
+- **Build**: `cargo build` — compiles cleanly; only expected dead-code
+  warnings (parser not yet consumed by any command).
+- **All acceptance criteria satisfied**. Status kept as `review`.
 
 ## Notes
 
