@@ -4,7 +4,7 @@ aliases: [rust-git-lock]
 kind: task
 parent: rust-foundation
 title: Port git wrappers + in-process flock helper
-status: in_progress
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05

@@ -125,11 +125,12 @@ pub fn branch_list(pattern: Option<&str>) -> Result<Vec<String>, String> {
     Ok(out
         .lines()
         .map(|l| {
-            let s = l.trim_start();
-            if s.len() >= 2 {
-                s[2..].trim().to_string()
+            // Match TS: replace(/^\*\s/, '').replace(/^\s{2}/, '').trim()
+            // Strip "* " or "  " prefix exactly, then trim the rest.
+            if l.len() >= 2 && (&l[..2] == "* " || &l[..2] == "  ") {
+                l[2..].trim().to_string()
             } else {
-                s.trim().to_string()
+                l.trim().to_string()
             }
         })
         .filter(|l| !l.is_empty())
