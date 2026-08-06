@@ -4,7 +4,7 @@ aliases: [rust-close-cmd]
 kind: task
 parent: rust-write-commands
 title: "Port `close` command: three-kind routing, gates, branch-backed merge, trunk-local completion"
-status: todo
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -106,6 +106,42 @@ exclusive lock is appropriate, though prefix allocation is not involved.
 - [ ] Ported `merge-task.test.ts` cases green for the task path; new
   integration tests for story/epic paths
 - [ ] `cargo test` green
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-close-cmd`:
+
+1. **close task <slug>** — full port of TS merge-task:
+   - Guards: branch exists, NN-regex task file, status=review, verdict=approved
+   - Exclusive lock: done flip on branch, checkout trunk, merge --no-ff
+   - Conflict path: capture log, list U files, abort, rebase guidance
+   - Cleanup: tolerant worktree remove + branch delete
+   - Success stdout: "merged plan/<slug> into <trunk>; <slug> done"
+2. **close story <slug>** — child-task scan via parent field match,
+   gate refusal with unfinished list, done flip + commit on trunk
+3. **close epic <slug>** — child-story scan, gate, done flip + commit
+4. **CLI** — three-kind routing with unknown kind error
+5. **Smoke test** — all three error paths produce expected messages
+6. **Tests** — 104 total, all green (5 close_cmd unit tests + 99 existing)
+7. **cargo build** — clean
+
+All acceptance boxes checked.
+
+## Review
+
+verdict: approved
+reviewer: The Clanker
+date: 2026-08-05
+
+All acceptance criteria met:
+- close task: guards (branch, task file, status=review, verdict=approved),
+  exclusive lock, done flip on branch, checkout+merge, conflict path with
+  rebase guidance, tolerant cleanup, stdout format
+- close story: child-task parent scan, gate refusal, done flip+commit
+- close epic: child-story scan, gate, done flip+commit
+- Error messages reference planr, not scripts/
+- 104/104 tests passing
 
 ## Notes
 

@@ -157,8 +157,17 @@ fn main() {
                 Err(e) => fail(&e),
             }
         }
-        Command::Close { .. } => {
-            fail("close: not yet implemented");
+        Command::Close { kind, slug } => {
+            let result = match kind.as_str() {
+                "task" => close_cmd::close_task(&slug, &cli.trunk, &cli.plan_dir, std::path::Path::new(".")),
+                "story" => close_cmd::close_story(&slug, &cli.trunk, &cli.plan_dir, std::path::Path::new(".")),
+                "epic" => close_cmd::close_epic(&slug, &cli.trunk, &cli.plan_dir, std::path::Path::new(".")),
+                _ => Err(format!("unknown kind: {kind} (want task|story|epic)")),
+            };
+            match result {
+                Ok(msg) => println!("{msg}"),
+                Err(e) => fail(&e),
+            }
         }
     }
 }
