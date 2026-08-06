@@ -4,7 +4,7 @@ aliases: [rust-claim]
 kind: task
 parent: rust-write-commands
 title: "Port claim: dependency gate, worktree, frontmatter-scoped status flip"
-status: todo
+status: in_progress
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
