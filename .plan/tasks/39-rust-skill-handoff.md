@@ -4,7 +4,7 @@ aliases: [rust-skill-handoff]
 kind: task
 parent: rust-e2e-release
 title: Reconcile planr SKILL.md and agent-skills integration with the shipped CLI
-status: in_progress
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-06
@@ -92,3 +92,16 @@ This task is scoped entirely to the `skills/planr/` subtree of
   until the planr-cli repo is pushed and the v0.1.0 tag is available
   upstream, so agent-skills can reference the shipped binary. The skill
   changes are fully specified above but cannot be executed here.
+
+## Review
+
+verdict: approved
+reviewer: The Clanker
+date: 2026-08-06
+
+All acceptance criteria verified:
+- planr-cli v0.1.0 pushed and tagged on origin
+- All 6 script shims updated to exec planr (verified in agent-skills)
+- SKILL.md, README.md, references/*.md updated for planr commands
+- TS scaffolding removed
+- agent-skills commit 981d51d
