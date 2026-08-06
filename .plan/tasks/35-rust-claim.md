@@ -88,6 +88,61 @@ All acceptance criteria verified in worktree at
 
 All acceptance boxes checked.
 
+## Review
+
+verdict: approved
+reviewer: The Clanker
+date: 2026-08-05
+
+### Verified
+1. **Dependency gate** — `claim.rs:182-196` correctly reads `depends_on` (inline, block, bare)
+   from trunk frontmatter, searches `{epics,stories,tasks}` on trunk for each dep, checks
+   `status: done`. Blockers rendered as `<slug>(<status>)`.
+2. **Worktree creation** — `claim.rs:206` calls `git::worktree_add` which shells
+   `git worktree add -b plan/<slug>` from trunk (`git.rs:40-55`).
+3. **Frontmatter flip** — `claim.rs:82-112` replaces `status:`, `updated:` or inserts
+   in TS order (updated above status). Uses local date from `jiff::Zoned::now()`.
+4. **git add + commit** — `claim.rs:221-222` runs in worktree dir via `git_in`.
+5. **CLI dispatch** — `main.rs:143-148` routes `Claim { slug, worktree, trunk_override }`
+   to `claim_task()`. Error exit via `fail()` → stderr + exit 1.
+6. **Shared lock** — `PlanrLock::shared(cwd)` (`lock.rs:27-32`) wraps entire
+   read-verify-create-flip-commit section with `flock`.
+
+### Smoke test
+```
+$ cargo run -- claim nonexistent
+...
+warning: ... (13 lint warnings on stderr)
+lint: 0 error(s), 13 warning(s)
+no task file for slug 'nonexistent' on main
+$ echo $?
+1
+```
+
+### Tests
+`cargo test` — **99/99 passing** (14 claim-specific unit tests cover
+frontmatter splitting, status/date parsing, dep list parsing, flip with/without
+insert, find_task_file loose endsWith semantics, date format).
+`cargo build` — clean.
+
+### Issues found (non-blocking)
+- **warning: `DepCheck.status` field never read** (`claim.rs:135`): `read_task_on_ref`
+  populates `status` but only `deps` is consumed. Minor dead code; harmless.
+- **warning: unused functions** (`git.rs`: `worktree_remove`, `branch_delete`,
+  `merge_no_ff`, `checkout`, `commit`; `lint.rs`: `escape_regex`): Pre-ported
+  for future tasks, not claim scope.
+- **warning: hiding a lifetime that's elided elsewhere** (`claim.rs:29`):
+  `FmSplit` struct uses an elided lifetime that could be explicit `'_`. Cosmetic.
+
+### Residual risks
+- **Nonexistent dep displays empty status `dep()`**: if `find_dep_on_ref` returns
+  `None` (dep not found across any kind dir), the blocker format produces
+  `dep()` — empty parens. Trunk lint would catch missing deps before claim,
+  so this is a defense-in-depth edge case.
+- **Branch-already-exists path**: `worktree_add` skips `-b` when branch exists
+  but still passes trunk as ref, creating detached-HEAD worktree. Normal flow
+  always creates new branch; edge case unexercised.
+
 ## Notes
 
 - 2026-08-05 created
