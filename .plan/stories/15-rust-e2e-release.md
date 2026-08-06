@@ -4,7 +4,7 @@ aliases: [rust-e2e-release]
 kind: story
 parent: rust-port
 title: End-to-end test harness and release packaging
-status: todo
+status: done
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
