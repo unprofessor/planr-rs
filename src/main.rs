@@ -144,8 +144,12 @@ fn main() {
                 Err(e) => fail(&e),
             }
         }
-        Command::Claim { .. } => {
-            fail("claim: not yet implemented");
+        Command::Claim { slug, worktree, trunk_override } => {
+            let trunk = trunk_override.as_deref().unwrap_or(&cli.trunk);
+            match claim::claim_task(&slug, trunk, &cli.plan_dir, worktree.as_deref(), std::path::Path::new(".")) {
+                Ok(wt_path) => println!("{wt_path}"),
+                Err(e) => fail(&e),
+            }
         }
         Command::Review { slug } => {
             match review::generate_review_brief(&slug, &cli.trunk, &cli.plan_dir) {

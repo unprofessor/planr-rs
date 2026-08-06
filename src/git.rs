@@ -100,6 +100,16 @@ pub fn checkout(branch: &str) -> Result<(), String> {
 }
 
 /// `git commit [-m <message>] [-- files...]`.
+/// `git add <file>` (run in `cwd`).
+pub fn add_file(file: &str, cwd: &Path) -> Result<(), String> {
+    git_in(cwd, &["add", "--", file]).map(|_| ())
+}
+
+/// `git commit -m <message>` (run in `cwd`, no extra file args).
+pub fn commit_in(message: &str, cwd: &Path) -> Result<(), String> {
+    git_in(cwd, &["commit", "-m", message]).map(|_| ())
+}
+
 pub fn commit(message: &str, files: &[&str]) -> Result<(), String> {
     let mut args = vec!["commit", "-m", message];
     if !files.is_empty() {

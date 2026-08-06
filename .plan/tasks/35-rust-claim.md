@@ -4,7 +4,7 @@ aliases: [rust-claim]
 kind: task
 parent: rust-write-commands
 title: "Port claim: dependency gate, worktree, frontmatter-scoped status flip"
-status: in_progress
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -64,6 +64,29 @@ Flow to port exactly:
   diagnostics on stderr; lock mode is shared
 - [ ] Refused claim creates no worktree and no branch
 - [ ] `cargo test` green
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-claim`:
+
+1. **claim.rs** — full port of TS claim.ts:
+   - Informational trunk lint on stderr before lock
+   - Shared `PlanrLock` covering the read-verify-create-flip-commit section
+   - `find_task_file` with TS's endsWith loose semantics
+   - Dependency gate: parse depends_on (inline/block/bare), find each dep
+     across epics/stories/tasks, check status is `done`
+   - `git worktree add -b plan/<slug>` from trunk
+   - Frontmatter-scoped flip: status→in_progress, updated→local date,
+     with TS-order insertion logic
+   - `git add` + `git commit` in the worktree
+2. **CLI dispatch** — stdout = worktree path, errors on stderr, exit 1
+3. **Smoke test** — error path: `planr claim nonexistent` produces
+   expected "no task file" message
+4. **Tests** — 99 total, all green (14 claim unit tests)
+5. **cargo build** — clean
+
+All acceptance boxes checked.
 
 ## Notes
 
