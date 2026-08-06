@@ -2,8 +2,7 @@
 name = "planr"
 version = "0.1.0"
 edition = "2021"
-description = "CLI tool for planr — trunk-based backlog for multi-agent development"
-authors = ["The Clanker", "unprofessor"]
+description = "planr -- trunk-based, markdown-formatted backlog for both solo and concurrent development"
 
 [profile.release]
 lto = true
