@@ -4,7 +4,7 @@ aliases: [rust-close-cmd]
 kind: task
 parent: rust-write-commands
 title: "Port `close` command: three-kind routing, gates, branch-backed merge, trunk-local completion"
-status: todo
+status: in_progress
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
