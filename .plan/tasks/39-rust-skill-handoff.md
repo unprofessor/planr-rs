@@ -4,10 +4,10 @@ aliases: [rust-skill-handoff]
 kind: task
 parent: rust-e2e-release
 title: Reconcile planr SKILL.md and agent-skills integration with the shipped CLI
-status: todo
+status: in_progress
 assignee: null
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 tags: [rust, skill-integration, agent-skills, docs]
 depends_on: [rust-release]
 ---
