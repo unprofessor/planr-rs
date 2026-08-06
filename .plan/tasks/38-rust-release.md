@@ -4,10 +4,10 @@ aliases: [rust-release]
 kind: task
 parent: rust-e2e-release
 title: "Release packaging: README, string audit, release profile, v0.1.0 tag"
-status: todo
+status: in_progress
 assignee: null
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 tags: [rust, release, packaging, docs]
 depends_on: [rust-e2e]
 ---
