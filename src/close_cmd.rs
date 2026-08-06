@@ -123,6 +123,7 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
 
     let blob = git::show_ref(&branch, &task_file)?;
     let ticket = parse_ticket(&blob);
+    let parent_story = ticket.parent.clone();
 
     if ticket.status != "review" {
         return Err(format!(
@@ -185,7 +186,23 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
             }
             let _ = git::branch_delete(&branch, false);
 
-            Ok(format!("merged {branch} into {trunk}; {slug} done"))
+            // Check if parent story can also be closed
+            if let Some(ref pslug) = parent_story {
+                let siblings = find_children_on_trunk(pslug, "tasks", trunk, plan_dir)
+                    .unwrap_or_default();
+                let all_done = siblings.iter().all(|t| t.status == "done");
+                if all_done && !siblings.is_empty() {
+                    Ok(format!(
+                        "merged {branch} into {trunk}; {slug} done\n\
+                         info: all tasks under story '{pslug}' are done. \
+                         you may also close parent story: planr close story {pslug}"
+                    ))
+                } else {
+                    Ok(format!("merged {branch} into {trunk}; {slug} done"))
+                }
+            } else {
+                Ok(format!("merged {branch} into {trunk}; {slug} done"))
+            }
         }
         Err(conflict_msg) => {
             // On conflict the merge was aborted; worktree+branch intact
@@ -266,6 +283,12 @@ fn find_worktree_path(branch: &str) -> Option<PathBuf> {
 // ---------------------------------------------------------------------------
 
 pub fn close_story(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result<String, String> {
+    // Read story ticket to capture parent before lock/gate
+    let story_file = find_ticket_by_slug(slug, "stories", trunk, plan_dir)?;
+    let blob = git::show_ref(trunk, &story_file)?;
+    let ticket = parse_ticket(&blob);
+    let parent_epic = ticket.parent.clone();
+
     // Child task gate
     let children = find_children_on_trunk(slug, "tasks", trunk, plan_dir)?;
     let unfinished: Vec<String> = children
@@ -285,10 +308,25 @@ pub fn close_story(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Resul
     // Under exclusive lock: flip story status on trunk
     let _lock = PlanrLock::exclusive(cwd)
         .map_err(|e| format!("lock error: {e}"))?;
-
     flip_and_commit_kind(slug, "stories", trunk, plan_dir)?;
 
-    Ok(format!("closed story {slug}; all tasks done"))
+    // Check if parent epic can also be closed
+    if let Some(ref pslug) = parent_epic {
+        let siblings = find_children_on_trunk(pslug, "stories", trunk, plan_dir)
+            .unwrap_or_default();
+        let all_done = siblings.iter().all(|t| t.status == "done");
+        if all_done && !siblings.is_empty() {
+            Ok(format!(
+                "closed story {slug}; all tasks done\n\
+                 info: all stories under epic '{pslug}' are done. \
+                 you may also close parent epic: planr close epic {pslug}"
+            ))
+        } else {
+            Ok(format!("closed story {slug}; all tasks done"))
+        }
+    } else {
+        Ok(format!("closed story {slug}; all tasks done"))
+    }
 }
 
 // ---------------------------------------------------------------------------
