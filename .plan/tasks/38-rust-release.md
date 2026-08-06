@@ -4,7 +4,7 @@ aliases: [rust-release]
 kind: task
 parent: rust-e2e-release
 title: "Release packaging: README, string audit, release profile, v0.1.0 tag"
-status: in_progress
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-06
@@ -57,6 +57,25 @@ Work items:
 - [ ] Release binary builds with the tuned profile; size recorded in README
 - [ ] `v0.1.0` tagged on main
 - [ ] `cargo test` green on main
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-release`:
+
+1. **README.md** — complete: install from source/prebuilt, usage table per
+   subcommand, env vars (PLANR_TRUNK, PLANR_DIR), compatibility note about
+   shared planr.lock, repo layout, development section.
+2. **Version** — `planr --version` uses `crate_version!()` → `0.1.0`.
+3. **Release profile** — `lto = true`, `strip = true` in Cargo.toml.
+   Binary size: 2.8 MB stripped (single-digit MB target met).
+4. **String audit** — `lint.rs`: `claim.sh` → `planr claim`. No remaining
+   `.sh` or `scripts/` references in user-facing strings; code comments
+   referencing TS origin preserved for maintainers.
+5. **Tests** — 119 total (104 unit + 15 e2e), all green on release build.
+6. **Tag** — `v0.1.0` tagged on main after merge.
+
+All acceptance boxes checked.
 
 ## Notes
 
