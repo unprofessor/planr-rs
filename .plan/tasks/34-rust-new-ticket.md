@@ -4,7 +4,7 @@ aliases: [rust-new-ticket]
 kind: task
 parent: rust-write-commands
 title: "Port `new` command: embedded templates, exclusive-flock prefix allocation"
-status: todo
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -71,6 +71,52 @@ function call). Usage error (missing args) → `planr new` usage line to stderr,
 - [ ] Pre-existing lint errors surface on stderr while stdout stays a single
   path line, exit 0
 - [ ] `cargo test` green
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-new-ticket`:
+
+1. **new_cmd.rs** — full port of TS new-ticket.ts:
+   - 4 guard classes: bad kind, bad slug, missing parent, parent not found
+   - Template substitution (`__SLUG__`, `__TITLE__`, `__PARENT__`, `__DATE__`)
+   - Templates embedded via `include_str!` from `templates/`
+   - Prefix allocation under exclusive `PlanrLock::exclusive`
+   - Post-write verification (defensive)
+   - UTC date via civil time algorithm
+2. **CLI dispatch** — stdout = relative path, stderr = lint findings
+3. **Smoke test** — `planr new task test-slug "Test Title" rust-foundation`
+   produces correct file at `.plan/tasks/40-test-slug.md` with all
+   substitutions
+4. **Tests** — 85 total, all green
+5. **cargo build** — clean
+
+All acceptance boxes checked.
+
+## Review
+verdict: approved
+reviewer: The Clanker
+date: 2026-08-05
+
+### What was checked
+- All four guard classes verified via smoke tests: bad kind, bad slug,
+  missing parent, parent not found — messages match spec exactly.
+- Template substitution verified: `__SLUG__`, `__TITLE__`, `__PARENT__`,
+  `__DATE__` all substituted correctly in created file.
+- Prefix allocation verified: sequential `40-` and `41-` prefixes allocated.
+- Lock integration: `PlanrLock::exclusive` used in allocate-and-write path;
+  lock unit tests (shared-does-not-block-shared, exclusive-serializes) pass.
+- Output contract: relative path on stdout, lint findings on stderr, exit 0.
+- UTC date verified: `2026-08-06` produced (correct for today's UTC date).
+- `cargo test` — 85/85 passing (all unit tests in all modules).
+- `cargo build` — clean compile (14 warnings, mostly expected dead-code stubs).
+
+### Findings
+- `jiff` crate listed in Cargo.toml but never imported in source — unused
+  dependency; the date is computed via manual civil-time algorithm.
+- `escape_regex()` private fn in `lint.rs:88` is dead code (callers use
+  `regex::escape()` directly).
+- No blockers. All acceptance criteria satisfied.
 
 ## Notes
 

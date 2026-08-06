@@ -131,8 +131,18 @@ fn main() {
                 process::exit(1);
             }
         }
-        Command::New { .. } => {
-            fail("new: not yet implemented");
+        Command::New { kind, slug, title, parent_slug } => {
+            match new_cmd::create_ticket(&kind, &slug, &title, parent_slug.as_deref(), &cli.plan_dir) {
+                Ok(relative_path) => {
+                    println!("{relative_path}");
+                    // Informational lint findings on stderr (never fails)
+                    let findings = new_cmd::lint_findings(&cli.plan_dir);
+                    if !findings.is_empty() {
+                        eprint!("{findings}");
+                    }
+                }
+                Err(e) => fail(&e),
+            }
         }
         Command::Claim { .. } => {
             fail("claim: not yet implemented");
