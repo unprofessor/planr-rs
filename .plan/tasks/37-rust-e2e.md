@@ -4,7 +4,7 @@ aliases: [rust-e2e]
 kind: task
 parent: rust-e2e-release
 title: Port run-tests.sh end-to-end suite + flock interop test
-status: review
+status: done
 assignee: null
 created: 2026-08-05
 updated: 2026-08-06
