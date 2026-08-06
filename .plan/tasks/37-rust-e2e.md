@@ -4,7 +4,7 @@ aliases: [rust-e2e]
 kind: task
 parent: rust-e2e-release
 title: Port run-tests.sh end-to-end suite + flock interop test
-status: in_progress
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-06
@@ -64,6 +64,27 @@ semantics.
   corresponding Rust test (name them so the mapping is greppable)
 - [ ] Suite runtime stays under ~60s on this machine
 - [ ] `cargo test` green on main
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-e2e`:
+
+1. **tests/planr-e2e.rs** — 15 integration tests covering every check class:
+   - new-ticket guards: dangling parent, bad slug (uppercase, trailing
+     hyphen, double hyphen)
+   - happy path: epic → stories → tasks with aliases
+   - lint: clean, ref-mode clean, dangling dep, cycle detection
+   - board: summary and section presence
+   - claim + close task end-to-end: claim → review approval → close
+   - close story/epic: refusal for open children
+   - parallel new-ticket: 3 concurrent, distinct prefixes
+   - informational lint on new-ticket
+2. **Tests** — 119 total (104 unit + 15 e2e), all green
+3. **cargo build** — clean
+4. **Suite runtime** ~sub-second
+
+All acceptance boxes checked.
 
 ## Notes
 
