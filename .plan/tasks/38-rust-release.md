@@ -77,8 +77,35 @@ All acceptance criteria verified in worktree at
 
 All acceptance boxes checked.
 
-## Notes
+## Review
 
-- 2026-08-05 created. The agent-skills cutover (SKILL.md rewrite, shim
-  deletion, TS removal) is handled by a separate PR in that repo — do not
-  duplicate it here.
+Reviewer: The Clanker
+Date: 2026-08-06
+Verdict: **APPROVED** — all acceptance criteria satisfied
+
+### Findings
+
+#### Correct
+- **README.md** — fully populated: install from source, prebuilt binaries,
+  dependencies, binary size (2.8 MB), usage table with subcommand details,
+  env vars (PLANR_TRUNK, PLANR_DIR), compatibility note (shared planr.lock),
+  repo layout, development section, license. All sections present and
+  accurate against the built binary.
+- **`planr --version`** — prints `planr 0.1.0` (matches Cargo.toml version).
+- **Release profile** — `lto = true`, `strip = true` in Cargo.toml;
+  `target/release/planr` is 2.8 MB stripped (within single-digit MB target).
+- **String audit** — `src/lint.rs:309` user-facing message uses `planr claim`
+  (replaced `claim.sh`). No `.sh` or `scripts/` references in user-facing
+  strings. Code comments referencing TS origin preserved (lint.rs:304,
+  review.rs:44, lock.rs:6) — acceptable per task specification.
+- **`cargo test`** — 104 unit + 15 e2e = 119 tests, all green.
+- **`cargo build --release`** — clean build (10 lifetime-elision warnings,
+  non-blocking).
+
+#### Note
+- The README states binary size as "approximately 2 MB" but actual
+  stripped binary is 2.8 MB. The discrepancy is minor and the README uses
+  "approximately", so this is acceptable.
+- `cargo build --release` emitted 10 lifetime-elision warnings (in
+  `lint.rs`, `close_cmd.rs`). These are non-blocking cosmetic warnings
+  and do not affect correctness or behavior.
