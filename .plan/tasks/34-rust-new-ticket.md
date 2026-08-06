@@ -4,7 +4,7 @@ aliases: [rust-new-ticket]
 kind: task
 parent: rust-write-commands
 title: "Port `new` command: embedded templates, exclusive-flock prefix allocation"
-status: todo
+status: in_progress
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
