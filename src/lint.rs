@@ -306,7 +306,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
                         file: file.clone(),
                         level: Level::Error,
                         message: format!(
-                            "depends_on '{}' does not exist — claim.sh \
+                            "depends_on '{}' does not exist — planr claim \
                              could never be satisfied",
                             d
                         ),
