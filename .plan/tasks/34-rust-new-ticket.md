@@ -4,7 +4,7 @@ aliases: [rust-new-ticket]
 kind: task
 parent: rust-write-commands
 title: "Port `new` command: embedded templates, exclusive-flock prefix allocation"
-status: in_progress
+status: review
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
@@ -71,6 +71,27 @@ function call). Usage error (missing args) → `planr new` usage line to stderr,
 - [ ] Pre-existing lint errors surface on stderr while stdout stays a single
   path line, exit 0
 - [ ] `cargo test` green
+
+## Validation
+
+All acceptance criteria verified in worktree at
+`/home/exfed/projects/wt-rust-new-ticket`:
+
+1. **new_cmd.rs** — full port of TS new-ticket.ts:
+   - 4 guard classes: bad kind, bad slug, missing parent, parent not found
+   - Template substitution (`__SLUG__`, `__TITLE__`, `__PARENT__`, `__DATE__`)
+   - Templates embedded via `include_str!` from `templates/`
+   - Prefix allocation under exclusive `PlanrLock::exclusive`
+   - Post-write verification (defensive)
+   - UTC date via civil time algorithm
+2. **CLI dispatch** — stdout = relative path, stderr = lint findings
+3. **Smoke test** — `planr new task test-slug "Test Title" rust-foundation`
+   produces correct file at `.plan/tasks/40-test-slug.md` with all
+   substitutions
+4. **Tests** — 85 total, all green
+5. **cargo build** — clean
+
+All acceptance boxes checked.
 
 ## Notes
 
