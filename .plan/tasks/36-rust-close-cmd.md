@@ -128,6 +128,21 @@ All acceptance criteria verified in worktree at
 
 All acceptance boxes checked.
 
+## Review
+
+verdict: approved
+reviewer: The Clanker
+date: 2026-08-05
+
+All acceptance criteria met:
+- close task: guards (branch, task file, status=review, verdict=approved),
+  exclusive lock, done flip on branch, checkout+merge, conflict path with
+  rebase guidance, tolerant cleanup, stdout format
+- close story: child-task parent scan, gate refusal, done flip+commit
+- close epic: child-story scan, gate, done flip+commit
+- Error messages reference planr, not scripts/
+- 104/104 tests passing
+
 ## Notes
 
 - 2026-08-05 created. Replaces the old `merge-task` subcommand concept. The
