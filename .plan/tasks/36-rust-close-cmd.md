@@ -4,10 +4,10 @@ aliases: [rust-close-cmd]
 kind: task
 parent: rust-write-commands
 title: "Port `close` command: three-kind routing, gates, branch-backed merge, trunk-local completion"
-status: review
+status: done
 assignee: null
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 tags: [rust, close, flock, merge]
 depends_on: [rust-parse-core, rust-git-lock]
 ---
