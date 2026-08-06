@@ -88,3 +88,7 @@ This task is scoped entirely to the `skills/planr/` subtree of
 - The `tests/run-tests.sh` harness in the skill exercises the TS CLIs; once
   the skill points at the Rust binary, that file either needs updating or
   removal. The Rust e2e suite (`tests/` in `planr-cli`) replaces it.
+- **Push caveat:** This sandbox cannot push to remotes. This task must wait
+  until the planr-cli repo is pushed and the v0.1.0 tag is available
+  upstream, so agent-skills can reference the shipped binary. The skill
+  changes are fully specified above but cannot be executed here.

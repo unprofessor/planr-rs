@@ -3,7 +3,7 @@ id: rust-port
 aliases: [rust-port]
 kind: epic
 title: Port planr CLIs to a single Rust binary
-status: todo
+status: done
 assignee: null
 created: 2026-08-05
 updated: 2026-08-05
