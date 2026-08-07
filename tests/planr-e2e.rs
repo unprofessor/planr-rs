@@ -45,13 +45,21 @@ fn init_repo(dir: &Path) {
         .current_dir(dir)
         .output()
         .unwrap();
-    assert!(out.status.success(), "git add failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "git add failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let out = Command::new("git")
         .args(["commit", "-m", "seed plan"])
         .current_dir(dir)
         .output()
         .unwrap();
-    assert!(out.status.success(), "git commit failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "git commit failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// Run planr with args, return the output.
@@ -67,7 +75,11 @@ fn planr(dir: &Path, args: &[&str]) -> Output {
 /// Run planr, expect success, return stdout.
 fn planr_ok(dir: &Path, args: &[&str]) -> String {
     let out = planr(dir, args);
-    assert!(out.status.success(), "planr {args:?} failed: stderr={}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "planr {args:?} failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
@@ -81,9 +93,15 @@ fn planr_err(dir: &Path, args: &[&str]) -> String {
 /// Run planr, expect success, return (stdout, stderr).
 fn planr_ok_both(dir: &Path, args: &[&str]) -> (String, String) {
     let out = planr(dir, args);
-    assert!(out.status.success(), "planr {args:?} failed: stderr={}", String::from_utf8_lossy(&out.stderr));
-    (String::from_utf8(out.stdout).unwrap().trim().to_string(),
-     String::from_utf8(out.stderr).unwrap().trim().to_string())
+    assert!(
+        out.status.success(),
+        "planr {args:?} failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (
+        String::from_utf8(out.stdout).unwrap().trim().to_string(),
+        String::from_utf8(out.stderr).unwrap().trim().to_string(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -94,8 +112,14 @@ fn planr_ok_both(dir: &Path, args: &[&str]) -> (String, String) {
 fn test_e2e_new_ticket_dangling_parent() {
     let td = tempfile::tempdir().unwrap();
     init_repo(td.path());
-    let err = planr_err(td.path(), &["new", "task", "my-task", "Title", "nonexistent"]);
-    assert!(err.contains("create the parent first"), "dangling parent: {err}");
+    let err = planr_err(
+        td.path(),
+        &["new", "task", "my-task", "Title", "nonexistent"],
+    );
+    assert!(
+        err.contains("create the parent first"),
+        "dangling parent: {err}"
+    );
 }
 
 #[test]
@@ -142,18 +166,23 @@ fn test_e2e_happy_path() {
     assert!(s2.contains(".plan/stories/"));
 
     // Create two tasks under first story
-    let t1 = planr_ok(td.path(), &["new", "task", "http-proxy", "HTTP Proxy", "net"]);
+    let t1 = planr_ok(
+        td.path(),
+        &["new", "task", "http-proxy", "HTTP Proxy", "net"],
+    );
     assert!(t1.contains(".plan/tasks/"));
 
     // Commit the backlog
     Command::new("git")
         .args(["add", ".plan"])
         .current_dir(td.path())
-        .ok().unwrap();
+        .ok()
+        .unwrap();
     Command::new("git")
         .args(["commit", "-m", "seed"])
         .current_dir(td.path())
-        .ok().unwrap();
+        .ok()
+        .unwrap();
 
     // Verify the task file has aliases
     let content = std::fs::read_to_string(td.path().join(&t1)).unwrap();
@@ -175,11 +204,13 @@ fn seed_lint_repo(dir: &Path) {
     Command::new("git")
         .args(["add", ".plan"])
         .current_dir(dir)
-        .ok().unwrap();
+        .ok()
+        .unwrap();
     Command::new("git")
         .args(["commit", "-m", "clean backlog"])
         .current_dir(dir)
-        .ok().unwrap();
+        .ok()
+        .unwrap();
 }
 
 #[test]
@@ -189,7 +220,10 @@ fn test_e2e_lint_clean() {
 
     let out = planr_ok(td.path(), &["lint"]);
     // Clean: empty output or 0 errors
-    assert!(out.is_empty() || out.contains("0 error(s)"), "expected clean lint: '{out}'");
+    assert!(
+        out.is_empty() || out.contains("0 error(s)"),
+        "expected clean lint: '{out}'"
+    );
 }
 
 #[test]
@@ -198,7 +232,10 @@ fn test_e2e_lint_ref_clean() {
     seed_lint_repo(td.path());
 
     let out = planr_ok(td.path(), &["lint", "main"]);
-    assert!(out.is_empty() || out.contains("0 error(s)"), "ref lint: '{out}'");
+    assert!(
+        out.is_empty() || out.contains("0 error(s)"),
+        "ref lint: '{out}'"
+    );
 }
 
 #[test]
@@ -218,7 +255,10 @@ fn test_e2e_lint_dangling_dep() {
     let out = planr(td.path(), &["lint"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("nonexistent"), "dangling dep: {stdout}");
-    assert!(stdout.contains("could never be satisfied"), "dep message: {stdout}");
+    assert!(
+        stdout.contains("could never be satisfied"),
+        "dep message: {stdout}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +297,10 @@ fn test_e2e_claim_close_task() {
     // Verify the worktree has the flipped status
     let task_file = format!(".plan/tasks/{}", find_task_slug(&td.path(), "t1"));
     let content = std::fs::read_to_string(wt_abs.join(&task_file)).unwrap();
-    assert!(content.contains("status: in_progress"), "flipped to in_progress");
+    assert!(
+        content.contains("status: in_progress"),
+        "flipped to in_progress"
+    );
     // Flip status to review on the branch
     let review_content = content.replace("status: in_progress", "status: review")
         + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
@@ -267,11 +310,13 @@ fn test_e2e_claim_close_task() {
     Command::new("git")
         .args(["add", &task_file])
         .current_dir(&wt_abs)
-        .ok().unwrap();
+        .ok()
+        .unwrap();
     Command::new("git")
         .args(["commit", "-m", "review: t1"])
         .current_dir(&wt_abs)
-        .ok().unwrap();
+        .ok()
+        .unwrap();
 
     // Now close task t1
     let close_out = planr_ok(td.path(), &["close", "task", "t1"]);
@@ -282,9 +327,13 @@ fn test_e2e_claim_close_task() {
     let branches = Command::new("git")
         .args(["branch", "--list"])
         .current_dir(td.path())
-        .output().unwrap();
+        .output()
+        .unwrap();
     let branches_str = String::from_utf8(branches.stdout).unwrap();
-    assert!(!branches_str.contains("plan/t1"), "branch should be deleted: {branches_str}");
+    assert!(
+        !branches_str.contains("plan/t1"),
+        "branch should be deleted: {branches_str}"
+    );
 }
 
 fn find_task_slug(plan_dir: &Path, slug: &str) -> String {
@@ -323,11 +372,21 @@ fn test_e2e_parallel_new_ticket() {
         handles.push(std::thread::spawn(move || {
             let out = Command::cargo_bin("planr")
                 .unwrap()
-                .args(["new", "task", &format!("task-{i}"), &format!("Task {i}"), "parent-epic"])
+                .args([
+                    "new",
+                    "task",
+                    &format!("task-{i}"),
+                    &format!("Task {i}"),
+                    "parent-epic",
+                ])
                 .current_dir(td.path())
                 .output()
                 .unwrap();
-            assert!(out.status.success(), "parallel new {i} failed: {}", String::from_utf8_lossy(&out.stderr));
+            assert!(
+                out.status.success(),
+                "parallel new {i} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
             let stdout = String::from_utf8(out.stdout).unwrap().trim().to_string();
             assert!(!stdout.is_empty(), "parallel new {i} empty stdout");
             stdout
@@ -342,7 +401,10 @@ fn test_e2e_parallel_new_ticket() {
 
     // Lint should be clean
     let lint_out = planr_ok(td.path(), &["lint"]);
-    assert!(lint_out.is_empty() || lint_out.contains("0 error(s)"), "lint after parallel: '{lint_out}'");
+    assert!(
+        lint_out.is_empty() || lint_out.contains("0 error(s)"),
+        "lint after parallel: '{lint_out}'"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +418,10 @@ fn test_e2e_close_story_refuses_open_tasks() {
 
     // Try to close the story while tasks are open
     let err = planr_err(td.path(), &["close", "story", "s1"]);
-    assert!(err.contains("unfinished"), "expected unfinished tasks: {err}");
+    assert!(
+        err.contains("unfinished"),
+        "expected unfinished tasks: {err}"
+    );
 }
 
 #[test]
@@ -365,7 +430,10 @@ fn test_e2e_close_epic_refuses_open_stories() {
     seed_lint_repo(td.path());
 
     let err = planr_err(td.path(), &["close", "epic", "e1"]);
-    assert!(err.contains("unfinished"), "expected unfinished stories: {err}");
+    assert!(
+        err.contains("unfinished"),
+        "expected unfinished stories: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -377,10 +445,15 @@ fn test_e2e_new_ticket_informational_lint() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
 
-    let (stdout, _stderr) = planr_ok_both(td.path(), &["new", "task", "new-lint-test", "Test", "s1"]);
+    let (stdout, _stderr) =
+        planr_ok_both(td.path(), &["new", "task", "new-lint-test", "Test", "s1"]);
     // stdout is one line: the path
     assert!(stdout.contains(".plan/tasks/"), "stdout: {stdout}");
-    assert_eq!(stdout.lines().count(), 1, "stdout must be one line: {stdout}");
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "stdout must be one line: {stdout}"
+    );
     // stderr may have lint warnings (informational)
     // Just verify it doesn't contain "error:" from planr lint
     // stderr may have lint findings (informational)
@@ -413,7 +486,11 @@ fn test_e2e_lint_cycle_real() {
 
     let inject = |path: &Path, deps: &str| {
         let c = std::fs::read_to_string(path).unwrap();
-        std::fs::write(path, c.replace("depends_on: []", &format!("depends_on: [{deps}]"))).unwrap();
+        std::fs::write(
+            path,
+            c.replace("depends_on: []", &format!("depends_on: [{deps}]")),
+        )
+        .unwrap();
     };
     inject(&td.path().join(&t1_path_of(td.path())), "t2");
     inject(&td.path().join(&t2_path_of(td.path())), "t3");
@@ -421,8 +498,11 @@ fn test_e2e_lint_cycle_real() {
 
     // Also inject a self-dep on t1 for the self-dep test
     let c = std::fs::read_to_string(td.path().join(&t1_path_of(td.path()))).unwrap();
-    std::fs::write(td.path().join(&t1_path_of(td.path())),
-        c.replace("depends_on: [t2]", "depends_on: [t2, t1]")).unwrap();
+    std::fs::write(
+        td.path().join(&t1_path_of(td.path())),
+        c.replace("depends_on: [t2]", "depends_on: [t2, t1]"),
+    )
+    .unwrap();
 
     let out = planr(td.path(), &["lint"]);
     let stdout = String::from_utf8_lossy(&out.stdout);

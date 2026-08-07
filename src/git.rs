@@ -27,7 +27,9 @@ fn run_git(cwd: Option<&Path>, args: &[&str]) -> Result<String, String> {
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
-    let out = cmd.output().map_err(|e| format!("git command failed: {e}"))?;
+    let out = cmd
+        .output()
+        .map_err(|e| format!("git command failed: {e}"))?;
 
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
@@ -35,8 +37,7 @@ fn run_git(cwd: Option<&Path>, args: &[&str]) -> Result<String, String> {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let last_line = stderr
             .lines()
-            .filter(|l| !l.trim().is_empty())
-            .last()
+            .rfind(|l| !l.trim().is_empty())
             .unwrap_or("git failed")
             .to_string();
         Err(last_line)
@@ -90,6 +91,7 @@ pub fn branch_delete(branch: &str, force: bool) -> Result<(), String> {
 }
 
 /// `git merge --no-ff <branch>`.
+#[allow(dead_code)]
 pub fn merge_no_ff(branch: &str) -> Result<String, String> {
     git(&["merge", "--no-ff", branch])
 }
@@ -110,6 +112,7 @@ pub fn commit_in(message: &str, cwd: &Path) -> Result<(), String> {
     git_in(cwd, &["commit", "-m", message]).map(|_| ())
 }
 
+#[allow(dead_code)]
 pub fn commit(message: &str, files: &[&str]) -> Result<(), String> {
     let mut args = vec!["commit", "-m", message];
     if !files.is_empty() {
@@ -150,7 +153,11 @@ pub fn branch_list(pattern: Option<&str>) -> Result<Vec<String>, String> {
 /// `git worktree list --porcelain`. Returns raw porcelain lines.
 pub fn worktree_list() -> Result<Vec<String>, String> {
     let out = git(&["worktree", "list", "--porcelain"])?;
-    Ok(out.lines().filter(|l| !l.is_empty()).map(String::from).collect())
+    Ok(out
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect())
 }
 
 /// `git rev-parse --verify <ref>`. Returns the full SHA on success.

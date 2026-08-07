@@ -133,7 +133,7 @@ fn allocate_and_write(dir: &std::path::Path, slug: &str, content: &str) -> Resul
             .filter(|e| {
                 e.file_name()
                     .to_str()
-                    .map_or(false, |n| n.starts_with(&format!("{nn}-")))
+                    .is_some_and(|n| n.starts_with(&format!("{nn}-")))
             })
             .count()
     } else {
@@ -154,7 +154,13 @@ fn allocate_and_write(dir: &std::path::Path, slug: &str, content: &str) -> Resul
 // Template substitution
 // ---------------------------------------------------------------------------
 
-fn substitute_template(template: &str, slug: &str, title: &str, parent: Option<&str>, date: &str) -> String {
+fn substitute_template(
+    template: &str,
+    slug: &str,
+    title: &str,
+    parent: Option<&str>,
+    date: &str,
+) -> String {
     template
         .replace("__SLUG__", slug)
         .replace("__TITLE__", title)
@@ -166,7 +172,9 @@ fn substitute_template(template: &str, slug: &str, title: &str, parent: Option<&
 fn utc_date_string() -> String {
     use std::time::SystemTime;
     let now = SystemTime::now();
-    let dur = now.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
+    let dur = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
     let total_secs = dur.as_secs();
 
     // Days since epoch
@@ -174,7 +182,7 @@ fn utc_date_string() -> String {
     let days = total_secs as i64 / 86400;
     let z = days + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as i64;
+    let doe = z - era * 146097;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
     let y = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
@@ -232,7 +240,8 @@ pub fn create_ticket(
     // 5. Determine subdirectory
     let subdir = kind_to_subdir(kind)?;
     let dir = std::path::Path::new(plan_dir).join(subdir);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create directory {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("cannot create directory {}: {e}", dir.display()))?;
 
     // 6. Load template
     let template = get_template(kind)?;
@@ -244,8 +253,8 @@ pub fn create_ticket(
     let content = substitute_template(template, slug, title, parent, &today);
 
     // 9. Exclusive lock -> allocate prefix -> write -> verify
-    let lock = PlanrLock::exclusive(std::path::Path::new("."))
-        .map_err(|e| format!("lock error: {e}"))?;
+    let lock =
+        PlanrLock::exclusive(std::path::Path::new(".")).map_err(|e| format!("lock error: {e}"))?;
     let result = allocate_and_write(&dir, slug, &content);
     drop(lock); // Release lock -- the allocate+write critical section is done
 
@@ -396,7 +405,13 @@ mod tests {
     #[test]
     fn test_substitute_template() {
         let tpl = "id: __SLUG__\ntitle: __TITLE__\nparent: __PARENT__\ndate: __DATE__\n";
-        let result = substitute_template(tpl, "my-slug", "My Title", Some("parent-epic"), "2026-08-05");
+        let result = substitute_template(
+            tpl,
+            "my-slug",
+            "My Title",
+            Some("parent-epic"),
+            "2026-08-05",
+        );
         assert!(result.contains("id: my-slug"));
         assert!(result.contains("title: My Title"));
         assert!(result.contains("parent: parent-epic"));
@@ -464,7 +479,13 @@ mod tests {
     #[test]
     fn test_create_ticket_bad_slug() {
         let td = setup_temp_plan();
-        let r = create_ticket("task", "Bad-Slug", "Title", Some("parent"), td.path().to_str().unwrap());
+        let r = create_ticket(
+            "task",
+            "Bad-Slug",
+            "Title",
+            Some("parent"),
+            td.path().to_str().unwrap(),
+        );
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("bad slug"));
     }
@@ -472,7 +493,13 @@ mod tests {
     #[test]
     fn test_create_ticket_missing_parent() {
         let td = setup_temp_plan();
-        let r = create_ticket("task", "good-slug", "Title", None, td.path().to_str().unwrap());
+        let r = create_ticket(
+            "task",
+            "good-slug",
+            "Title",
+            None,
+            td.path().to_str().unwrap(),
+        );
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("parent slug required for task"));
     }
@@ -480,7 +507,13 @@ mod tests {
     #[test]
     fn test_create_ticket_parent_not_found() {
         let td = setup_temp_plan();
-        let r = create_ticket("task", "good-slug", "Title", Some("nonexistent"), td.path().to_str().unwrap());
+        let r = create_ticket(
+            "task",
+            "good-slug",
+            "Title",
+            Some("nonexistent"),
+            td.path().to_str().unwrap(),
+        );
         assert!(r.is_err());
         assert!(r.unwrap_err().contains("parent 'nonexistent' not found"));
     }

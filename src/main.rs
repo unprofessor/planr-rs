@@ -2,16 +2,16 @@ use clap::{Parser, Subcommand};
 use std::process;
 
 // Module skeleton -- filled in by subsequent tasks
-mod parse;
-mod ticket;
-mod git;
-mod lock;
-mod lint;
 mod board;
-mod review;
-mod new_cmd;
 mod claim;
 mod close_cmd;
+mod git;
+mod lint;
+mod lock;
+mod new_cmd;
+mod parse;
+mod review;
+mod ticket;
 
 // ---------------------------------------------------------------------------
 // Shared error/exit convention: every command calls `fail()` for user-facing
@@ -32,18 +32,30 @@ pub fn fail(msg: &str) -> ! {
     name = "planr",
     version,
     about = "Trunk-based backlog management for multi-agent development",
-    disable_help_subcommand = true,
+    disable_help_subcommand = true
 )]
 struct Cli {
     #[command(subcommand)]
     command: Command,
 
     /// Override the plan directory (env: PLANR_DIR)
-    #[arg(short = 'D', long, env = "PLANR_DIR", default_value = ".plan", global = true)]
+    #[arg(
+        short = 'D',
+        long,
+        env = "PLANR_DIR",
+        default_value = ".plan",
+        global = true
+    )]
     plan_dir: String,
 
     /// Override the trunk branch (env: PLANR_TRUNK)
-    #[arg(short = 't', long, env = "PLANR_TRUNK", default_value = "main", global = true)]
+    #[arg(
+        short = 't',
+        long,
+        env = "PLANR_TRUNK",
+        default_value = "main",
+        global = true
+    )]
     trunk: String,
 }
 
@@ -131,8 +143,19 @@ fn main() {
                 process::exit(1);
             }
         }
-        Command::New { kind, slug, title, parent_slug } => {
-            match new_cmd::create_ticket(&kind, &slug, &title, parent_slug.as_deref(), &cli.plan_dir) {
+        Command::New {
+            kind,
+            slug,
+            title,
+            parent_slug,
+        } => {
+            match new_cmd::create_ticket(
+                &kind,
+                &slug,
+                &title,
+                parent_slug.as_deref(),
+                &cli.plan_dir,
+            ) {
                 Ok(relative_path) => {
                     println!("{relative_path}");
                     // Informational lint findings on stderr (never fails)
@@ -144,9 +167,19 @@ fn main() {
                 Err(e) => fail(&e),
             }
         }
-        Command::Claim { slug, worktree, trunk_override } => {
+        Command::Claim {
+            slug,
+            worktree,
+            trunk_override,
+        } => {
             let trunk = trunk_override.as_deref().unwrap_or(&cli.trunk);
-            match claim::claim_task(&slug, trunk, &cli.plan_dir, worktree.as_deref(), std::path::Path::new(".")) {
+            match claim::claim_task(
+                &slug,
+                trunk,
+                &cli.plan_dir,
+                worktree.as_deref(),
+                std::path::Path::new("."),
+            ) {
                 Ok(wt_path) => println!("{wt_path}"),
                 Err(e) => fail(&e),
             }
@@ -159,9 +192,24 @@ fn main() {
         }
         Command::Close { kind, slug } => {
             let result = match kind.as_str() {
-                "task" => close_cmd::close_task(&slug, &cli.trunk, &cli.plan_dir, std::path::Path::new(".")),
-                "story" => close_cmd::close_story(&slug, &cli.trunk, &cli.plan_dir, std::path::Path::new(".")),
-                "epic" => close_cmd::close_epic(&slug, &cli.trunk, &cli.plan_dir, std::path::Path::new(".")),
+                "task" => close_cmd::close_task(
+                    &slug,
+                    &cli.trunk,
+                    &cli.plan_dir,
+                    std::path::Path::new("."),
+                ),
+                "story" => close_cmd::close_story(
+                    &slug,
+                    &cli.trunk,
+                    &cli.plan_dir,
+                    std::path::Path::new("."),
+                ),
+                "epic" => close_cmd::close_epic(
+                    &slug,
+                    &cli.trunk,
+                    &cli.plan_dir,
+                    std::path::Path::new("."),
+                ),
                 _ => Err(format!("unknown kind: {kind} (want task|story|epic)")),
             };
             match result {

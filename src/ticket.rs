@@ -38,6 +38,7 @@ pub struct ParsedTicket {
     pub parent: Option<String>,
     pub title: String,
     pub depends_on: Vec<String>,
+    #[allow(dead_code)]
     pub aliases: Vec<String>,
     pub links: Vec<String>,
     /// Raw body text (everything after the frontmatter block).
@@ -77,16 +78,13 @@ pub fn parse_ticket(blob: &str) -> ParsedTicket {
         status
     };
 
-    let parent = front
-        .as_ref()
-        .and_then(|v| v.get("parent"))
-        .and_then(|v| {
-            if v.is_null() {
-                None
-            } else {
-                v.as_str().map(|s| s.to_string())
-            }
-        });
+    let parent = front.as_ref().and_then(|v| v.get("parent")).and_then(|v| {
+        if v.is_null() {
+            None
+        } else {
+            v.as_str().map(|s| s.to_string())
+        }
+    });
 
     let title = get_str("title");
 

@@ -26,7 +26,7 @@ struct FmSplit<'a> {
 }
 
 /// Split on `---\n...\n---` -- first block only, no re-entry.
-fn split_frontmatter(blob: &str) -> Option<FmSplit> {
+fn split_frontmatter(blob: &str) -> Option<FmSplit<'_>> {
     if !blob.starts_with("---\n") {
         return None;
     }
@@ -73,8 +73,7 @@ fn read_deps_from_fm(fm: &[&str]) -> Vec<String> {
             deps.push(val.to_string());
         }
         // block-style continuation: subsequent lines matching /^\s+-\s+(.+)$/
-        for j in (i + 1)..fm.len() {
-            let cl = fm[j];
+        for cl in fm.iter().skip(i + 1) {
             if let Some(item) = cl.trim_start().strip_prefix("- ") {
                 deps.push(item.trim().to_string());
                 continue;
@@ -94,12 +93,7 @@ fn read_deps_from_fm(fm: &[&str]) -> Vec<String> {
 ///
 /// TS order: unshift updated then unshift status, so updated lands above
 /// status. Real tickets always have both lines, so this is nearly dead code.
-fn flip_status_in_fm(
-    fm: &[&str],
-    rest: &str,
-    new_status: &str,
-    date: &str,
-) -> (String, String) {
+fn flip_status_in_fm(fm: &[&str], rest: &str, new_status: &str, date: &str) -> (String, String) {
     let mut has_status = false;
     let mut has_updated = false;
     let mut out: Vec<String> = Vec::with_capacity(fm.len() + 2);
@@ -132,13 +126,13 @@ fn flip_status_in_fm(
 /// Read the `depends_on` and status from a trunk blob.
 struct DepCheck {
     deps: Vec<String>,
+    #[allow(dead_code)]
     status: String,
 }
 
 fn read_task_on_ref(ref_: &str, task_file: &str) -> Result<DepCheck, String> {
     let blob = git::show_ref(ref_, task_file)?;
-    let sf = split_frontmatter(&blob)
-        .ok_or_else(|| format!("no frontmatter in {task_file}"))?;
+    let sf = split_frontmatter(&blob).ok_or_else(|| format!("no frontmatter in {task_file}"))?;
     Ok(DepCheck {
         deps: read_deps_from_fm(&sf.fm_lines),
         status: read_status_from_fm(&sf.fm_lines).to_string(),
@@ -146,11 +140,7 @@ fn read_task_on_ref(ref_: &str, task_file: &str) -> Result<DepCheck, String> {
 }
 
 /// Find a dependency across {epics, stories, tasks} on a git ref.
-fn find_dep_on_ref(
-    dep_slug: &str,
-    ref_: &str,
-    plan_dir: &str,
-) -> Result<Option<String>, String> {
+fn find_dep_on_ref(dep_slug: &str, ref_: &str, plan_dir: &str) -> Result<Option<String>, String> {
     for kd in &["epics", "stories", "tasks"] {
         let dir = format!("{plan_dir}/{kd}");
         let files = git::ls_tree_md(ref_, &dir).unwrap_or_default();
@@ -167,12 +157,7 @@ fn local_date_string() -> String {
     // We compute from system time using UTC + timezone offset heuristic.
     // For simplicity and correctness, use jiff's ZonedDateTime.
     let now = jiff::Zoned::now();
-    format!(
-        "{:04}-{:02}-{:02}",
-        now.year(),
-        now.month(),
-        now.day(),
-    )
+    format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day(),)
 }
 
 // ---------------------------------------------------------------------------
@@ -216,8 +201,7 @@ pub fn claim_task(
     }
 
     // ---- 2. Under shared lock ----
-    let _lock = PlanrLock::shared(cwd)
-        .map_err(|e| format!("lock error: {e}"))?;
+    let _lock = PlanrLock::shared(cwd).map_err(|e| format!("lock error: {e}"))?;
 
     // 2a. Find task file on trunk
     let task_files = git::ls_tree_md(trunk, &format!("{plan_dir}/tasks"))
@@ -261,8 +245,7 @@ pub fn claim_task(
     let wf_path = wt_path.join(&task_file);
     let content = std::fs::read_to_string(&wf_path)
         .map_err(|e| format!("cannot read {}: {e}", wf_path.display()))?;
-    let sf = split_frontmatter(&content)
-        .ok_or_else(|| format!("no frontmatter in {task_file}"))?;
+    let sf = split_frontmatter(&content).ok_or_else(|| format!("no frontmatter in {task_file}"))?;
     let date = local_date_string();
     let (_new_fm, new_content) = flip_status_in_fm(&sf.fm_lines, sf.rest, "in_progress", &date);
 
@@ -318,22 +301,14 @@ mod tests {
 
     #[test]
     fn test_read_deps_inline_list() {
-        let fm = [
-            "id: x",
-            "depends_on: [dep1, dep2]",
-            "status: todo",
-        ];
+        let fm = ["id: x", "depends_on: [dep1, dep2]", "status: todo"];
         let deps = read_deps_from_fm(&fm);
         assert_eq!(deps, vec!["dep1", "dep2"]);
     }
 
     #[test]
     fn test_read_deps_bare_string() {
-        let fm = [
-            "id: x",
-            "depends_on: dep1",
-            "status: todo",
-        ];
+        let fm = ["id: x", "depends_on: dep1", "status: todo"];
         let deps = read_deps_from_fm(&fm);
         assert_eq!(deps, vec!["dep1"]);
     }
@@ -353,11 +328,7 @@ mod tests {
 
     #[test]
     fn test_read_deps_empty() {
-        let fm = [
-            "id: x",
-            "depends_on: []",
-            "status: todo",
-        ];
+        let fm = ["id: x", "depends_on: []", "status: todo"];
         let deps = read_deps_from_fm(&fm);
         assert!(deps.is_empty());
     }
@@ -405,7 +376,10 @@ mod tests {
             "tasks/02-parse.md".to_string(),
             "tasks/03-http-proxy.md".to_string(),
         ];
-        assert_eq!(find_task_file(&files, "http-proxy"), Some("tasks/03-http-proxy.md"));
+        assert_eq!(
+            find_task_file(&files, "http-proxy"),
+            Some("tasks/03-http-proxy.md")
+        );
     }
 
     #[test]

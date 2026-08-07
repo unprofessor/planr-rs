@@ -51,14 +51,17 @@ fn trunk_status_map(tickets: &[ParsedTicket]) -> std::collections::HashMap<Strin
 }
 
 /// Compute BLOCKED-BY for a task: slugs of unmet depends_on.
-fn blocked_by(task: &ParsedTicket, status_map: &std::collections::HashMap<String, String>) -> String {
+fn blocked_by(
+    task: &ParsedTicket,
+    status_map: &std::collections::HashMap<String, String>,
+) -> String {
     if task.depends_on.is_empty() {
         return String::new();
     }
     let unmet: Vec<&str> = task
         .depends_on
         .iter()
-        .filter(|dep| status_map.get(dep.as_str()).map_or(true, |s| s != "done"))
+        .filter(|dep| status_map.get(dep.as_str()).is_none_or(|s| s != "done"))
         .map(|s| s.as_str())
         .collect();
     unmet.join(" ")
@@ -208,16 +211,32 @@ fn render_summary(
 pub fn render_board(input: &BoardInput) -> String {
     let status_map = trunk_status_map(&input.trunk_tickets);
 
-    let epics: Vec<&ParsedTicket> = input.trunk_tickets.iter().filter(|t| t.kind == Some(Kind::Epic)).collect();
-    let stories: Vec<&ParsedTicket> = input.trunk_tickets.iter().filter(|t| t.kind == Some(Kind::Story)).collect();
-    let tasks: Vec<&ParsedTicket> = input.trunk_tickets.iter().filter(|t| t.kind == Some(Kind::Task)).collect();
+    let epics: Vec<&ParsedTicket> = input
+        .trunk_tickets
+        .iter()
+        .filter(|t| t.kind == Some(Kind::Epic))
+        .collect();
+    let stories: Vec<&ParsedTicket> = input
+        .trunk_tickets
+        .iter()
+        .filter(|t| t.kind == Some(Kind::Story))
+        .collect();
+    let tasks: Vec<&ParsedTicket> = input
+        .trunk_tickets
+        .iter()
+        .filter(|t| t.kind == Some(Kind::Task))
+        .collect();
 
     let mut out = String::new();
     out.push_str(&render_section("epics", &epics, &status_map, false));
     out.push_str(&render_section("stories", &stories, &status_map, false));
     out.push_str(&render_section("tasks", &tasks, &status_map, true));
     out.push_str(&render_in_flight(&input.branch_statuses));
-    out.push_str(&render_summary(&input.trunk_tickets, &input.branch_statuses, &status_map));
+    out.push_str(&render_summary(
+        &input.trunk_tickets,
+        &input.branch_statuses,
+        &status_map,
+    ));
 
     out
 }
@@ -269,7 +288,7 @@ pub fn read_working_tree_tickets(plan_dir: &str) -> Vec<ParsedTicket> {
         };
         entries.sort();
         for entry in &entries {
-            if entry.extension().map_or(true, |e| e != "md") {
+            if entry.extension().is_none_or(|e| e != "md") {
                 continue;
             }
             if !entry.is_file() {
@@ -351,8 +370,13 @@ pub fn read_in_flight_branches(plan_dir: &str) -> Vec<BranchStatus> {
 mod tests {
     use super::*;
 
-    fn t(id: &str, kind: &str, parent: Option<&str>, status: &str,
-         deps: Vec<&str>) -> ParsedTicket {
+    fn t(
+        id: &str,
+        kind: &str,
+        parent: Option<&str>,
+        status: &str,
+        deps: Vec<&str>,
+    ) -> ParsedTicket {
         let k = match kind {
             "epic" => Some(Kind::Epic),
             "story" => Some(Kind::Story),
@@ -434,23 +458,31 @@ mod tests {
         };
         let out = render_board(&input);
         // total = 4, done = 3 (epic e + story s + task a), todo = 1 (task b)
-        assert!(out.lines().any(|l| l.starts_with("total") && l.contains("4")), "total=4: {out}");
-        assert!(out.lines().any(|l| l.starts_with("done") && l.contains("3")), "done=3: {out}");
-        assert!(out.lines().any(|l| l.starts_with("todo") && l.contains("1")), "todo=1: {out}");
+        assert!(
+            out.lines()
+                .any(|l| l.starts_with("total") && l.contains("4")),
+            "total=4: {out}"
+        );
+        assert!(
+            out.lines()
+                .any(|l| l.starts_with("done") && l.contains("3")),
+            "done=3: {out}"
+        );
+        assert!(
+            out.lines()
+                .any(|l| l.starts_with("todo") && l.contains("1")),
+            "todo=1: {out}"
+        );
     }
 
     #[test]
     fn test_in_flight_section() {
-        let tickets = vec![
-            t("proxy", "task", Some("net"), "in_progress", vec![]),
-        ];
-        let branches = vec![
-            BranchStatus {
-                branch: "plan/proxy".to_string(),
-                status: "in_progress".to_string(),
-                slug: "proxy".to_string(),
-            },
-        ];
+        let tickets = vec![t("proxy", "task", Some("net"), "in_progress", vec![])];
+        let branches = vec![BranchStatus {
+            branch: "plan/proxy".to_string(),
+            status: "in_progress".to_string(),
+            slug: "proxy".to_string(),
+        }];
         let input = BoardInput {
             trunk_tickets: tickets,
             branch_statuses: branches,

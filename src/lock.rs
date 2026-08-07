@@ -47,9 +47,8 @@ impl PlanrLock {
 
 /// Resolve the lock file path: `<git-common-dir>/planr.lock`.
 fn lock_path(cwd: &Path) -> io::Result<PathBuf> {
-    let gd = git::git_common_dir(cwd).map_err(|e| {
-        io::Error::new(io::ErrorKind::Other, format!("git-common-dir: {e}"))
-    })?;
+    let gd =
+        git::git_common_dir(cwd).map_err(|e| io::Error::other(format!("git-common-dir: {e}")))?;
     Ok(Path::new(&gd).join("planr.lock"))
 }
 
@@ -63,6 +62,7 @@ fn open_lock_file(path: &Path) -> io::Result<File> {
     }
     OpenOptions::new()
         .create(true)
+        .truncate(true)
         .read(true)
         .write(true)
         .open(path)
@@ -137,7 +137,7 @@ mod tests {
         let t1 = thread::spawn(move || {
             let l = PlanrLock::exclusive(&repo1).unwrap();
             b1.wait(); // signal: thread 1 has the lock
-            // Hold for a bit
+                       // Hold for a bit
             thread::sleep(std::time::Duration::from_millis(50));
             drop(l);
         });
@@ -145,13 +145,15 @@ mod tests {
         let b2 = barrier;
         let t2 = thread::spawn(move || {
             b2.wait(); // wait for thread 1 to grab the lock
-            // Now try to acquire exclusive -- this should block until t1
-            // releases, proving that exclusive locks serialize.
+                       // Now try to acquire exclusive -- this should block until t1
+                       // releases, proving that exclusive locks serialize.
             let started = std::time::Instant::now();
             let l = PlanrLock::exclusive(&repo2).unwrap();
             let elapsed = started.elapsed();
-            assert!(elapsed >= std::time::Duration::from_millis(40),
-                "exclusive lock should block: elapsed={elapsed:?}");
+            assert!(
+                elapsed >= std::time::Duration::from_millis(40),
+                "exclusive lock should block: elapsed={elapsed:?}"
+            );
             drop(l);
         });
 

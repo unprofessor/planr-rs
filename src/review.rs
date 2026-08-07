@@ -4,7 +4,7 @@
 //! Port of `skills/planr/src/review.ts`.
 
 use crate::git;
-use crate::parse::{extract_section, extract_last_review_verdict};
+use crate::parse::extract_section;
 use crate::ticket::parse_ticket;
 
 /// Generate the full review brief for a task on a `plan/<slug>` branch.
@@ -19,7 +19,9 @@ pub fn generate_review_brief(slug: &str, trunk: &str, plan_dir: &str) -> Result<
         .map_err(|_| format!("no task file for '{slug}' on {branch}"))?;
     let task_pattern = format!(r"/[0-9]+-{}\.md$", regex::escape(slug));
     let re = regex::Regex::new(&task_pattern).unwrap();
-    let task_file = task_files.iter().find(|f| re.is_match(f))
+    let task_file = task_files
+        .iter()
+        .find(|f| re.is_match(f))
         .ok_or_else(|| format!("no task file for '{slug}' on {branch}"))?;
 
     // Locate worktree for this branch
@@ -60,7 +62,9 @@ self-validation; re-check everything yourself.\n\
    failed, commit, hand back. The worker will be re-dispatched.";
 
     // Build output
-    let display_wt = worktree_path.as_deref().unwrap_or("(none -- checkout plan/<slug> to review)");
+    let display_wt = worktree_path
+        .as_deref()
+        .unwrap_or("(none -- checkout plan/<slug> to review)");
     let mut out = String::new();
     out.push_str(&format!("branch:    {branch}\n"));
     out.push_str(&format!("task:      {task_file}\n"));
@@ -78,7 +82,7 @@ self-validation; re-check everything yourself.\n\
     out.push_str(&diff);
     out.push('\n');
     out.push('\n');
-    out.push_str(&guidance);
+    out.push_str(guidance);
     out.push('\n');
 
     Ok(out)

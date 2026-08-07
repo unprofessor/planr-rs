@@ -57,6 +57,7 @@ pub fn split_frontmatter(blob: &str) -> FrontmatterSplit {
 pub struct FrontmatterSplit {
     pub fm: String,
     pub body: String,
+    #[allow(dead_code)]
     pub raw: String,
 }
 
@@ -140,14 +141,11 @@ pub fn extract_section(body: &str, name: &str) -> String {
     }
 
     // Trim trailing blank lines
-    while section_lines
-        .last()
-        .map_or(false, |l| l.trim().is_empty())
-    {
+    while section_lines.last().is_some_and(|l| l.trim().is_empty()) {
         section_lines.pop();
     }
     // Trim leading blank lines
-    while section_lines.first().map_or(false, |l| l.trim().is_empty()) {
+    while section_lines.first().is_some_and(|l| l.trim().is_empty()) {
         section_lines.remove(0);
     }
 

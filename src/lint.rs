@@ -3,7 +3,7 @@
 //! Port of `skills/planr/src/lint.ts`. The engine is pure (takes tickets,
 //! returns issues); the CLI I/O (working tree scan, ref scan) is separate.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::git;
@@ -85,6 +85,7 @@ fn slug_from_filename(file: &str) -> String {
     no_md.to_string()
 }
 
+#[allow(dead_code)]
 fn escape_regex(s: &str) -> String {
     regex::escape(s)
 }
@@ -160,9 +161,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
         }
 
         // Validate status
-        let valid_statuses = [
-            "todo", "in_progress", "review", "done", "blocked",
-        ];
+        let valid_statuses = ["todo", "in_progress", "review", "done", "blocked"];
         if !valid_statuses.contains(&ticket.status.as_str()) {
             let display = if ticket.status.is_empty() {
                 "<missing>".to_string()
@@ -221,10 +220,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
                     issues.push(LintIssue {
                         file: file.clone(),
                         level: Level::Error,
-                        message: format!(
-                            "epics must not have a parent (found '{}')",
-                            p
-                        ),
+                        message: format!("epics must not have a parent (found '{}')", p),
                     });
                 }
             }
@@ -476,7 +472,7 @@ pub fn lint_working_tree(plan_dir: &str) -> LintReport {
         };
         entries.sort();
         for entry in &entries {
-            if !entry.extension().map_or(false, |e| e == "md") {
+            if !entry.extension().is_some_and(|e| e == "md") {
                 continue;
             }
             if !entry.is_file() {
@@ -496,7 +492,6 @@ pub fn lint_working_tree(plan_dir: &str) -> LintReport {
 
     check_backlog(&inputs)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -548,9 +543,18 @@ mod tests {
         let mut t = make("proxy", "task");
         t.parent = Some("net".to_string());
         let inputs = vec![
-            LintInput { file: ".plan/epics/01-v1.md".to_string(), ticket: e },
-            LintInput { file: ".plan/stories/01-net.md".to_string(), ticket: s },
-            LintInput { file: ".plan/tasks/01-proxy.md".to_string(), ticket: t },
+            LintInput {
+                file: ".plan/epics/01-v1.md".to_string(),
+                ticket: e,
+            },
+            LintInput {
+                file: ".plan/stories/01-net.md".to_string(),
+                ticket: s,
+            },
+            LintInput {
+                file: ".plan/tasks/01-proxy.md".to_string(),
+                ticket: t,
+            },
         ];
         let report = check_backlog(&inputs);
         assert!(report.issues.is_empty(), "issues: {:?}", report.issues);
@@ -561,7 +565,10 @@ mod tests {
         let mut t = make("", "task");
         t.parent = Some("p".to_string());
         let inputs = vec![
-            LintInput { file: "01-x.md".to_string(), ticket: t },
+            LintInput {
+                file: "01-x.md".to_string(),
+                ticket: t,
+            },
             parent_ticket(),
         ];
         let r = check_backlog(&inputs);
@@ -575,12 +582,18 @@ mod tests {
         let mut t = make("bar", "task");
         t.parent = Some("p".to_string());
         let inputs = vec![
-            LintInput { file: "01-foo.md".to_string(), ticket: t },
+            LintInput {
+                file: "01-foo.md".to_string(),
+                ticket: t,
+            },
             parent_ticket(),
         ];
         let r = check_backlog(&inputs);
         assert_eq!(r.error_count, 1);
-        assert!(r.issues.iter().any(|i| i.message.contains("does not match filename")));
+        assert!(r
+            .issues
+            .iter()
+            .any(|i| i.message.contains("does not match filename")));
     }
 
     #[test]
@@ -594,13 +607,30 @@ mod tests {
         let mut b = make("dupe", "task");
         b.parent = Some("p".to_string());
         let inputs = vec![
-            LintInput { file: ".plan/epics/01-ep.md".to_string(), ticket: epic },
-            LintInput { file: ".plan/tasks/01-dupe.md".to_string(), ticket: a },
-            LintInput { file: ".plan/tasks/02-dupe.md".to_string(), ticket: b },
-            LintInput { file: ".plan/stories/01-p.md".to_string(), ticket: story },
+            LintInput {
+                file: ".plan/epics/01-ep.md".to_string(),
+                ticket: epic,
+            },
+            LintInput {
+                file: ".plan/tasks/01-dupe.md".to_string(),
+                ticket: a,
+            },
+            LintInput {
+                file: ".plan/tasks/02-dupe.md".to_string(),
+                ticket: b,
+            },
+            LintInput {
+                file: ".plan/stories/01-p.md".to_string(),
+                ticket: story,
+            },
         ];
         let r = check_backlog(&inputs);
-        assert_eq!(r.issues.len(), 1, "only the duplicate error: {:?}", r.issues);
+        assert_eq!(
+            r.issues.len(),
+            1,
+            "only the duplicate error: {:?}",
+            r.issues
+        );
         assert!(r.issues[0].message.contains("duplicate slug"));
     }
 
@@ -610,21 +640,33 @@ mod tests {
         t.parent = Some("p".to_string());
         t.status = "finished".to_string();
         let inputs = vec![
-            LintInput { file: "01-s.md".to_string(), ticket: t },
+            LintInput {
+                file: "01-s.md".to_string(),
+                ticket: t,
+            },
             parent_ticket(),
         ];
         let r = check_backlog(&inputs);
         assert_eq!(r.error_count, 1);
-        assert!(r.issues.iter().any(|i| i.message.contains("invalid status")));
+        assert!(r
+            .issues
+            .iter()
+            .any(|i| i.message.contains("invalid status")));
     }
 
     #[test]
     fn test_dangling_parent() {
         let mut t = make("orph", "task");
         t.parent = Some("ghost".to_string());
-        let inputs = vec![LintInput { file: "01-orph.md".to_string(), ticket: t }];
+        let inputs = vec![LintInput {
+            file: "01-orph.md".to_string(),
+            ticket: t,
+        }];
         let r = check_backlog(&inputs);
-        assert!(r.issues.iter().any(|i| i.message.contains("does not exist")));
+        assert!(r
+            .issues
+            .iter()
+            .any(|i| i.message.contains("does not exist")));
     }
 
     #[test]
@@ -635,8 +677,14 @@ mod tests {
         let mut p = make("p", "task");
         p.parent = Some("s".to_string());
         let inputs = vec![
-            LintInput { file: "01-d.md".to_string(), ticket: t },
-            LintInput { file: "01-p.md".to_string(), ticket: p },
+            LintInput {
+                file: "01-d.md".to_string(),
+                ticket: t,
+            },
+            LintInput {
+                file: "01-p.md".to_string(),
+                ticket: p,
+            },
         ];
         let r = check_backlog(&inputs);
         assert!(r.issues.iter().any(|i| i.message.contains("depends_on")));
@@ -651,8 +699,14 @@ mod tests {
         b.parent = Some("s".to_string());
         b.depends_on = vec!["a".to_string()];
         let inputs = vec![
-            LintInput { file: "01-a.md".to_string(), ticket: a },
-            LintInput { file: "01-b.md".to_string(), ticket: b },
+            LintInput {
+                file: "01-a.md".to_string(),
+                ticket: a,
+            },
+            LintInput {
+                file: "01-b.md".to_string(),
+                ticket: b,
+            },
         ];
         let r = check_backlog(&inputs);
         assert!(r.issues.iter().any(|i| i.message.contains("cycle")));
@@ -666,19 +720,40 @@ mod tests {
         // Also need a parent that exists for parent check to pass
         let mut p = make("s", "story");
         let inputs = vec![
-            LintInput { file: "01-self.md".to_string(), ticket: t },
-            LintInput { file: "01-s.md".to_string(), ticket: p },
+            LintInput {
+                file: "01-self.md".to_string(),
+                ticket: t,
+            },
+            LintInput {
+                file: "01-s.md".to_string(),
+                ticket: p,
+            },
         ];
         let r = check_backlog(&inputs);
-        let self_count = r.issues.iter().filter(|i| i.message.contains("depends_on itself")).count();
-        let cycle_count = r.issues.iter().filter(|i| i.message.contains("cycle")).count();
+        let self_count = r
+            .issues
+            .iter()
+            .filter(|i| i.message.contains("depends_on itself"))
+            .count();
+        let cycle_count = r
+            .issues
+            .iter()
+            .filter(|i| i.message.contains("cycle"))
+            .count();
         assert_eq!(self_count, 1);
-        assert_eq!(cycle_count, 0, "self-dep must not be double-reported as a cycle");
+        assert_eq!(
+            cycle_count, 0,
+            "self-dep must not be double-reported as a cycle"
+        );
     }
 
     #[test]
     fn test_render_empty() {
-        let r = LintReport { issues: vec![], error_count: 0, warning_count: 0 };
+        let r = LintReport {
+            issues: vec![],
+            error_count: 0,
+            warning_count: 0,
+        };
         assert_eq!(render_report(&r), "");
     }
 
@@ -686,9 +761,12 @@ mod tests {
     fn test_render_summary() {
         let r = LintReport {
             issues: vec![LintIssue {
-                file: "f.md".to_string(), level: Level::Error, message: "err".to_string(),
+                file: "f.md".to_string(),
+                level: Level::Error,
+                message: "err".to_string(),
             }],
-            error_count: 1, warning_count: 0,
+            error_count: 1,
+            warning_count: 0,
         };
         let out = render_report(&r);
         assert!(out.contains("error: f.md: err"));

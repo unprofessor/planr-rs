@@ -95,7 +95,7 @@ struct FmSplit<'a> {
     rest: &'a str,
 }
 
-fn split_fm(blob: &str) -> Option<FmSplit> {
+fn split_fm(blob: &str) -> Option<FmSplit<'_>> {
     if !blob.starts_with("---\n") {
         return None;
     }
@@ -117,7 +117,8 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
     // ---- 1. Guards (read from branch, no lock) ----
 
     // Branch exists
-    let _verify = git::rev_parse_verify(&branch).map_err(|_| format!("no such branch: {branch}"))?;
+    let _verify =
+        git::rev_parse_verify(&branch).map_err(|_| format!("no such branch: {branch}"))?;
 
     let task_file = find_task_file_on_branch(&branch, slug, plan_dir)?;
 
@@ -144,8 +145,7 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
     }
 
     // ---- 2. Under exclusive lock ----
-    let _lock = PlanrLock::exclusive(cwd)
-        .map_err(|e| format!("lock error: {e}"))?;
+    let _lock = PlanrLock::exclusive(cwd).map_err(|e| format!("lock error: {e}"))?;
 
     let wt_path = find_worktree_path(&branch);
 
@@ -188,8 +188,8 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
 
             // Check if parent story can also be closed
             if let Some(ref pslug) = parent_story {
-                let siblings = find_children_on_trunk(pslug, "tasks", trunk, plan_dir)
-                    .unwrap_or_default();
+                let siblings =
+                    find_children_on_trunk(pslug, "tasks", trunk, plan_dir).unwrap_or_default();
                 let all_done = siblings.iter().all(|t| t.status == "done");
                 if all_done && !siblings.is_empty() {
                     Ok(format!(
@@ -242,9 +242,7 @@ fn try_merge(branch: &str, message: &str, trunk: &str, slug: &str) -> Result<Str
             .unwrap_or_else(|| "<unknown>".to_string());
 
         // Abort the merge
-        let _ = Command::new("git")
-            .args(["merge", "--abort"])
-            .output();
+        let _ = Command::new("git").args(["merge", "--abort"]).output();
 
         // Build error message with guidance
         let mut err = String::new();
@@ -255,7 +253,9 @@ fn try_merge(branch: &str, message: &str, trunk: &str, slug: &str) -> Result<Str
         err.push('\n');
         err.push_str(&format!("merge conflict in: {conflicted}\n\n"));
         err.push_str("The worker must rebase onto fresh trunk and resolve:\n");
-        err.push_str(&format!("  git rebase {trunk}   # resolve conflicts, git rebase --continue\n"));
+        err.push_str(&format!(
+            "  git rebase {trunk}   # resolve conflicts, git rebase --continue\n"
+        ));
         err.push_str(&format!("  # then re-run: planr close task {slug}\n"));
 
         Err(err)
@@ -306,14 +306,13 @@ pub fn close_story(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Resul
     }
 
     // Under exclusive lock: flip story status on trunk
-    let _lock = PlanrLock::exclusive(cwd)
-        .map_err(|e| format!("lock error: {e}"))?;
+    let _lock = PlanrLock::exclusive(cwd).map_err(|e| format!("lock error: {e}"))?;
     flip_and_commit_kind(slug, "stories", trunk, plan_dir)?;
 
     // Check if parent epic can also be closed
     if let Some(ref pslug) = parent_epic {
-        let siblings = find_children_on_trunk(pslug, "stories", trunk, plan_dir)
-            .unwrap_or_default();
+        let siblings =
+            find_children_on_trunk(pslug, "stories", trunk, plan_dir).unwrap_or_default();
         let all_done = siblings.iter().all(|t| t.status == "done");
         if all_done && !siblings.is_empty() {
             Ok(format!(
@@ -351,8 +350,7 @@ pub fn close_epic(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
     }
 
     // Under exclusive lock: flip epic status on trunk
-    let _lock = PlanrLock::exclusive(cwd)
-        .map_err(|e| format!("lock error: {e}"))?;
+    let _lock = PlanrLock::exclusive(cwd).map_err(|e| format!("lock error: {e}"))?;
 
     flip_and_commit_kind(slug, "epics", trunk, plan_dir)?;
 
@@ -364,7 +362,12 @@ pub fn close_epic(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
 // ---------------------------------------------------------------------------
 
 /// Find a ticket file on trunk under a given kind directory by slug.
-fn find_ticket_by_slug(slug: &str, kind_dir: &str, trunk: &str, plan_dir: &str) -> Result<String, String> {
+fn find_ticket_by_slug(
+    slug: &str,
+    kind_dir: &str,
+    trunk: &str,
+    plan_dir: &str,
+) -> Result<String, String> {
     let dir = format!("{plan_dir}/{kind_dir}");
     let files = git::ls_tree_md(trunk, &dir).unwrap_or_default();
     let pattern = format!(r"/[0-9]+-{}\.md$", regex::escape(slug));
@@ -376,7 +379,12 @@ fn find_ticket_by_slug(slug: &str, kind_dir: &str, trunk: &str, plan_dir: &str) 
 }
 
 /// Flip a trunk-local ticket to done and commit.
-fn flip_and_commit_kind(slug: &str, kind_dir: &str, trunk: &str, plan_dir: &str) -> Result<(), String> {
+fn flip_and_commit_kind(
+    slug: &str,
+    kind_dir: &str,
+    trunk: &str,
+    plan_dir: &str,
+) -> Result<(), String> {
     let file = find_ticket_by_slug(slug, kind_dir, trunk, plan_dir)?;
 
     // Checkout trunk first (in case we're on a different branch)
@@ -391,8 +399,7 @@ fn flip_and_commit_kind(slug: &str, kind_dir: &str, trunk: &str, plan_dir: &str)
     let parent = fpath.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent)
         .map_err(|e| format!("cannot create dir {}: {e}", parent.display()))?;
-    std::fs::write(fpath, &new_content)
-        .map_err(|e| format!("cannot write {file}: {e}"))?;
+    std::fs::write(fpath, &new_content).map_err(|e| format!("cannot write {file}: {e}"))?;
 
     git::add_file(&file, Path::new("."))?;
     git::commit_in(&format!("plan: close {kind_dir} {slug}"), Path::new("."))?;
