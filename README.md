@@ -1,16 +1,21 @@
 # planr-cli
 
-**Version 0.1.0** — CLI tool for the `planr` skill in the `agent-skills` tap.
-Provides automated backlog management: ticket creation, branch claiming,
-structural linting, board summaries, review briefs, and merge gating.
+Trunk-based, markdown-formatted backlog CLI for solo and concurrent
+development. Provides automated backlog management: ticket creation, branch
+claiming, structural linting, board summaries, review briefs, and merge gating.
 
 ## Installation
 
 ### From source
 
 ```bash
-cargo install --path .
+cargo install --git https://github.com/unprofessor/planr-cli.git
 # or
+git clone https://github.com/unprofessor/planr-cli.git
+cargo install --path planr-cli
+# or
+git clone https://github.com/unprofessor/planr-cli.git
+cd planr-cli
 cargo build --release
 cp target/release/planr ~/.local/bin/
 ```
@@ -119,7 +124,3 @@ cargo build --release   # Release build with LTO
 
 All commands run against a repository with a `.plan/` directory. See the
 existing backlog in `.plan/` for examples.
-
-## License
-
-MIT
