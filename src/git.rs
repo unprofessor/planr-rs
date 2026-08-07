@@ -211,7 +211,6 @@ mod tests {
     #[test]
     fn test_branch_list_format() {
         // Pure parsing test -- branch_list output format
-        let sample = "* main\n  feature\n";
         // The `branch_list` fn can't be tested in isolation because it calls
         // git. Instead, use git_in to create a branch and verify the format.
         with_temp_repo(|_tmp, repo| {

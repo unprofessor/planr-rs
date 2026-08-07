@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn test_clean_backlog() {
-        let mut e = make("v1", "epic");
+        let e = make("v1", "epic");
         let mut s = make("net", "story");
         s.parent = Some("v1".to_string());
         let mut t = make("proxy", "task");
@@ -718,7 +718,7 @@ mod tests {
         t.parent = Some("s".to_string());
         t.depends_on = vec!["self".to_string()];
         // Also need a parent that exists for parent check to pass
-        let mut p = make("s", "story");
+        let p = make("s", "story");
         let inputs = vec![
             LintInput {
                 file: "01-self.md".to_string(),
