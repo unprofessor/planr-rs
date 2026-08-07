@@ -1,4 +1,4 @@
-//! Review brief generator — reads a task from a `plan/<slug>` branch and
+//! Review brief generator -- reads a task from a `plan/<slug>` branch and
 //! prints the information a reviewer needs.
 //!
 //! Port of `skills/planr/src/review.ts`.
@@ -60,7 +60,7 @@ self-validation; re-check everything yourself.\n\
    failed, commit, hand back. The worker will be re-dispatched.";
 
     // Build output
-    let display_wt = worktree_path.as_deref().unwrap_or("(none — checkout plan/<slug> to review)");
+    let display_wt = worktree_path.as_deref().unwrap_or("(none -- checkout plan/<slug> to review)");
     let mut out = String::new();
     out.push_str(&format!("branch:    {branch}\n"));
     out.push_str(&format!("task:      {task_file}\n"));

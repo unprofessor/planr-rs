@@ -1,4 +1,4 @@
-//! In-process flock helper — replaces the TS pattern of spawning
+//! In-process flock helper -- replaces the TS pattern of spawning
 //! `flock -s|-x <lock> node -e <script>` children.
 //!
 //! The lock is held on `<git-common-dir>/planr.lock`, which is the SAME
@@ -6,9 +6,9 @@
 //! scripts serialize against each other during transition.
 //!
 //! Lock modes:
-//!   - `Claim` tasks: **shared** (`lock_shared`) — multiple claims can
+//!   - `Claim` tasks: **shared** (`lock_shared`) -- multiple claims can
 //!     read concurrently.
-//!   - `NewTicket`, `MergeTask`: **exclusive** (`lock_exclusive`) —
+//!   - `NewTicket`, `MergeTask`: **exclusive** (`lock_exclusive`) --
 //!     full serialization of prefix allocation / trunk mutation.
 
 use fs2::FileExt;
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn test_shared_lock_does_not_block_shared() {
         let (_tmp, repo) = init_repo();
-        // Two shared locks from the same process — should not conflict
+        // Two shared locks from the same process -- should not conflict
         let lock1 = PlanrLock::shared(&repo).unwrap();
         let lock2 = PlanrLock::shared(&repo).unwrap();
         drop(lock1);
@@ -145,7 +145,7 @@ mod tests {
         let b2 = barrier;
         let t2 = thread::spawn(move || {
             b2.wait(); // wait for thread 1 to grab the lock
-            // Now try to acquire exclusive — this should block until t1
+            // Now try to acquire exclusive -- this should block until t1
             // releases, proving that exclusive locks serialize.
             let started = std::time::Instant::now();
             let l = PlanrLock::exclusive(&repo2).unwrap();

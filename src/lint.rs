@@ -1,4 +1,4 @@
-//! Pure lint engine — three-pass backlog checker.
+//! Pure lint engine -- three-pass backlog checker.
 //!
 //! Port of `skills/planr/src/lint.ts`. The engine is pure (takes tickets,
 //! returns issues); the CLI I/O (working tree scan, ref scan) is separate.
@@ -75,7 +75,7 @@ fn slug_from_filename(file: &str) -> String {
         .unwrap_or("");
     let no_md = base.strip_suffix(".md").unwrap_or(base);
     // Strip leading NN- prefix (TS equivalent: replace(/^\d+-/, ''))
-    // e.g. "01-foo" → "foo", "foo" → "foo"
+    // e.g. "01-foo" -> "foo", "foo" -> "foo"
     if let Some(hyphen_at) = no_md.find('-') {
         let prefix = &no_md[..hyphen_at];
         if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
@@ -107,7 +107,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
     let mut issues: Vec<LintIssue> = Vec::new();
 
     // Indexes built in pass 1
-    let mut file_of: HashMap<String, String> = HashMap::new(); // id → file
+    let mut file_of: HashMap<String, String> = HashMap::new(); // id -> file
     let mut kind_of: HashMap<String, Kind> = HashMap::new();
     let mut parent_of: HashMap<String, Option<String>> = HashMap::new();
     let mut deps_of: HashMap<String, Vec<String>> = HashMap::new();
@@ -190,7 +190,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
                 file: file.clone(),
                 level: Level::Error,
                 message: format!(
-                    "duplicate slug '{}' (also {}) — slugs are identity \
+                    "duplicate slug '{}' (also {}) -- slugs are identity \
                      and must be unique across the backlog",
                     id,
                     file_of.get(&id).unwrap()
@@ -254,7 +254,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
                             file: file.clone(),
                             level: Level::Error,
                             message: format!(
-                                "parent '{}' does not exist — roll-up is derived \
+                                "parent '{}' does not exist -- roll-up is derived \
                                  by scanning children, so this {} would be orphaned",
                                 p, kind_str
                             ),
@@ -301,12 +301,12 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
                         message: "depends_on itself".to_string(),
                     });
                 } else if !file_of.contains_key(d) {
-                    // TS uses the exact: depends_on '<dep>' does not exist — claim.sh could never be satisfied
+                    // TS uses the exact: depends_on '<dep>' does not exist -- claim.sh could never be satisfied
                     issues.push(LintIssue {
                         file: file.clone(),
                         level: Level::Error,
                         message: format!(
-                            "depends_on '{}' does not exist — planr claim \
+                            "depends_on '{}' does not exist -- planr claim \
                              could never be satisfied",
                             d
                         ),
@@ -335,7 +335,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
 
     // ---- pass 3: cycle detection (DFS) ----
     // Use owned Strings to avoid lifetime complexity with nested borrows.
-    let mut color: HashMap<String, &str> = HashMap::new(); // id → "w", "g", "b"
+    let mut color: HashMap<String, &str> = HashMap::new(); // id -> "w", "g", "b"
     let mut stack: Vec<String> = Vec::new();
 
     fn visit(
@@ -351,7 +351,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
             return;
         }
         if c == "g" {
-            // Found a cycle — build the cycle path
+            // Found a cycle -- build the cycle path
             let mut started = false;
             let mut parts: Vec<&str> = Vec::new();
             for s in stack.iter() {
@@ -368,7 +368,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
                 file: file_of.get(n).cloned().unwrap_or_default(),
                 level: Level::Error,
                 message: format!(
-                    "depends_on cycle: {} — nothing in the cycle can ever \
+                    "depends_on cycle: {} -- nothing in the cycle can ever \
                      be claimed",
                     full_cycle
                 ),
@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_slug() {
-        // Proper hierarchy: epic  ep → story p → tasks (dupe, dupe)
+        // Proper hierarchy: epic  ep -> story p -> tasks (dupe, dupe)
         let epic = make("ep", "epic");
         let mut story = make("p", "story");
         story.parent = Some("ep".to_string());

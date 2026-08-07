@@ -36,7 +36,7 @@ fn init_repo(dir: &Path) {
     for d in &[".plan/epics", ".plan/stories", ".plan/tasks"] {
         std::fs::create_dir_all(dir.join(d)).unwrap();
     }
-    // Git doesn't track empty dirs — write a .gitkeep
+    // Git doesn't track empty dirs -- write a .gitkeep
     std::fs::write(dir.join(".plan/.gitkeep"), "").unwrap();
 
     // Initial commit
@@ -123,7 +123,7 @@ fn test_e2e_new_ticket_bad_slug_double_hyphen() {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario: happy path - epic → stories → tasks
+// Scenario: happy path - epic -> stories -> tasks
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -426,7 +426,7 @@ fn test_e2e_lint_cycle_real() {
 
     let out = planr(td.path(), &["lint"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // Should detect cycle: t1 → t2 → t3 → t1
+    // Should detect cycle: t1 -> t2 -> t3 -> t1
     assert!(stdout.contains("cycle"), "expected cycle: {stdout}");
     assert!(stdout.contains("t1"), "cycle involving t1: {stdout}");
     // Self-dep should NOT be reported as a cycle

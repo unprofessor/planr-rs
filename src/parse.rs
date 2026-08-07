@@ -1,4 +1,4 @@
-//! Pure frontmatter/body parsers — no I/O, no git.
+//! Pure frontmatter/body parsers -- no I/O, no git.
 //!
 //! These functions are the direct port of `skills/planr/src/parse.ts`.
 
@@ -80,7 +80,7 @@ pub fn parse_frontmatter(fm: &str) -> Option<serde_yaml::Value> {
 // ---------------------------------------------------------------------------
 
 /// Extract wiki-links from body text. Matches `[[slug]]`, `[[slug|alias]]`,
-/// and `[[slug#heading]]` — stripping alias/heading, skipping fenced code
+/// and `[[slug#heading]]` -- stripping alias/heading, skipping fenced code
 /// blocks, and deduplicating results.
 ///
 /// Regex breakdown:
@@ -128,7 +128,7 @@ pub fn extract_section(body: &str, name: &str) -> String {
     for line in &lines {
         if line.starts_with("## ") {
             if in_section {
-                // Next heading — stop collecting
+                // Next heading -- stop collecting
                 break;
             }
             if *line == heading {

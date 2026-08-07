@@ -1,4 +1,4 @@
-//! `planr claim` — claim a task: dependency gate, worktree creation,
+//! `planr claim` -- claim a task: dependency gate, worktree creation,
 //! frontmatter-scoped status flip.
 //!
 //! Port of `skills/planr/src/claim.ts`.
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 /// The `findTask` predicate from TS: `f.replace(/^\d+-/, "").endsWith(slug + ".md")`.
 /// NOTE: on full paths (e.g. `tasks/03-http-proxy.md`), the `^\d+-` strip never
 /// fires because the path starts with `<planDir>/`. The effective behavior is
-/// "path ends with `<slug>.md`" — looser than the NN-regex match used by
+/// "path ends with `<slug>.md`" -- looser than the NN-regex match used by
 /// merge-task. Ported as-is; tightening is follow-up, not port scope.
 fn find_task_file<'a>(files: &'a [String], slug: &str) -> Option<&'a str> {
     let pat = format!("{}.md", slug);
@@ -25,7 +25,7 @@ struct FmSplit<'a> {
     rest: &'a str,
 }
 
-/// Split on `---\n...\n---` — first block only, no re-entry.
+/// Split on `---\n...\n---` -- first block only, no re-entry.
 fn split_frontmatter(blob: &str) -> Option<FmSplit> {
     if !blob.starts_with("---\n") {
         return None;
@@ -116,7 +116,7 @@ fn flip_status_in_fm(
         }
     }
     // Insert in TS order: check hasStatus first and unshift;
-    // then check hasUpdated — the second unshift puts updated ABOVE status.
+    // then check hasUpdated -- the second unshift puts updated ABOVE status.
     if !has_status {
         out.insert(0, format!("status: {new_status}"));
     }
@@ -161,7 +161,7 @@ fn find_dep_on_ref(
     Ok(None)
 }
 
-/// Compute the local date (YYYY-MM-DD) — uses local timezone,
+/// Compute the local date (YYYY-MM-DD) -- uses local timezone,
 /// matching TS `new Date()` which returns local time.
 fn local_date_string() -> String {
     // We compute from system time using UTC + timezone offset heuristic.
@@ -277,7 +277,7 @@ pub fn claim_task(
     Ok(wt_display.to_string())
 }
 
-// Lock is dropped here (RAII) — the shared lock covers the entire
+// Lock is dropped here (RAII) -- the shared lock covers the entire
 // read-verify-create-flip-commit critical section.
 
 // ---------------------------------------------------------------------------
@@ -416,8 +416,8 @@ mod tests {
 
     #[test]
     fn test_find_task_file_ends_with_semantics() {
-        // TS behavior: f.endsWith(slug + ".md") — loose because it doesn't
-        // enforce NN− prefix before the slug. "01-http-proxy.md" matches
+        // TS behavior: f.endsWith(slug + ".md") -- loose because it doesn't
+        // enforce NN- prefix before the slug. "01-http-proxy.md" matches
         // slug "http-proxy" (last 14 chars = "http-proxy.md").
         let files = vec!["tasks/01-http-proxy.md".to_string()];
         assert_eq!(

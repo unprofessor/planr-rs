@@ -1,4 +1,4 @@
-//! Board renderer — pure function that turns structured ticket data into
+//! Board renderer -- pure function that turns structured ticket data into
 //! the formatted board view.
 //!
 //! Port of `skills/planr/src/board.ts`.
@@ -41,7 +41,7 @@ fn pad_right(s: &str, width: usize) -> String {
     }
 }
 
-/// Build a lookup map: slug → status (from trunk tickets, all kinds).
+/// Build a lookup map: slug -> status (from trunk tickets, all kinds).
 fn trunk_status_map(tickets: &[ParsedTicket]) -> std::collections::HashMap<String, String> {
     let mut m = std::collections::HashMap::new();
     for t in tickets {
@@ -204,7 +204,7 @@ fn render_summary(
 }
 
 /// Render the full board view: epics, stories, tasks, in-flight, summary.
-/// Pure function — no I/O.
+/// Pure function -- no I/O.
 pub fn render_board(input: &BoardInput) -> String {
     let status_map = trunk_status_map(&input.trunk_tickets);
 

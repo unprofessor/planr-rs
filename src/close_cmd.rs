@@ -1,10 +1,10 @@
-//! `planr close` — complete a ticket: gate-check, flip to done, merge.
+//! `planr close` -- complete a ticket: gate-check, flip to done, merge.
 //!
 //! Three routing paths:
-//! - `close task <slug>` — branch-backed: guards + exclusive lock → done flip
-//!   on branch → checkout trunk → merge --no-ff → cleanup
-//! - `close story <slug>` — trunk-local: child-task gate → done flip → commit
-//! - `close epic <slug>` — trunk-local: child-story gate → done flip → commit
+//! - `close task <slug>` -- branch-backed: guards + exclusive lock -> done flip
+//!   on branch -> checkout trunk -> merge --no-ff -> cleanup
+//! - `close story <slug>` -- trunk-local: child-task gate -> done flip -> commit
+//! - `close epic <slug>` -- trunk-local: child-story gate -> done flip -> commit
 
 use crate::git;
 use crate::lock::PlanrLock;
@@ -162,7 +162,7 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
         git::add_file(&task_file, Path::new(wt))?;
         git::commit_in(&format!("plan: mark {slug} done"), Path::new(wt))?;
     } else {
-        // No worktree — need to do this differently.
+        // No worktree -- need to do this differently.
         // Checkout branch, write, commit, then merge.
         git::checkout(&branch)?;
         let fpath = Path::new(&task_file);

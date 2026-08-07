@@ -23,14 +23,14 @@ cp target/release/planr ~/.local/bin/
 ### Prebuilt binaries
 
 Available on the [GitHub Releases page](https://github.com/unprofessor/planr-cli/releases)
-— download the archive for your platform and extract the `planr` binary into
+&mdash; download the archive for your platform and extract the `planr` binary into
 your `$PATH`.
 
 ### Dependencies
 
 - **Rust** (1.70+, ideally the latest stable) for source builds.
-- **git** (any modern version) — all planr commands shell out to git.
-- **flock** (util-linux) is **not** required — the Rust binary uses in-process
+- **git** (any modern version) &mdash; all planr commands shell out to git.
+- **flock** (util-linux) is **not** required &mdash; the Rust binary uses in-process
   `flock` via the `fs2` crate on `<git-common-dir>/planr.lock`. During
   transition, the lock file is shared with the legacy TS/bash planr tooling.
 
@@ -52,9 +52,9 @@ planr board                                    # Backlog + in-flight board
 planr lint [ref]                               # Structural checks (working tree or ref)
 planr claim <slug> [worktree]                  # Create worktree, set in_progress
 planr review <slug>                            # Brief a reviewer
-planr close task <slug>                        # Gate check → done → merge
-planr close story <slug>                       # Gate children → done → commit
-planr close epic <slug>                        # Gate stories → done → commit
+planr close task <slug>                        # Gate check -> done -> merge
+planr close story <slug>                       # Gate children -> done -> commit
+planr close epic <slug>                        # Gate stories -> done -> commit
 planr --version                                # Print version
 planr --help                                   # Full help
 ```
@@ -84,7 +84,7 @@ planr --help                                   # Full help
 `planr` uses **in-process flock** via the `fs2` crate, locking the same file
 (`<git-common-dir>/planr.lock`) that the legacy TS/bash planr tooling locks
 via `flock(1)`. This means Rust and TS planr commands can run concurrently on
-the same repository during transition — they serialize on the same kernel
+the same repository during transition &mdash; they serialize on the same kernel
 lock.
 
 All ticket files are standard Markdown with YAML frontmatter. The format is

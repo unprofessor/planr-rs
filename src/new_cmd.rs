@@ -1,4 +1,4 @@
-//! `planr new` — create a new ticket from an embedded template.
+//! `planr new` -- create a new ticket from an embedded template.
 //!
 //! Guards, template substitution, and flock-serialised prefix allocation.
 //! Port of `skills/planr/src/new-ticket.ts`.
@@ -93,7 +93,7 @@ pub fn parent_exists(parent: &str, plan_dir: &str) -> bool {
 
 /// Allocate the next sort-hint prefix and write the ticket file.
 ///
-/// This function is called while holding an exclusive `PlanrLock` — the
+/// This function is called while holding an exclusive `PlanrLock` -- the
 /// kernel-level flock ensures concurrent `planr new` invocations serialize.
 fn allocate_and_write(dir: &std::path::Path, slug: &str, content: &str) -> Result<String, String> {
     // Read highest existing prefix
@@ -189,7 +189,7 @@ fn utc_date_string() -> String {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Create a new ticket — validates, allocates prefix under exclusive lock,
+/// Create a new ticket -- validates, allocates prefix under exclusive lock,
 /// writes the file, and returns the relative path.
 ///
 /// On success, the caller should:
@@ -224,7 +224,7 @@ pub fn create_ticket(
     if let Some(p) = parent {
         if !parent_exists(p, plan_dir) {
             return Err(format!(
-                "parent '{p}' not found under {plan_dir}/ — create the parent first"
+                "parent '{p}' not found under {plan_dir}/ -- create the parent first"
             ));
         }
     }
@@ -237,17 +237,17 @@ pub fn create_ticket(
     // 6. Load template
     let template = get_template(kind)?;
 
-    // 7. Compute date (UTC YYYY-MM-DD — matches TS toISOString() split)
+    // 7. Compute date (UTC YYYY-MM-DD -- matches TS toISOString() split)
     let today = utc_date_string();
 
     // 8. Substitute
     let content = substitute_template(template, slug, title, parent, &today);
 
-    // 9. Exclusive lock → allocate prefix → write → verify
+    // 9. Exclusive lock -> allocate prefix -> write -> verify
     let lock = PlanrLock::exclusive(std::path::Path::new("."))
         .map_err(|e| format!("lock error: {e}"))?;
     let result = allocate_and_write(&dir, slug, &content);
-    drop(lock); // Release lock — the allocate+write critical section is done
+    drop(lock); // Release lock -- the allocate+write critical section is done
 
     let filename = result?;
 
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn test_allocate_and_write_post_write_verification_ok() {
-        // Normal case: single prefix 01 → next write gets 02, unique
+        // Normal case: single prefix 01 -> next write gets 02, unique
         let td = tempfile::tempdir().unwrap();
         fs::write(td.path().join("01-a.md"), "").unwrap();
         let result = allocate_and_write(td.path(), "second", "");

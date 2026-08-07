@@ -1,7 +1,7 @@
-//! Git porcelain wrappers — every function shells out to `git`.
+//! Git porcelain wrappers -- every function shells out to `git`.
 //!
 //! Port of `skills/planr/src/git.ts`. All functions discover the repo root
-//! from the OS-level current working directory — same as the TS, where git
+//! from the OS-level current working directory -- same as the TS, where git
 //! inherits the process cwd and finds the repo automatically.
 //!
 //! Error convention: on a non-zero git exit, the captured stderr (trimmed,
@@ -203,14 +203,14 @@ mod tests {
 
     #[test]
     fn test_branch_list_format() {
-        // Pure parsing test — branch_list output format
+        // Pure parsing test -- branch_list output format
         let sample = "* main\n  feature\n";
         // The `branch_list` fn can't be tested in isolation because it calls
         // git. Instead, use git_in to create a branch and verify the format.
         with_temp_repo(|_tmp, repo| {
             // Create a branch
             git_in(repo, &["branch", "feature-a"]).unwrap();
-            // branch_list uses the global cwd — can't easily test here.
+            // branch_list uses the global cwd -- can't easily test here.
             // Integration testing covers this. Just verify git_common_dir.
         });
     }

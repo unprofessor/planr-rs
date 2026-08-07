@@ -1,4 +1,4 @@
-//! Typed ticket representation — the shape every command consumes.
+//! Typed ticket representation -- the shape every command consumes.
 //!
 //! Port of `skills/planr/src/ticket.ts`.
 
@@ -29,7 +29,7 @@ impl Kind {
 // ParsedTicket
 // ---------------------------------------------------------------------------
 
-/// Parsed ticket data — the typed shape every script consumes.
+/// Parsed ticket data -- the typed shape every script consumes.
 #[derive(Debug, Clone)]
 pub struct ParsedTicket {
     pub id: String,
@@ -65,10 +65,10 @@ pub fn parse_ticket(blob: &str) -> ParsedTicket {
     };
     let status = get_str("status");
     if status.is_empty() {
-        // TS defaults to "todo" when missing — mirror that.
+        // TS defaults to "todo" when missing -- mirror that.
         // Note: the actual default is set in parseTicket TS:
         //    const status = String(front.status ?? "todo") as Status;
-        // If the field is absent, YAML key is missing → as_str → None → "";
+        // If the field is absent, YAML key is missing -> as_str -> None -> "";
         // Default to "todo" to match TS.
     }
     let status = if status.is_empty() {

@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::process;
 
-// Module skeleton — filled in by subsequent tasks
+// Module skeleton -- filled in by subsequent tasks
 mod parse;
 mod ticket;
 mod git;
@@ -15,7 +15,7 @@ mod close_cmd;
 
 // ---------------------------------------------------------------------------
 // Shared error/exit convention: every command calls `fail()` for user-facing
-// errors. The message goes to stderr, the process exits 1 — no panic, no
+// errors. The message goes to stderr, the process exits 1 -- no panic, no
 // stack trace. (Panics are reserved for bugs, not bad input.)
 // ---------------------------------------------------------------------------
 pub fn fail(msg: &str) -> ! {
@@ -24,7 +24,7 @@ pub fn fail(msg: &str) -> ! {
 }
 
 // ---------------------------------------------------------------------------
-// CLI definition — matches the six commands documented in README.md.
+// CLI definition -- matches the six commands documented in README.md.
 // Global env vars: PLANR_DIR (.plan), PLANR_TRUNK (main).
 // ---------------------------------------------------------------------------
 #[derive(Parser)]
