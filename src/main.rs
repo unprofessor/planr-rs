@@ -1,6 +1,10 @@
 use clap::{Parser, Subcommand};
 use std::process;
 
+// The build-time git-derived version (set by build.rs via semvertag-shell).
+// Falls back to Cargo.toml's version when git is unreachable.
+const VERSION: &str = env!("PLANR_VERSION");
+
 // Module skeleton -- filled in by subsequent tasks
 mod board;
 mod claim;
@@ -30,7 +34,7 @@ pub fn fail(msg: &str) -> ! {
 #[derive(Parser)]
 #[command(
     name = "planr",
-    version,
+    version = VERSION,
     about = "Trunk-based backlog management for multi-agent development",
     disable_help_subcommand = true
 )]

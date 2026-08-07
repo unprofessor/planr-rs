@@ -339,13 +339,14 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "planr"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "clap",
  "fs2",
  "jiff",
  "regex",
+ "semvertag-shell",
  "serde_yaml",
  "tempfile",
 ]
@@ -463,6 +464,31 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "semver"
+version = "1.0.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+
+[[package]]
+name = "semvertag-core"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bfd9fe8a1ca052940c15d3d032cf119f21b9f3bed298e35a61c6fbf78b7a9c7"
+dependencies = [
+ "semver",
+]
+
+[[package]]
+name = "semvertag-shell"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc9f07af307eb2e1555d3ad0b7b1e00112555c9b2ae97fdb11c955f38293023f"
+dependencies = [
+ "semver",
+ "semvertag-core",
+]
 
 [[package]]
 name = "serde"

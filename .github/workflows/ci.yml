@@ -15,6 +15,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so git describe + cargo semvertag check see tags
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -26,6 +29,11 @@ jobs:
 
       - name: Clippy
         run: cargo clippy -- -D warnings
+
+      - name: Install cargo-semvertag and validate versions
+        run: |
+          cargo install cargo-semvertag --quiet
+          cargo semvertag check
 
       - name: Run tests
         run: cargo test

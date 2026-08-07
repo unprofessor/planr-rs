@@ -36,7 +36,7 @@ your `$PATH`.
 
 ### Binary size
 
-A release build with LTO and symbol stripping is approximately **2 MB**
+A release build with LTO and symbol stripping is approximately **2.8 MB**
 (stripped). Build with:
 
 ```bash
@@ -55,14 +55,14 @@ planr review <slug>                            # Brief a reviewer
 planr close task <slug>                        # Gate check -> done -> merge
 planr close story <slug>                       # Gate children -> done -> commit
 planr close epic <slug>                        # Gate stories -> done -> commit
-planr --version                                # Print version
+planr --version                                # Print build-time git-derived version
 planr --help                                   # Full help
 ```
 
 ### Subcommand details
 
 | Subcommand | Description |
-|------------|-------------|
+| ------------ | ------------- |
 | `new` | Create an epic, story, or task file from an embedded template. Exclusive lock on planr.lock for prefix allocation. |
 | `board` | Render the full board: epics, stories, tasks, in-flight branches, and a status summary. |
 | `lint` | Three-pass structural checker: per-file, cross-ref (parents, deps, wiki-links), cycle detection. Exit 1 on errors. |
@@ -78,6 +78,23 @@ planr --help                                   # Full help
 |----------|---------|-------------|
 | `PLANR_TRUNK` | `main` | Default trunk branch for claim/close/lint operations |
 | `PLANR_DIR` | `.plan` | Directory containing the plan tickets |
+
+## Versioning
+
+`planr` embeds its version at build time from `git describe` via the
+[`semvertag-shell`](https://crates.io/crates/semvertag-shell) crate. The
+version follows SemVer monotonic ordering:
+
+| State | `planr --version` | Notes |
+| --- | --- | --- |
+| Tagged release at HEAD | `0.2.0` | Exact tag, no suffix |
+| 3 commits past `v0.2.0` | `0.2.1-dev.3+g<hash>` | Patch bump, dev prerelease |
+| Dirty worktree at tag | `0.2.0+dirty` | Build metadata, not a prerelease |
+| No git / shallow clone | `0.2.0` (from Cargo.toml) | Fallback, never breaks the build |
+
+CI runs [`cargo-semvertag check`](https://crates.io/crates/cargo-semvertag) on
+every push and PR to validate that the Cargo.toml version is a legal successor
+to the latest git tag &mdash; preventing version regressions and missed bumps.
 
 ## Compatibility
 

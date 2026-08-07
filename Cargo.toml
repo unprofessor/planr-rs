@@ -1,6 +1,6 @@
 [package]
 name = "planr"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "planr -- trunk-based, markdown-formatted backlog for both solo and concurrent development"
 
@@ -24,6 +24,10 @@ serde_yaml = "0.9"
 regex = "1"
 fs2 = "0.4"
 jiff = { version = "0.2", default-features = false, features = ["std"] }
+
+[build-dependencies]
+# semvertag-shell -- derive a SemVer version from git describe at build time
+semvertag-shell = "0.2"
 
 [dev-dependencies]
 # assert_cmd & tempfile -- end-to-end CLI tests in throwaway git repos
