@@ -9,7 +9,7 @@ assignee: null
 created: 2026-08-08
 updated: 2026-08-08
 tags: [board, graph, enhancements]
-depends_on: [stats-metrics, transitive-queries]
+depends_on: [stats-metrics, transitive-queries, graph-milestone-scope, milestone-board-views]
 ---
 
 ## Goal
@@ -45,6 +45,8 @@ with:
    exist between its tasks (high density → strongly coupled).
 
 These are opt-in with `--graph`; the default board output is unchanged.
+Graph-derived views must respect the selected milestone scope and the
+current/unplanned/completed board rules from the milestone board view task.
 
 ## Acceptance
 
@@ -60,5 +62,5 @@ These are opt-in with `--graph`; the default board output is unchanged.
 ## Notes
 
 - 2026-08-08 created
-- Depends on [[stats-metrics]] and [[transitive-queries]]
+- Depends on `stats-metrics` and `transitive-queries`
 - Modifies `src/board.rs` and `src/main.rs` to accept the `--graph` flag

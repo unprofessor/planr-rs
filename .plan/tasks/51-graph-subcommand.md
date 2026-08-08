@@ -9,7 +9,7 @@ assignee: null
 created: 2026-08-08
 updated: 2026-08-08
 tags: [cli, subcommand, graph]
-depends_on: [neighbor-queries, transitive-queries, path-finding, topological-sort, mermaid-output, dot-output, ascii-terminal, stats-metrics]
+depends_on: [neighbor-queries, transitive-queries, path-finding, topological-sort, mermaid-output, dot-output, ascii-terminal, stats-metrics, graph-milestone-scope, milestone-board-views]
 ---
 
 ## Goal
@@ -36,9 +36,11 @@ planr graph stats                         # graph-wide metrics
 planr graph visualize [--format mermaid|dot|ascii] [--filter slug]
 ```
 
-The subcommand reads the backlog (working tree or trunk via `--ref`), builds
-the graph, and runs the requested query. Output follows planr conventions
-(stdout for results, stderr for errors, exit 1 on failure).
+The subcommand reads the selected backlog scope (working tree or provider
+snapshot via `--ref`), builds the graph, and runs the requested query. It
+preserves milestone location context and supports explicit milestone/all-scope
+selection. Output follows planr conventions (stdout for results, stderr for
+errors, exit 1 on failure).
 
 Implemented as `src/graph_cmd.rs` with the CLI routing added to `main.rs`.
 The graph construction is called once per invocation and reused across all
@@ -49,7 +51,8 @@ sub-subcommands.
 - [ ] `planr graph` appears in `--help` output with sub-subcommand
   descriptions
 - [ ] All sub-subcommands work as described
-- [ ] `--ref` flag reads from a git ref instead of working tree
+- [ ] `--ref` flag reads from a provider snapshot instead of the working tree
+- [ ] Milestone selection can target one milestone or all scopes
 - [ ] Honours `PLANR_DIR` and `PLANR_TRUNK` env vars
 - [ ] `planr graph visualize --format dot | dot -Tsvg` produces valid SVG
 - [ ] Error on non-existent slug prints "no such ticket: <slug>" to stderr

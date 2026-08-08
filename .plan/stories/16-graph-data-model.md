@@ -34,15 +34,16 @@ The graph captures three relationship types between tickets:
    directed hierarchy/ordering edges.
 
 The graph module (`src/graph.rs`) is a pure data structure with no I/O.
-Construction takes `Vec<ParsedTicket>` and produces an adjacency-indexed
-graph that downstream consumers (queries, traversal, visualization) operate
-on without re-parsing.
+Construction takes parsed ticket records, including the path-derived scope
+context supplied by [[ticket-catalog]], and produces an adjacency-indexed graph
+that downstream consumers (queries, traversal, visualization) operate on
+without re-parsing or invoking a VCS.
 
 ## Acceptance
 
 - [ ] [[graph-types]] done: `TicketGraph` struct with typed adjacency maps
   for each edge category
-- [ ] [[graph-construction]] done: pipeline reads `Vec<ParsedTicket>` and
+- [ ] [[graph-construction]] done: pipeline reads parsed ticket records and
   populates all adjacency maps
 - [ ] [[backlink-index]] done: reverse wiki-link index maps slug → slugs
   that reference it
@@ -56,10 +57,14 @@ on without re-parsing.
 - [ ] `parent: null` (or field absent) produces no hierarchy edge for
   that ticket
 - [ ] Self-referencing wiki-links are included but tagged as self-loops
+- [ ] [[graph-milestone-scope]] done: path-derived milestone scope and the
+  implicit milestone → epic relationship are represented without changing
+  ticket frontmatter
 
 ## Notes
 
 - 2026-08-08 created
-- Builds directly on the existing `ParsedTicket` struct from `ticket.rs`
-- No I/O — construction takes already-parsed tickets
+- Builds on the existing `ParsedTicket` struct plus the path/location record
+  from [[ticket-catalog]]
+- No I/O — construction takes already-parsed records
 - The graph is always derived (read-only); no mutation API in this story

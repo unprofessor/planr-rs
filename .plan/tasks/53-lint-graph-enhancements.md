@@ -9,7 +9,7 @@ assignee: null
 created: 2026-08-08
 updated: 2026-08-08
 tags: [lint, graph, enhancements]
-depends_on: [graph-types, transitive-queries]
+depends_on: [graph-types, transitive-queries, graph-milestone-scope, milestone-lint-rules]
 ---
 
 ## Goal
@@ -21,7 +21,8 @@ lint engine (per-file, cross-ref, cycle detection) can catch.
 
 The existing `lint.rs` already checks parents, depends_on pointers, and
 wiki-links at a syntactic level (do the referenced slugs exist?). The graph
-module enables structural lint checks:
+module enables structural lint checks. These checks must operate on all
+milestone scopes, not just the active board view:
 
 1. **Orphan detection** — tickets whose parent slug is not in the graph
    (already covered by lint pass 2, but re-exposed via graph query)
@@ -62,8 +63,8 @@ cycle detection), gated behind the existing lint engine with new
 ## Notes
 
 - 2026-08-08 created
-- Depends on [[graph-types]] for the graph and [[transitive-queries]] for
-  depth computation
+- Depends on `graph-types`, `transitive-queries`, `graph-milestone-scope`, and
+  `milestone-lint-rules` for graph, scope, and depth computation
 - Modifies `src/lint.rs` to add a fourth pass (graph checks) and/or
   integrates graph construction into the lint pipeline
 - New checks are warnings — they inform rather than block
