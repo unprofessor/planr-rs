@@ -46,7 +46,7 @@ with:
 
 These are opt-in with `--graph`; the default board output is unchanged.
 Graph-derived views must respect the selected milestone scope and the
-current/unplanned/completed board rules from the milestone board view task.
+current/unplanned/completed board rules from [[milestone-board-views]].
 
 ## Acceptance
 
@@ -62,5 +62,5 @@ current/unplanned/completed board rules from the milestone board view task.
 ## Notes
 
 - 2026-08-08 created
-- Depends on `stats-metrics` and `transitive-queries`
+- Depends on [[stats-metrics]] and [[transitive-queries]]
 - Modifies `src/board.rs` and `src/main.rs` to accept the `--graph` flag

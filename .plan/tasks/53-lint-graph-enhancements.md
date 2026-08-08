@@ -63,8 +63,8 @@ cycle detection), gated behind the existing lint engine with new
 ## Notes
 
 - 2026-08-08 created
-- Depends on `graph-types`, `transitive-queries`, `graph-milestone-scope`, and
-  `milestone-lint-rules` for graph, scope, and depth computation
+- Depends on [[graph-types]], [[transitive-queries]], [[graph-milestone-scope]],
+  and [[milestone-lint-rules]] for graph, scope, and depth computation
 - Modifies `src/lint.rs` to add a fourth pass (graph checks) and/or
   integrates graph construction into the lint pipeline
 - New checks are warnings — they inform rather than block
