@@ -55,7 +55,7 @@ sub-subcommands.
 - [ ] Milestone selection can target one milestone or all scopes
 - [ ] Honours `PLANR_DIR` and `PLANR_TRUNK` env vars
 - [ ] `planr graph visualize --format dot | dot -Tsvg` produces valid SVG
-- [ ] Error on non-existent slug prints "no such ticket: <slug>" to stderr
+- [ ] Error on non-existent slug prints `no such ticket: <slug>` to stderr
   and exits 1
 - [ ] Error on cycle in topo prints cycle info to stderr and exits 1
 - [ ] Empty backlog produces "no tickets found" message
