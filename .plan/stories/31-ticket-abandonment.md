@@ -4,7 +4,7 @@ aliases: [ticket-abandonment]
 kind: story
 parent: hotcell-firewall-hardening
 title: Abandon tickets without review while preserving dependency safety
-status: todo
+status: done
 assignee: null
 created: 2026-08-11
 updated: 2026-08-11
