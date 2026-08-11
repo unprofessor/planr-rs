@@ -362,7 +362,7 @@ pub fn close_epic(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
 // ---------------------------------------------------------------------------
 
 /// Find a ticket file on trunk under a given kind directory by slug.
-fn find_ticket_by_slug(
+pub(crate) fn find_ticket_by_slug(
     slug: &str,
     kind_dir: &str,
     trunk: &str,

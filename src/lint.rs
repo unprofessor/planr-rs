@@ -161,7 +161,14 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
         }
 
         // Validate status
-        let valid_statuses = ["todo", "in_progress", "review", "done", "blocked"];
+        let valid_statuses = [
+            "todo",
+            "in_progress",
+            "review",
+            "done",
+            "blocked",
+            "abandoned",
+        ];
         if !valid_statuses.contains(&ticket.status.as_str()) {
             let display = if ticket.status.is_empty() {
                 "<missing>".to_string()
@@ -172,7 +179,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
                 file: file.clone(),
                 level: Level::Error,
                 message: format!(
-                    "invalid status '{}' (want todo|in_progress|review|done|blocked)",
+                    "invalid status '{}' (want todo|in_progress|review|done|blocked|abandoned)",
                     display
                 ),
             });

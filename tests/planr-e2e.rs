@@ -280,6 +280,142 @@ fn test_e2e_board_summary() {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: abandon without review
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_e2e_abandon_task_skips_review_and_blocks_dependents() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    // Add a dependent task and commit the dependency before abandoning t1.
+    let dependent_path = planr_ok(td.path(), &["new", "task", "dependent", "Dependent", "s1"]);
+    let dependent = std::fs::read_to_string(td.path().join(&dependent_path)).unwrap();
+    std::fs::write(
+        td.path().join(&dependent_path),
+        dependent.replace("depends_on: []", "depends_on: [t1]"),
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["add", ".plan"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "add dependent"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    let out = planr_ok(td.path(), &["abandon", "task", "t1", "--reason", "obe"]);
+    assert!(out.contains("abandoned task t1"), "abandon output: {out}");
+    assert!(out.contains("reason: obe"), "abandon reason: {out}");
+
+    let t1_path = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let content = std::fs::read_to_string(td.path().join(&t1_path)).unwrap();
+    assert!(content.contains("status: abandoned"));
+    assert!(content.contains("reason: obe"));
+    assert!(!content.contains("verdict: approved"));
+
+    // Abandoned is deliberately not a satisfied dependency.
+    let err = planr_err(td.path(), &["claim", "dependent"]);
+    assert!(err.contains("t1(abandoned)"), "dependency blocker: {err}");
+
+    // The normal close path still requires a branch and review.
+    let err = planr_err(td.path(), &["close", "task", "t1"]);
+    assert!(err.contains("no such branch"), "close gate: {err}");
+
+    // A second abandon cannot overwrite the original reason.
+    let err = planr_err(td.path(), &["abandon", "task", "t1", "--reason", "wont-do"]);
+    assert!(err.contains("already abandoned"), "repeat abandon: {err}");
+    let content = std::fs::read_to_string(td.path().join(&t1_path)).unwrap();
+    assert!(content.contains("reason: obe"));
+    assert!(!content.contains("reason: wont-do"));
+}
+
+#[test]
+fn test_e2e_abandon_story_and_epic_are_visible_on_board() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(
+        td.path(),
+        &["abandon", "story", "s1", "--reason", "wont-do"],
+    );
+    planr_ok(td.path(), &["abandon", "epic", "e1", "--reason", "obe"]);
+
+    let story_path = format!(
+        ".plan/stories/{}",
+        find_ticket_filename(td.path(), "stories", "s1")
+    );
+    let epic_path = format!(
+        ".plan/epics/{}",
+        find_ticket_filename(td.path(), "epics", "e1")
+    );
+    let story = std::fs::read_to_string(td.path().join(story_path)).unwrap();
+    let epic = std::fs::read_to_string(td.path().join(epic_path)).unwrap();
+    assert!(story.contains("status: abandoned"));
+    assert!(story.contains("reason: wont-do"));
+    assert!(epic.contains("status: abandoned"));
+    assert!(epic.contains("reason: obe"));
+
+    let board = planr_ok(td.path(), &["board"]);
+    assert!(
+        board.lines().any(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            fields.first() == Some(&"s1") && fields.get(1) == Some(&"abandoned")
+        }),
+        "story board row: {board}"
+    );
+    assert!(
+        board.lines().any(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            fields.first() == Some(&"e1") && fields.get(1) == Some(&"abandoned")
+        }),
+        "epic board row: {board}"
+    );
+    assert!(
+        board.lines().any(|line| {
+            line.starts_with("abandoned") && line.split_whitespace().last() == Some("2")
+        }),
+        "board summary: {board}"
+    );
+    assert!(planr_ok(td.path(), &["lint"]).is_empty());
+}
+
+#[test]
+fn test_e2e_abandon_rejects_invalid_reason_and_active_branch() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let err = planr_err(td.path(), &["abandon", "task", "t1", "--reason", "later"]);
+    assert!(
+        err.contains("invalid abandon reason"),
+        "invalid reason: {err}"
+    );
+
+    let wt_abs = td.path().join("wt-t1");
+    planr_ok(td.path(), &["claim", "t1", &wt_abs.to_string_lossy()]);
+    let err = planr_err(td.path(), &["abandon", "task", "t1", "--reason", "obe"]);
+    assert!(
+        err.contains("active branch plan/t1"),
+        "active branch: {err}"
+    );
+    assert!(wt_abs.exists(), "active worktree must remain");
+
+    let branches = Command::new("git")
+        .args(["branch", "--list"])
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&branches.stdout).contains("plan/t1"),
+        "active branch must remain: {}",
+        String::from_utf8_lossy(&branches.stdout)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Scenario: claim + close task end-to-end
 // ---------------------------------------------------------------------------
 
@@ -336,16 +472,20 @@ fn test_e2e_claim_close_task() {
     );
 }
 
-fn find_task_slug(plan_dir: &Path, slug: &str) -> String {
-    let tasks_dir = plan_dir.join(".plan/tasks");
-    for entry in std::fs::read_dir(tasks_dir).unwrap() {
+fn find_ticket_filename(plan_dir: &Path, kind_dir: &str, slug: &str) -> String {
+    let tickets_dir = plan_dir.join(format!(".plan/{kind_dir}"));
+    for entry in std::fs::read_dir(tickets_dir).unwrap() {
         let e = entry.unwrap();
         let name = e.file_name().into_string().unwrap();
         if name.ends_with(&format!("-{slug}.md")) {
             return name;
         }
     }
-    panic!("task {slug} not found");
+    panic!("{kind_dir}/{slug} not found");
+}
+
+fn find_task_slug(plan_dir: &Path, slug: &str) -> String {
+    find_ticket_filename(plan_dir, "tasks", slug)
 }
 
 // We also need a way to find task file paths within seed_lint_repo.

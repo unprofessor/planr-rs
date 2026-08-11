@@ -6,6 +6,7 @@ use std::process;
 const VERSION: &str = env!("PLANR_VERSION");
 
 // Module skeleton -- filled in by subsequent tasks
+mod abandon;
 mod board;
 mod claim;
 mod close_cmd;
@@ -28,7 +29,7 @@ pub fn fail(msg: &str) -> ! {
 }
 
 // ---------------------------------------------------------------------------
-// CLI definition -- matches the six commands documented in README.md.
+// CLI definition -- matches the commands documented in README.md.
 // Global env vars: PLANR_DIR (.plan), PLANR_TRUNK (main).
 // ---------------------------------------------------------------------------
 #[derive(Parser)]
@@ -103,6 +104,17 @@ enum Command {
     Review {
         /// task slug
         slug: String,
+    },
+
+    /// Abandon a ticket without review for an explicit reason
+    Abandon {
+        /// ticket kind: task, story, or epic
+        kind: String,
+        /// ticket slug
+        slug: String,
+        /// abandonment reason: obe or wont-do
+        #[arg(long)]
+        reason: String,
     },
 
     /// Complete a ticket: gate-check children, flip to done, merge
@@ -194,6 +206,17 @@ fn main() {
                 Err(e) => fail(&e),
             }
         }
+        Command::Abandon { kind, slug, reason } => match abandon::abandon_ticket(
+            &kind,
+            &slug,
+            &reason,
+            &cli.trunk,
+            &cli.plan_dir,
+            std::path::Path::new("."),
+        ) {
+            Ok(msg) => println!("{msg}"),
+            Err(e) => fail(&e),
+        },
         Command::Close { kind, slug } => {
             let result = match kind.as_str() {
                 "task" => close_cmd::close_task(
