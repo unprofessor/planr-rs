@@ -67,6 +67,20 @@ silently discard or merge work.
   from the abandonment implementation.
 - `git diff --check` — passed.
 
+## Review
+
+verdict: approved
+reviewer: The Clanker (manual fallback)
+date: 2026-08-11
+
+Re-checked the acceptance criteria against the diff and ran the Rust unit and
+end-to-end suites independently. The command accepts both ticket-level kinds,
+records the requested reason/state, refuses active branches without cleanup,
+keeps abandoned dependencies blocked, and leaves the existing close review
+gates intact. README usage and board/lint behavior are covered. `cargo test`
+passes (110 unit, 18 e2e); clippy exits successfully with only pre-existing
+warnings outside the implementation.
+
 ## Notes
 
 - 2026-08-11 created
