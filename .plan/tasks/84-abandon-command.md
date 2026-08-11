@@ -4,7 +4,7 @@ aliases: [abandon-command]
 kind: task
 parent: ticket-abandonment
 title: Add the abandon command and abandoned ticket state
-status: todo
+status: in_progress
 assignee: null
 created: 2026-08-11
 updated: 2026-08-11
