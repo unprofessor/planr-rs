@@ -126,7 +126,6 @@ fn flip_status_in_fm(fm: &[&str], rest: &str, new_status: &str, date: &str) -> (
 /// Read the `depends_on` and status from a trunk blob.
 struct DepCheck {
     deps: Vec<String>,
-    #[allow(dead_code)]
     status: String,
 }
 
@@ -210,8 +209,17 @@ pub fn claim_task(
         .ok_or_else(|| format!("no task file for slug '{slug}' on {trunk}"))?
         .to_string();
 
-    // 2b. Dependency gate
+    // 2b. An abandoned task is terminal and cannot be claimed again.
     let info = read_task_on_ref(trunk, &task_file)?;
+    if info.status == "abandoned" {
+        return Err(format!(
+            "refuse claim: task '{slug}' is abandoned; update the ticket or create a new one"
+        ));
+    }
+
+    // 2c. Dependency gate. Only `done` satisfies a dependency; an abandoned
+    // dependency intentionally remains a blocker until the relationship is
+    // changed or the dependent task is abandoned too.
     let mut blockers: Vec<String> = Vec::new();
     for dep in &info.deps {
         let dep_file = find_dep_on_ref(dep, trunk, plan_dir)?;
@@ -237,11 +245,11 @@ pub fn claim_task(
         return Err(err);
     }
 
-    // 2c. Create worktree branch
+    // 2d. Create worktree branch
     let wt_display = wt_path.display();
     git::worktree_add(&wt_path, &branch, Some(trunk))?;
 
-    // 2d. Read the task file in the worktree, flip status, write back
+    // 2e. Read the task file in the worktree, flip status, write back
     let wf_path = wt_path.join(&task_file);
     let content = std::fs::read_to_string(&wf_path)
         .map_err(|e| format!("cannot read {}: {e}", wf_path.display()))?;
@@ -252,11 +260,11 @@ pub fn claim_task(
     std::fs::write(&wf_path, &new_content)
         .map_err(|e| format!("cannot write {}: {e}", wf_path.display()))?;
 
-    // 2e. git add + git commit in the worktree
+    // 2f. git add + git commit in the worktree
     git::add_file(&task_file, &wt_path)?;
     git::commit_in(&format!("plan: claim {slug} (in_progress)"), &wt_path)?;
 
-    // 2f. Output worktree path
+    // 2g. Output worktree path
     Ok(wt_display.to_string())
 }
 

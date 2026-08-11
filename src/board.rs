@@ -154,6 +154,7 @@ fn render_summary(
     let mut t_review = 0;
     let mut t_done = 0;
     let mut t_blocked = 0;
+    let mut t_abandoned = 0;
 
     for t in trunk_tickets {
         // Skip trunk entry if there's an in-flight branch for this slug (only tasks)
@@ -161,8 +162,10 @@ fn render_summary(
             continue;
         }
 
-        // Check if a non-done task is blocked by unmet deps
-        if t.kind == Some(Kind::Task) && t.status != "done" {
+        // Check if a non-done, non-abandoned task is blocked by unmet deps.
+        // Abandoned remains visible as its own terminal outcome even when it
+        // has an abandoned dependency.
+        if t.kind == Some(Kind::Task) && t.status != "done" && t.status != "abandoned" {
             let unmet = blocked_by(t, status_map);
             if !unmet.is_empty() {
                 t_blocked += 1;
@@ -176,6 +179,7 @@ fn render_summary(
             "review" => t_review += 1,
             "done" => t_done += 1,
             "blocked" => t_blocked += 1,
+            "abandoned" => t_abandoned += 1,
             _ => {}
         }
     }
@@ -188,11 +192,12 @@ fn render_summary(
             "review" => t_review += 1,
             "done" => t_done += 1,
             "blocked" => t_blocked += 1,
+            "abandoned" => t_abandoned += 1,
             _ => {}
         }
     }
 
-    let total = t_todo + t_ip + t_review + t_done + t_blocked;
+    let total = t_todo + t_ip + t_review + t_done + t_blocked + t_abandoned;
 
     let mut out = "## summary\n".to_string();
     out.push_str(&format!("{} {}\n", pad_right("STATUS", 12), "COUNT"));
@@ -202,6 +207,7 @@ fn render_summary(
     out.push_str(&format!("{} {}\n", pad_right("review", 12), t_review));
     out.push_str(&format!("{} {}\n", pad_right("done", 12), t_done));
     out.push_str(&format!("{} {}\n", pad_right("blocked", 12), t_blocked));
+    out.push_str(&format!("{} {}\n", pad_right("abandoned", 12), t_abandoned));
 
     out
 }

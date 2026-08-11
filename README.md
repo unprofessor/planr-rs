@@ -52,6 +52,7 @@ planr board                                    # Backlog + in-flight board
 planr lint [ref]                               # Structural checks (working tree or ref)
 planr claim <slug> [worktree]                  # Create worktree, set in_progress
 planr review <slug>                            # Brief a reviewer
+planr abandon <kind> <slug> --reason <reason>  # Mark OBE/won't-do, skip review
 planr close task <slug>                        # Gate check -> done -> merge
 planr close story <slug>                       # Gate children -> done -> commit
 planr close epic <slug>                        # Gate stories -> done -> commit
@@ -68,6 +69,7 @@ planr --help                                   # Full help
 | `lint` | Three-pass structural checker: per-file, cross-ref (parents, deps, wiki-links), cycle detection. Exit 1 on errors. |
 | `claim` | Dependency-gate check, `git worktree add`, status flip to `in_progress`. Shared lock. |
 | `review` | Print a review brief: acceptance criteria, validation notes, diff, and reviewer guidance. |
+| `abandon` | Mark a task, story, or epic `abandoned` with reason `obe` or `wont-do`; commit on trunk without review. Refuses an existing `plan/<slug>` branch and never discards work. |
 | `close task` | Guards (status=review + approved verdict), done flip on branch, `git merge --no-ff`, cleanup. Exclusive lock. |
 | `close story` | Child-task gate (all must be done), done flip on trunk, commit. Exclusive lock. |
 | `close epic` | Child-story gate (all must be done), done flip on trunk, commit. Exclusive lock. |
@@ -78,6 +80,26 @@ planr --help                                   # Full help
 |----------|---------|-------------|
 | `PLANR_TRUNK` | `main` | Default trunk branch for claim/close/lint operations |
 | `PLANR_DIR` | `.plan` | Directory containing the plan tickets |
+
+### Abandoning a ticket
+
+Use the separate `abandon` command when a ticket is overtaken by events (OBE)
+or intentionally will not be done:
+
+```bash
+planr abandon task obsolete-task --reason obe
+planr abandon story postponed-story --reason wont-do
+```
+
+The command writes `status: abandoned`, `reason: obe` or `reason: wont-do`,
+and a refreshed `updated` date into the ticket, then commits on trunk. It does
+not require a worker validation or review verdict. An existing
+`plan/<slug>` branch is treated as active work: `abandon` refuses and leaves
+the branch and worktree untouched, so cleanup is an explicit human decision.
+
+An abandoned ticket does **not** satisfy `depends_on`; only `status: done`
+unblocks a dependency. Update the dependency relationship or abandon the
+dependent ticket separately.
 
 ## Versioning
 
@@ -125,10 +147,11 @@ src/                   # Rust source
   review.rs            # Review brief generator
   new_cmd.rs           # Ticket creation
   claim.rs             # Claim workflow
+  abandon.rs           # Abandon workflow (OBE/won't-do)
   close_cmd.rs         # Close workflow (task/story/epic)
 templates/             # Embedded ticket templates
 tests/                 # Integration tests
-  planr-e2e.rs         # End-to-end suite (15 tests)
+  planr-e2e.rs         # End-to-end suite
 ```
 
 ## Development

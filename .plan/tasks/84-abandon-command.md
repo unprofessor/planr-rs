@@ -4,7 +4,7 @@ aliases: [abandon-command]
 kind: task
 parent: ticket-abandonment
 title: Add the abandon command and abandoned ticket state
-status: in_progress
+status: review
 assignee: null
 created: 2026-08-11
 updated: 2026-08-11
@@ -58,6 +58,18 @@ silently discard or merge work.
 - [ ] README usage and command details document the abandon workflow and its
   non-destructive active-branch refusal.
 
+## Validation
+
+- `cargo fmt --check` — passed.
+- `cargo test` — passed: 110 unit tests and 18 end-to-end tests.
+- `cargo clippy --all-targets --all-features` — passed with existing warnings
+  in legacy date-range assertions and pre-existing e2e borrows; no warnings
+  from the abandonment implementation.
+- `git diff --check` — passed.
+
 ## Notes
 
 - 2026-08-11 created
+- 2026-08-11 implemented `abandon` as a separate trunk-local workflow with
+  `abandoned` status and `reason` frontmatter; active task branches are left
+  untouched and reported as a refusal.
