@@ -307,15 +307,18 @@ fn test_e2e_abandon_task_skips_review_and_blocks_dependents() {
         .ok()
         .unwrap();
 
-    let out = planr_ok(td.path(), &["abandon", "task", "t1", "--reason", "obe"]);
+    let msg = "OBE — no longer needed";
+    let out = planr_ok(td.path(), &["abandon", "task", "t1", msg]);
     assert!(out.contains("abandoned task t1"), "abandon output: {out}");
-    assert!(out.contains("reason: obe"), "abandon reason: {out}");
 
     let t1_path = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
     let content = std::fs::read_to_string(td.path().join(&t1_path)).unwrap();
     assert!(content.contains("status: abandoned"));
-    assert!(content.contains("reason: obe"));
+    assert!(content.contains("## Reason Abandoned"));
+    assert!(content.contains("OBE — no longer needed"));
     assert!(!content.contains("verdict: approved"));
+    // Frontmatter should NOT contain a reason field
+    assert!(!content.contains("\nreason:"));
 
     // Abandoned is deliberately not a satisfied dependency.
     let err = planr_err(td.path(), &["claim", "dependent"]);
@@ -325,12 +328,11 @@ fn test_e2e_abandon_task_skips_review_and_blocks_dependents() {
     let err = planr_err(td.path(), &["close", "task", "t1"]);
     assert!(err.contains("no such branch"), "close gate: {err}");
 
-    // A second abandon cannot overwrite the original reason.
-    let err = planr_err(td.path(), &["abandon", "task", "t1", "--reason", "wont-do"]);
+    // A second abandon cannot overwrite; message is ignored.
+    let err = planr_err(td.path(), &["abandon", "task", "t1", "wont-do even now"]);
     assert!(err.contains("already abandoned"), "repeat abandon: {err}");
     let content = std::fs::read_to_string(td.path().join(&t1_path)).unwrap();
-    assert!(content.contains("reason: obe"));
-    assert!(!content.contains("reason: wont-do"));
+    assert!(!content.contains("wont-do"));
 }
 
 #[test]
@@ -340,9 +342,9 @@ fn test_e2e_abandon_story_and_epic_are_visible_on_board() {
 
     planr_ok(
         td.path(),
-        &["abandon", "story", "s1", "--reason", "wont-do"],
+        &["abandon", "story", "s1", "wont-do — spec changed"],
     );
-    planr_ok(td.path(), &["abandon", "epic", "e1", "--reason", "obe"]);
+    planr_ok(td.path(), &["abandon", "epic", "e1", "OBE"]);
 
     let story_path = format!(
         ".plan/stories/{}",
@@ -355,9 +357,11 @@ fn test_e2e_abandon_story_and_epic_are_visible_on_board() {
     let story = std::fs::read_to_string(td.path().join(story_path)).unwrap();
     let epic = std::fs::read_to_string(td.path().join(epic_path)).unwrap();
     assert!(story.contains("status: abandoned"));
-    assert!(story.contains("reason: wont-do"));
+    assert!(story.contains("## Reason Abandoned"));
+    assert!(story.contains("wont-do — spec changed"));
     assert!(epic.contains("status: abandoned"));
-    assert!(epic.contains("reason: obe"));
+    assert!(epic.contains("## Reason Abandoned"));
+    assert!(epic.contains("OBE"));
 
     let board = planr_ok(td.path(), &["board"]);
     assert!(
@@ -388,15 +392,9 @@ fn test_e2e_abandon_rejects_invalid_reason_and_active_branch() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
 
-    let err = planr_err(td.path(), &["abandon", "task", "t1", "--reason", "later"]);
-    assert!(
-        err.contains("invalid abandon reason"),
-        "invalid reason: {err}"
-    );
-
     let wt_abs = td.path().join("wt-t1");
     planr_ok(td.path(), &["claim", "t1", &wt_abs.to_string_lossy()]);
-    let err = planr_err(td.path(), &["abandon", "task", "t1", "--reason", "obe"]);
+    let err = planr_err(td.path(), &["abandon", "task", "t1", "some reason"]);
     assert!(
         err.contains("active branch plan/t1"),
         "active branch: {err}"

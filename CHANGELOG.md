@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **`planr abandon`** replaces `--reason obe|wont-do` with a free-text
+  positional message argument that supports stdin (like `git commit`).
+  The message is appended as a `## Reason Abandoned` prose section instead
+  of being stored in frontmatter; the `reason:` frontmatter field is removed.
+
 ## [0.2.0] — 2026-08-11
 
 ### Added

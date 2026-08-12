@@ -28,6 +28,24 @@ pub fn fail(msg: &str) -> ! {
     process::exit(1);
 }
 
+/// Read the abandon message from the CLI argument or stdin.
+///
+/// - `Some("-")` or `None`: read from stdin until EOF.
+/// - `Some(text)`: use the text as-is.
+fn read_abandon_message(input: Option<&str>) -> Result<String, String> {
+    match input {
+        Some(s) if s != "-" => Ok(s.to_string()),
+        _ => {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .map_err(|e| format!("cannot read message from stdin: {e}"))?;
+            Ok(buf.trim().to_string())
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CLI definition -- matches the commands documented in README.md.
 // Global env vars: PLANR_DIR (.plan), PLANR_TRUNK (main).
@@ -106,15 +124,14 @@ enum Command {
         slug: String,
     },
 
-    /// Abandon a ticket without review for an explicit reason
+    /// Abandon a ticket without review, recording a free-text reason
     Abandon {
         /// ticket kind: task, story, or epic
         kind: String,
         /// ticket slug
         slug: String,
-        /// abandonment reason: obe or wont-do
-        #[arg(long)]
-        reason: String,
+        /// Abandonment message (free text). Use "-" or omit to read from stdin.
+        message: Option<String>,
     },
 
     /// Complete a ticket: gate-check children, flip to done, merge
@@ -206,17 +223,27 @@ fn main() {
                 Err(e) => fail(&e),
             }
         }
-        Command::Abandon { kind, slug, reason } => match abandon::abandon_ticket(
-            &kind,
-            &slug,
-            &reason,
-            &cli.trunk,
-            &cli.plan_dir,
-            std::path::Path::new("."),
-        ) {
-            Ok(msg) => println!("{msg}"),
-            Err(e) => fail(&e),
-        },
+        Command::Abandon {
+            kind,
+            slug,
+            message,
+        } => {
+            let msg = match read_abandon_message(message.as_deref()) {
+                Ok(m) => m,
+                Err(e) => fail(&e),
+            };
+            match abandon::abandon_ticket(
+                &kind,
+                &slug,
+                &msg,
+                &cli.trunk,
+                &cli.plan_dir,
+                std::path::Path::new("."),
+            ) {
+                Ok(out) => println!("{out}"),
+                Err(e) => fail(&e),
+            }
+        }
         Command::Close { kind, slug } => {
             let result = match kind.as_str() {
                 "task" => close_cmd::close_task(

@@ -1,17 +1,17 @@
-//! `planr abandon` -- close a ticket without review for an explicit reason.
+//! `planr abandon` -- close a ticket without review, recording a free-text
+//! reason as a prose section rather than a constrained frontmatter field.
 //!
 //! Abandonment is deliberately separate from `close`: it is a trunk-local
 //! operation for work that is overtaken by events (OBE) or will not be done.
 //! It records an `abandoned` status and never merges or removes an active task
-//! branch.
+//! branch. The user-supplied message is appended as `## Reason Abandoned` below
+//! the existing body.
 
 use crate::close_cmd::find_ticket_by_slug;
 use crate::git;
 use crate::lock::PlanrLock;
 use crate::ticket::parse_ticket;
 use std::path::Path;
-
-const VALID_REASONS: [&str; 2] = ["obe", "wont-do"];
 
 /// Validate the ticket kind and return its plan subdirectory.
 fn kind_dir(kind: &str) -> Result<&'static str, String> {
@@ -23,29 +23,18 @@ fn kind_dir(kind: &str) -> Result<&'static str, String> {
     }
 }
 
-/// Validate the explicit reason recorded on an abandoned ticket.
-fn validate_reason(reason: &str) -> Result<(), String> {
-    if VALID_REASONS.contains(&reason) {
-        Ok(())
-    } else {
-        Err(format!(
-            "invalid abandon reason '{reason}' (want obe|wont-do)"
-        ))
-    }
-}
-
-/// Replace status, updated, and reason in the first frontmatter block.
+/// Replace status and updated in the first frontmatter block, then append a
+/// `## Reason Abandoned` section with the user-supplied message.
 ///
 /// Existing fields retain their position. Missing fields are appended so the
-/// rest of the ticket remains byte-for-byte unchanged. This intentionally
-/// stores the reason in frontmatter: it is easy for board/lint tooling and
-/// other consumers to query without having to parse a prose section.
-fn abandon_frontmatter(content: &str, reason: &str, date: &str) -> Result<String, String> {
+/// rest of the ticket remains byte-for-byte unchanged. The message lives in
+/// the body (not frontmatter) so the user can write arbitrary prose — it is
+/// not constrained to a fixed vocabulary.
+fn abandon_frontmatter(content: &str, message: &str, date: &str) -> Result<String, String> {
     let sf = split_fm(content).ok_or_else(|| "no frontmatter".to_string())?;
     let mut has_status = false;
     let mut has_updated = false;
-    let mut has_reason = false;
-    let mut out: Vec<String> = Vec::with_capacity(sf.fm_lines.len() + 3);
+    let mut out: Vec<String> = Vec::with_capacity(sf.fm_lines.len() + 2);
 
     for line in &sf.fm_lines {
         if line.starts_with("status:") {
@@ -55,8 +44,7 @@ fn abandon_frontmatter(content: &str, reason: &str, date: &str) -> Result<String
             out.push(format!("updated: {date}"));
             has_updated = true;
         } else if line.starts_with("reason:") {
-            out.push(format!("reason: {reason}"));
-            has_reason = true;
+            // Drop legacy reason field — we now use a prose section.
         } else {
             out.push(line.to_string());
         }
@@ -68,11 +56,17 @@ fn abandon_frontmatter(content: &str, reason: &str, date: &str) -> Result<String
     if !has_updated {
         out.push(format!("updated: {date}"));
     }
-    if !has_reason {
-        out.push(format!("reason: {reason}"));
+
+    let mut body = sf.rest.to_string();
+
+    let msg = message.trim();
+    if !msg.is_empty() {
+        // Strip any trailing blank lines so the new section sits cleanly.
+        let trimmed_body = body.trim_end();
+        body = format!("{trimmed_body}\n\n## Reason Abandoned\n\n{msg}\n");
     }
 
-    Ok(format!("---\n{}\n---\n{}", out.join("\n"), sf.rest))
+    Ok(format!("---\n{}\n---\n{}", out.join("\n"), body))
 }
 
 struct FmSplit<'a> {
@@ -106,13 +100,12 @@ fn local_date_string() -> String {
 pub fn abandon_ticket(
     kind: &str,
     slug: &str,
-    reason: &str,
+    message: &str,
     trunk: &str,
     plan_dir: &str,
     cwd: &Path,
 ) -> Result<String, String> {
     let kind_dir = kind_dir(kind)?;
-    validate_reason(reason)?;
 
     let _lock = PlanrLock::exclusive(cwd).map_err(|e| format!("lock error: {e}"))?;
 
@@ -129,7 +122,7 @@ pub fn abandon_ticket(
     let ticket = parse_ticket(&blob);
     if ticket.status == "abandoned" {
         return Err(format!(
-            "refuse abandon: {kind} '{slug}' is already abandoned (reason is recorded)"
+            "refuse abandon: {kind} '{slug}' is already abandoned"
         ));
     }
 
@@ -138,7 +131,7 @@ pub fn abandon_ticket(
     git::checkout(trunk)?;
 
     let date = local_date_string();
-    let new_content = abandon_frontmatter(&blob, reason, &date)?;
+    let new_content = abandon_frontmatter(&blob, message, &date)?;
     let fpath = Path::new(&file);
     let parent = fpath.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent)
@@ -147,11 +140,11 @@ pub fn abandon_ticket(
 
     git::add_file(&file, Path::new("."))?;
     git::commit_in(
-        &format!("plan: abandon {kind} {slug} ({reason})"),
+        &format!("plan: abandon {kind} {slug}"),
         Path::new("."),
     )?;
 
-    Ok(format!("abandoned {kind} {slug}; reason: {reason}"))
+    Ok(format!("abandoned {kind} {slug}"))
 }
 
 #[cfg(test)]
@@ -172,20 +165,17 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_reason() {
-        assert!(validate_reason("obe").is_ok());
-        assert!(validate_reason("wont-do").is_ok());
-        assert!(validate_reason("later").is_err());
-    }
-
-    #[test]
-    fn test_abandon_frontmatter_replaces_and_preserves_body() {
+    fn test_abandon_frontmatter_appends_reason_section() {
         let content = "---\nid: x\nstatus: todo\nupdated: 2026-01-01\n---\n\n## Goal\nBody\n";
-        let result = abandon_frontmatter(content, "obe", "2026-08-11").unwrap();
+        let result = abandon_frontmatter(content, "OBE — no longer relevant", "2026-08-11").unwrap();
         assert!(result.contains("status: abandoned"));
         assert!(result.contains("updated: 2026-08-11"));
-        assert!(result.contains("reason: obe"));
-        assert!(result.ends_with("\n## Goal\nBody\n"));
+        assert!(result.contains("## Reason Abandoned"));
+        assert!(result.contains("OBE — no longer relevant"));
+        // Frontmatter should NOT contain a reason field
+        assert!(!result.contains("\nreason:"));
+        // The original body is preserved before the new section
+        assert!(result.contains("## Goal\nBody"));
     }
 
     #[test]
@@ -194,15 +184,35 @@ mod tests {
         let result = abandon_frontmatter(content, "wont-do", "2026-08-11").unwrap();
         assert!(result.contains("status: abandoned"));
         assert!(result.contains("updated: 2026-08-11"));
-        assert!(result.contains("reason: wont-do"));
-        assert!(result.ends_with("body\n"));
+        assert!(result.contains("## Reason Abandoned\n\nwont-do\n"));
+        assert!(!result.contains("\nreason:"));
     }
 
     #[test]
-    fn test_abandon_frontmatter_replaces_existing_reason() {
+    fn test_abandon_frontmatter_skips_section_when_empty_message() {
+        let content = "---\nid: x\n---\nbody\n";
+        let result = abandon_frontmatter(content, "", "2026-08-11").unwrap();
+        assert!(!result.contains("## Reason Abandoned"));
+        assert!(!result.contains("\nreason:"));
+    }
+
+    #[test]
+    fn test_abandon_frontmatter_removes_old_reason_field() {
+        // Old tickets may have a reason: field in frontmatter; it should be
+        // dropped (not carried forward) since we no longer use it.
         let content = "---\nid: x\nstatus: todo\nreason: old\n---\nbody";
-        let result = abandon_frontmatter(content, "obe", "2026-08-11").unwrap();
-        assert!(result.contains("reason: obe"));
-        assert!(!result.contains("reason: old"));
+        let result = abandon_frontmatter(content, "new message", "2026-08-11").unwrap();
+        assert!(!result.contains("reason:"));
+        assert!(result.contains("## Reason Abandoned\n\nnew message\n"));
+    }
+
+    #[test]
+    fn test_abandon_frontmatter_multi_line_message() {
+        let content = "---\nid: x\nstatus: todo\n---\nbody";
+        let msg = "First paragraph.\n\nSecond paragraph with details.";
+        let result = abandon_frontmatter(content, msg, "2026-08-11").unwrap();
+        assert!(result.contains("## Reason Abandoned"));
+        assert!(result.contains("First paragraph."));
+        assert!(result.contains("Second paragraph with details."));
     }
 }
