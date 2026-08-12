@@ -1,4 +1,4 @@
-# planr-cli
+# planr
 
 Trunk-based, markdown-formatted backlog CLI for solo and concurrent
 development. Provides automated backlog management: ticket creation, branch
@@ -9,20 +9,20 @@ claiming, structural linting, board summaries, review briefs, and merge gating.
 ### From source
 
 ```bash
-cargo install --git https://github.com/unprofessor/planr-cli.git
+cargo install --git https://github.com/unprofessor/planr-rs.git
 # or
-git clone https://github.com/unprofessor/planr-cli.git
-cargo install --path planr-cli
+git clone https://github.com/unprofessor/planr-rs.git
+cargo install --path planr-rs
 # or
-git clone https://github.com/unprofessor/planr-cli.git
-cd planr-cli
+git clone https://github.com/unprofessor/planr-rs.git
+cd planr-rs
 cargo build --release
 cp target/release/planr ~/.local/bin/
 ```
 
 ### Prebuilt binaries
 
-Available on the [GitHub Releases page](https://github.com/unprofessor/planr-cli/releases)
+Available on the [GitHub Releases page](https://github.com/unprofessor/planr-rs/releases)
 &mdash; download the archive for your platform and extract the `planr` binary into
 your `$PATH`.
 
