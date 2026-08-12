@@ -139,10 +139,7 @@ pub fn abandon_ticket(
     std::fs::write(fpath, &new_content).map_err(|e| format!("cannot write {file}: {e}"))?;
 
     git::add_file(&file, Path::new("."))?;
-    git::commit_in(
-        &format!("plan: abandon {kind} {slug}"),
-        Path::new("."),
-    )?;
+    git::commit_in(&format!("plan: abandon {kind} {slug}"), Path::new("."))?;
 
     Ok(format!("abandoned {kind} {slug}"))
 }
@@ -167,7 +164,8 @@ mod tests {
     #[test]
     fn test_abandon_frontmatter_appends_reason_section() {
         let content = "---\nid: x\nstatus: todo\nupdated: 2026-01-01\n---\n\n## Goal\nBody\n";
-        let result = abandon_frontmatter(content, "OBE — no longer relevant", "2026-08-11").unwrap();
+        let result =
+            abandon_frontmatter(content, "OBE — no longer relevant", "2026-08-11").unwrap();
         assert!(result.contains("status: abandoned"));
         assert!(result.contains("updated: 2026-08-11"));
         assert!(result.contains("## Reason Abandoned"));
