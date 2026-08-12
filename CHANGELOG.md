@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0] — 2026-08-12
 
 ### Changed
 
@@ -8,6 +8,13 @@
   positional message argument that supports stdin (like `git commit`).
   The message is appended as a `## Reason Abandoned` prose section instead
   of being stored in frontmatter; the `reason:` frontmatter field is removed.
+
+- **`planr claim --worktree`/`--no-worktree`** — the `--worktree` flag now
+  accepts an optional path argument (`--worktree <path>`); passing the flag
+  without a value uses `<plan-dir>/worktrees/wt-<slug>` as the default.
+  The new `--no-worktree` flag skips worktree creation, returning
+  `claimed: <slug>` for agents that manage their own workspace.
+  The old positional worktree argument has been removed.
 
 ## [0.2.0] — 2026-08-11
 
