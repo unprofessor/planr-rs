@@ -420,8 +420,8 @@ mod tests {
         let y: u32 = s[..4].parse().unwrap();
         let m: u32 = s[5..7].parse().unwrap();
         let d: u32 = s[8..].parse().unwrap();
-        assert!(y >= 2025 && y <= 2030);
-        assert!(m >= 1 && m <= 12);
-        assert!(d >= 1 && d <= 31);
+        assert!((2025..=2030).contains(&y));
+        assert!((1..=12).contains(&m));
+        assert!((1..=31).contains(&d));
     }
 }

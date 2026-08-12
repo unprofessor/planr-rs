@@ -530,8 +530,8 @@ mod tests {
         let y: u32 = s[..4].parse().unwrap();
         let m: u32 = s[5..7].parse().unwrap();
         let d: u32 = s[8..].parse().unwrap();
-        assert!(y >= 2025 && y <= 2030, "year out of range: {s}");
-        assert!(m >= 1 && m <= 12, "month out of range: {s}");
-        assert!(d >= 1 && d <= 31, "day out of range: {s}");
+        assert!((2025..=2030).contains(&y), "year out of range: {s}");
+        assert!((1..=12).contains(&m), "month out of range: {s}");
+        assert!((1..=31).contains(&d), "day out of range: {s}");
     }
 }

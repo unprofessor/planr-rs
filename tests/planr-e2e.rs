@@ -431,7 +431,7 @@ fn test_e2e_claim_close_task() {
     assert!(wt.contains("wt-t1"), "worktree path: {wt}");
 
     // Verify the worktree has the flipped status
-    let task_file = format!(".plan/tasks/{}", find_task_slug(&td.path(), "t1"));
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
     let content = std::fs::read_to_string(wt_abs.join(&task_file)).unwrap();
     assert!(
         content.contains("status: in_progress"),
@@ -632,14 +632,14 @@ fn test_e2e_lint_cycle_real() {
         )
         .unwrap();
     };
-    inject(&td.path().join(&t1_path_of(td.path())), "t2");
-    inject(&td.path().join(&t2_path_of(td.path())), "t3");
-    inject(&td.path().join(&t3_path_of(td.path())), "t1");
+    inject(&td.path().join(t1_path_of(td.path())), "t2");
+    inject(&td.path().join(t2_path_of(td.path())), "t3");
+    inject(&td.path().join(t3_path_of(td.path())), "t1");
 
     // Also inject a self-dep on t1 for the self-dep test
-    let c = std::fs::read_to_string(td.path().join(&t1_path_of(td.path()))).unwrap();
+    let c = std::fs::read_to_string(td.path().join(t1_path_of(td.path()))).unwrap();
     std::fs::write(
-        td.path().join(&t1_path_of(td.path())),
+        td.path().join(t1_path_of(td.path())),
         c.replace("depends_on: [t2]", "depends_on: [t2, t1]"),
     )
     .unwrap();
