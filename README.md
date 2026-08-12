@@ -47,12 +47,12 @@ ls -lh target/release/planr
 ## Usage
 
 ```bash
-planr new <kind> <slug> <title> [parent]     # Scaffold a ticket file
+planr new <kind> <slug> <title> [parent]       # Scaffold a ticket file
 planr board                                    # Backlog + in-flight board
 planr lint [ref]                               # Structural checks (working tree or ref)
 planr claim <slug> [worktree]                  # Create worktree, set in_progress
 planr review <slug>                            # Brief a reviewer
-planr abandon <kind> <slug> [message]             # Abandon with a free-text reason
+planr abandon <kind> <slug> [message]          # Abandon with a free-text reason
 planr close task <slug>                        # Gate check -> done -> merge
 planr close story <slug>                       # Gate children -> done -> commit
 planr close epic <slug>                        # Gate stories -> done -> commit
