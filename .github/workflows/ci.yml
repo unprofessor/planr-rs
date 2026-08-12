@@ -77,8 +77,10 @@ jobs:
       # Exchange the GitHub Actions OIDC token for a short-lived crates.io access token.
       - uses: rust-lang/crates-io-auth-action@f14f407dad32919804d8e0550a5e471a82249cee
         id: auth
-      - name: Validate version matches tag
-        run: cargo semvertag check
+      - name: Install cargo-semvertag and validate version matches tag
+        run: |
+          cargo install cargo-semvertag --quiet
+          cargo semvertag check
       - name: Publish crate
         run: cargo publish -p planr
         env:
