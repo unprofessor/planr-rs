@@ -165,29 +165,20 @@ fn local_date_string() -> String {
 
 /// Claim a task: validate deps, create worktree, flip status, commit.
 ///
-/// Returns the worktree path (one line).
+/// `worktree_path` encodes both whether to create a worktree and where:
+///   - `None`        → skip worktree entirely (equivalent to `--no-worktree`)
+///   - `Some("")`    → create worktree at default path
+///   - `Some(path)`  → create worktree at the given path
+///
+/// Returns the worktree path (one line), or `claimed: <slug>` when no
+/// worktree is created.
 pub fn claim_task(
     slug: &str,
     trunk: &str,
     plan_dir: &str,
-    worktree: Option<&str>,
+    worktree_path: Option<String>,
     cwd: &Path,
 ) -> Result<String, String> {
-    let wt_path = worktree
-        .map(|s| {
-            let p = PathBuf::from(s);
-            if p.is_absolute() {
-                p
-            } else {
-                cwd.join(&p)
-            }
-        })
-        .unwrap_or_else(|| {
-            let mut p = cwd.to_path_buf();
-            p.push(format!("../wt-{slug}"));
-            p
-        });
-
     let branch = format!("plan/{slug}");
 
     // ---- 1. Informational lint on trunk ----
@@ -245,11 +236,35 @@ pub fn claim_task(
         return Err(err);
     }
 
-    // 2d. Create worktree branch
+    // ---- 3. Worktree or no-worktree path ----
+    let Some(worktree_path) = worktree_path else {
+        // None means skip worktree creation, status flip, and commit.
+        // The caller handles its own worktree and will flip the status
+        // independently.
+        return Ok(format!("claimed: {slug}"));
+    };
+
+    let wt_path = if worktree_path.is_empty() {
+        // --worktree with no value: use default
+        let mut p = cwd.to_path_buf();
+        p.push(plan_dir);
+        p.push("worktrees");
+        p.push(format!("wt-{slug}"));
+        p
+    } else {
+        let p = PathBuf::from(&worktree_path);
+        if p.is_absolute() {
+            p
+        } else {
+            cwd.join(&p)
+        }
+    };
+
+    // 3a. Create worktree branch
     let wt_display = wt_path.display();
     git::worktree_add(&wt_path, &branch, Some(trunk))?;
 
-    // 2e. Read the task file in the worktree, flip status, write back
+    // 3b. Read the task file in the worktree, flip status, write back
     let wf_path = wt_path.join(&task_file);
     let content = std::fs::read_to_string(&wf_path)
         .map_err(|e| format!("cannot read {}: {e}", wf_path.display()))?;
@@ -260,11 +275,11 @@ pub fn claim_task(
     std::fs::write(&wf_path, &new_content)
         .map_err(|e| format!("cannot write {}: {e}", wf_path.display()))?;
 
-    // 2f. git add + git commit in the worktree
+    // 3c. git add + git commit in the worktree
     git::add_file(&task_file, &wt_path)?;
     git::commit_in(&format!("plan: claim {slug} (in_progress)"), &wt_path)?;
 
-    // 2g. Output worktree path
+    // 3d. Output worktree path
     Ok(wt_display.to_string())
 }
 

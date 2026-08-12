@@ -112,10 +112,22 @@ enum Command {
     Claim {
         /// task slug
         slug: String,
-        /// worktree path (default: ../wt-<slug>)
-        worktree: Option<String>,
         /// override trunk branch for this invocation
         trunk_override: Option<String>,
+        /// Path for the worktree
+        /// (default: <plan-dir>/worktrees/wt-<slug>;
+        /// use --worktree with no value for default;
+        /// use --no-worktree to skip entirely)
+        #[arg(
+            long = "worktree",
+            num_args = 0..=1,
+            default_missing_value = ""
+        )]
+        worktree: Option<String>,
+        /// Skip worktree creation (for agents that manage their own).
+        /// Conflicts with --worktree.
+        #[arg(long, conflicts_with = "worktree")]
+        no_worktree: bool,
     },
 
     /// Print a review brief for a task on its plan/<slug> branch
@@ -202,18 +214,15 @@ fn main() {
         }
         Command::Claim {
             slug,
-            worktree,
             trunk_override,
+            worktree,
+            no_worktree,
         } => {
             let trunk = trunk_override.as_deref().unwrap_or(&cli.trunk);
-            match claim::claim_task(
-                &slug,
-                trunk,
-                &cli.plan_dir,
-                worktree.as_deref(),
-                std::path::Path::new("."),
-            ) {
-                Ok(wt_path) => println!("{wt_path}"),
+            // None → skip worktree; Some(path/"") → create worktree
+            let wt = if no_worktree { None } else { worktree };
+            match claim::claim_task(&slug, trunk, &cli.plan_dir, wt, std::path::Path::new(".")) {
+                Ok(out) => println!("{out}"),
                 Err(e) => fail(&e),
             }
         }

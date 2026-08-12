@@ -393,7 +393,10 @@ fn test_e2e_abandon_rejects_invalid_reason_and_active_branch() {
     seed_lint_repo(td.path());
 
     let wt_abs = td.path().join("wt-t1");
-    planr_ok(td.path(), &["claim", "t1", &wt_abs.to_string_lossy()]);
+    planr_ok(
+        td.path(),
+        &["claim", "t1", "--worktree", &wt_abs.to_string_lossy()],
+    );
     let err = planr_err(td.path(), &["abandon", "task", "t1", "some reason"]);
     assert!(
         err.contains("active branch plan/t1"),
@@ -425,7 +428,10 @@ fn test_e2e_claim_close_task() {
     // planr claim t1 with explicit worktree path inside temp dir
     let wt_rel = "wt-t1";
     let wt_abs = td.path().join(wt_rel);
-    let wt = planr_ok(td.path(), &["claim", "t1", &wt_abs.to_string_lossy()]);
+    let wt = planr_ok(
+        td.path(),
+        &["claim", "t1", "--worktree", &wt_abs.to_string_lossy()],
+    );
     assert!(wt.contains("wt-t1"), "worktree path: {wt}");
 
     // Verify the worktree has the flipped status
