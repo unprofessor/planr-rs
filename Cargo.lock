@@ -473,18 +473,18 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "semvertag-core"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bfd9fe8a1ca052940c15d3d032cf119f21b9f3bed298e35a61c6fbf78b7a9c7"
+checksum = "43a92615be2474388eb1af078e898926c20658a4c85f1120edcffb730c1ef252"
 dependencies = [
  "semver",
 ]
 
 [[package]]
 name = "semvertag-shell"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc9f07af307eb2e1555d3ad0b7b1e00112555c9b2ae97fdb11c955f38293023f"
+checksum = "ed2ae2051e77f33cf5442f90792086f941f38654918732edd2584231ea017cda"
 dependencies = [
  "semver",
  "semvertag-core",
