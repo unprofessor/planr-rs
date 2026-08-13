@@ -14,10 +14,9 @@ cargo install planr
 
 ### Prebuilt binaries
 
-Static binaries are available on the
-[GitHub Releases page](https://github.com/unprofessor/planr-rs/releases)
-&mdash; download the archive for your platform and extract the `planr` binary into
-your `$PATH`.
+Prebuilt binaries are not yet published. Once the first tagged release is out
+you will be able to install via `cargo binstall planr` or download from the
+[GitHub Releases page](https://github.com/unprofessor/planr-rs/releases).
 
 ### Building from source
 

@@ -6,6 +6,11 @@ description = "planr -- trunk-based, markdown-formatted backlog for both solo an
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/unprofessor/planr-rs"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }-v{ version }.tar.gz"
+bin-dir = "{ name }-{ target }-v{ version }/{ bin }{ binary-ext }"
+pkg-fmt = "tar.gz"
+
 [profile.release]
 lto = true
 strip = true
