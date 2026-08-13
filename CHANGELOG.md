@@ -16,6 +16,30 @@
   `claimed: <slug>` for agents that manage their own workspace.
   The old positional worktree argument has been removed.
 
+### Docs
+
+- **README** overhauled: `cargo install planr` promoted to primary install
+  method; source build demoted to a subsection; prebuilt binaries section
+  now honestly states none are published yet; Dependencies and Binary size
+  sections removed as superfluous.
+- **Usage section** condensed to `planr --help` reference; inline command
+  list and Subcommand details table removed in favor of self-documenting
+  CLI (no more drift).
+- **Abandoning a ticket** narrative moved from README to a new
+  [user guide](docs/user-guide.md) with a link from the Usage section.
+
+### Internal
+
+- **CI**: added `release` job that builds binaries for 5 targets
+  (x86_64/aarch64 Linux, x86_64/aarch64 macOS, x86_64 Windows) on tag
+  push and attaches them to the GitHub release. Archives match the
+  `[package.metadata.binstall]` pattern so `cargo binstall planr` works
+  out of the box.
+- **ASCII-only sweep**: replaced em dashes and arrows with ASCII
+  equivalents across CHANGELOG, user guide, and Rust source comments.
+  Test harness strings with non-ASCII are preserved (they verify
+  user-input passthrough).
+
 ## [0.2.0] -- 2026-08-11
 
 ### Added
