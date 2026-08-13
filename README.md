@@ -35,33 +35,7 @@ cp target/release/planr ~/.local/bin/
 
 ## Usage
 
-```bash
-planr new <kind> <slug> <title> [parent]       # Scaffold a ticket file
-planr board                                    # Backlog + in-flight board
-planr lint [ref]                               # Structural checks (working tree or ref)
-planr claim <slug> [worktree]                  # Create worktree, set in_progress
-planr review <slug>                            # Brief a reviewer
-planr abandon <kind> <slug> [message]          # Abandon with a free-text reason
-planr close task <slug>                        # Gate check -> done -> merge
-planr close story <slug>                       # Gate children -> done -> commit
-planr close epic <slug>                        # Gate stories -> done -> commit
-planr --version                                # Print build-time git-derived version
-planr --help                                   # Full help
-```
-
-### Subcommand details
-
-| Subcommand | Description |
-| ------------ | ------------- |
-| `new` | Create an epic, story, or task file from an embedded template. Exclusive lock on planr.lock for prefix allocation. |
-| `board` | Render the full board: epics, stories, tasks, in-flight branches, and a status summary. |
-| `lint` | Three-pass structural checker: per-file, cross-ref (parents, deps, wiki-links), cycle detection. Exit 1 on errors. |
-| `claim` | Dependency-gate check, `git worktree add`, status flip to `in_progress`. Shared lock. |
-| `review` | Print a review brief: acceptance criteria, validation notes, diff, and reviewer guidance. |
-| `abandon` | Mark a task, story, or epic `abandoned` with a free-text reason; commit on trunk without review. Reads from stdin when `-` is passed or the message is omitted. Refuses an existing `plan/<slug>` branch and never discards work. |
-| `close task` | Guards (status=review + approved verdict), done flip on branch, `git merge --no-ff`, cleanup. Exclusive lock. |
-| `close story` | Child-task gate (all must be done), done flip on trunk, commit. Exclusive lock. |
-| `close epic` | Child-story gate (all must be done), done flip on trunk, commit. Exclusive lock. |
+Run `planr --help` for a full list of subcommands and options.
 
 ## Environment variables
 
