@@ -9,7 +9,7 @@ repository = "https://github.com/unprofessor/planr-rs"
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }-v{ version }.tar.gz"
 bin-dir = "{ name }-{ target }-v{ version }/{ bin }{ binary-ext }"
-pkg-fmt = "tar.gz"
+pkg-fmt = "tgz"
 
 [profile.release]
 lto = true
