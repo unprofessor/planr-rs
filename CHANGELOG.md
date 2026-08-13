@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1]
+
+### Fixed
+
+- **CI release job** fixed two build failures: Windows target now uses
+  `shell: bash` so `$TARGET` resolves correctly (was empty under
+  PowerShell); aarch64 Linux now sets `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER`
+  so Cargo uses the cross-compiler instead of x86_64 `rust-lld`.
+- **`cargo binstall` support**: `pkg-fmt` changed from the invalid value
+  `"tar.gz"` to `"tgz"` (the correct format identifier). Archives are
+  now published as `.tgz` files to match binstall expectations.
+
 ## [0.3.0]
 
 ### Changed

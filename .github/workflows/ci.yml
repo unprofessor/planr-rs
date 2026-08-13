@@ -144,8 +144,8 @@ jobs:
           else
             cp "target/${TARGET}/release/planr" "${pkgdir}/"
           fi
-          tar czf "${pkgdir}.tar.gz" "${pkgdir}"
-          echo "archive=${pkgdir}.tar.gz" >> "${GITHUB_ENV}"
+          tar czf "${pkgdir}.tgz" "${pkgdir}"
+          echo "archive=${pkgdir}.tgz" >> "${GITHUB_ENV}"
       - name: Upload release asset
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
