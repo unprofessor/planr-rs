@@ -6,7 +6,20 @@ claiming, structural linting, board summaries, review briefs, and merge gating.
 
 ## Installation
 
-### From source
+The fastest way to install `planr` is via crates.io (Rust package registry):
+
+```bash
+cargo install planr
+```
+
+### Prebuilt binaries
+
+Static binaries are available on the
+[GitHub Releases page](https://github.com/unprofessor/planr-rs/releases)
+&mdash; download the archive for your platform and extract the `planr` binary into
+your `$PATH`.
+
+### Building from source
 
 ```bash
 cargo install --git https://github.com/unprofessor/planr-rs.git
@@ -18,30 +31,6 @@ git clone https://github.com/unprofessor/planr-rs.git
 cd planr-rs
 cargo build --release
 cp target/release/planr ~/.local/bin/
-```
-
-### Prebuilt binaries
-
-Available on the [GitHub Releases page](https://github.com/unprofessor/planr-rs/releases)
-&mdash; download the archive for your platform and extract the `planr` binary into
-your `$PATH`.
-
-### Dependencies
-
-- **Rust** (1.70+, ideally the latest stable) for source builds.
-- **git** (any modern version) &mdash; all planr commands shell out to git.
-- **flock** (util-linux) is **not** required &mdash; the Rust binary uses in-process
-  `flock` via the `fs2` crate on `<git-common-dir>/planr.lock`. During
-  transition, the lock file is shared with the legacy TS/bash planr tooling.
-
-### Binary size
-
-A release build with LTO and symbol stripping is approximately **2.8 MB**
-(stripped). Build with:
-
-```bash
-cargo build --release
-ls -lh target/release/planr
 ```
 
 ## Usage
