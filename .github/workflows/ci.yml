@@ -101,6 +101,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             deps: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
@@ -124,8 +125,10 @@ jobs:
           DEPS: ${{ matrix.deps }}
         run: sudo apt-get update && sudo apt-get install -y "$DEPS"
       - name: Build release binary
+        shell: bash
         env:
           TARGET: ${{ matrix.target }}
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
         run: cargo build --release --target "$TARGET"
       - name: Package archive
         shell: bash
