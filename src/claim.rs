@@ -166,9 +166,9 @@ fn local_date_string() -> String {
 /// Claim a task: validate deps, create worktree, flip status, commit.
 ///
 /// `worktree_path` encodes both whether to create a worktree and where:
-///   - `None`        → skip worktree entirely (equivalent to `--no-worktree`)
-///   - `Some("")`    → create worktree at default path
-///   - `Some(path)`  → create worktree at the given path
+///   - `None`        -> skip worktree entirely (equivalent to `--no-worktree`)
+///   - `Some("")`    -> create worktree at default path
+///   - `Some(path)`  -> create worktree at the given path
 ///
 /// Returns the worktree path (one line), or `claimed: <slug>` when no
 /// worktree is created.

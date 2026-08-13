@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.0] — 2026-08-12
+## [0.3.0] -- 2026-08-12
 
 ### Changed
 
@@ -9,24 +9,24 @@
   The message is appended as a `## Reason Abandoned` prose section instead
   of being stored in frontmatter; the `reason:` frontmatter field is removed.
 
-- **`planr claim --worktree`/`--no-worktree`** — the `--worktree` flag now
+- **`planr claim --worktree`/`--no-worktree`** -- the `--worktree` flag now
   accepts an optional path argument (`--worktree <path>`); passing the flag
   without a value uses `<plan-dir>/worktrees/wt-<slug>` as the default.
   The new `--no-worktree` flag skips worktree creation, returning
   `claimed: <slug>` for agents that manage their own workspace.
   The old positional worktree argument has been removed.
 
-## [0.2.0] — 2026-08-11
+## [0.2.0] -- 2026-08-11
 
 ### Added
 
-- **`planr abandon` command** — a separate, explicit workflow for tickets
+- **`planr abandon` command** -- a separate, explicit workflow for tickets
   that are overtaken by events (OBE) or will not be done, bypassing the
   review gate:
   - Supports all ticket kinds: `planr abandon task|story|epic <slug> --reason obe|wont-do`
   - Records `status: abandoned`, `reason: <obe|wont-do>`, and refreshed `updated` date
     in frontmatter; commits directly on trunk.
-  - Refuses to abandon tickets with an active `plan/<slug>` branch or worktree —
+  - Refuses to abandon tickets with an active `plan/<slug>` branch or worktree --
     never merges or discards work silently.
   - Rejects re-abandoning an already abandoned ticket.
   - `abandoned` is accepted by lint and counted by the board summary.

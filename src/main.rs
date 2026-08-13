@@ -219,7 +219,7 @@ fn main() {
             no_worktree,
         } => {
             let trunk = trunk_override.as_deref().unwrap_or(&cli.trunk);
-            // None → skip worktree; Some(path/"") → create worktree
+            // None -> skip worktree; Some(path/"") -> create worktree
             let wt = if no_worktree { None } else { worktree };
             match claim::claim_task(&slug, trunk, &cli.plan_dir, wt, std::path::Path::new(".")) {
                 Ok(out) => println!("{out}"),

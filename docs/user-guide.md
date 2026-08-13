@@ -6,7 +6,7 @@ Use the `abandon` command when a ticket is overtaken by events (OBE) or
 intentionally will not be done. Provide a free-text message explaining why:
 
 ```bash
-planr abandon task obsolete-task "OBE — requirement dropped"
+planr abandon task obsolete-task "OBE -- requirement dropped"
 planr abandon story postponed-story "Won't do: deferred to Q3 planning"
 ```
 
@@ -15,7 +15,7 @@ If the message is omitted or `-` is passed, the message is read from stdin
 
 ```bash
 planr abandon task obsolete-task <<EOF
-OBE — the feature was replaced by the new search API.
+OBE -- the feature was replaced by the new search API.
 EOF
 ```
 

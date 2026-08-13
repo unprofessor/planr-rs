@@ -28,7 +28,7 @@ fn kind_dir(kind: &str) -> Result<&'static str, String> {
 ///
 /// Existing fields retain their position. Missing fields are appended so the
 /// rest of the ticket remains byte-for-byte unchanged. The message lives in
-/// the body (not frontmatter) so the user can write arbitrary prose — it is
+/// the body (not frontmatter) so the user can write arbitrary prose -- it is
 /// not constrained to a fixed vocabulary.
 fn abandon_frontmatter(content: &str, message: &str, date: &str) -> Result<String, String> {
     let sf = split_fm(content).ok_or_else(|| "no frontmatter".to_string())?;
@@ -44,7 +44,7 @@ fn abandon_frontmatter(content: &str, message: &str, date: &str) -> Result<Strin
             out.push(format!("updated: {date}"));
             has_updated = true;
         } else if line.starts_with("reason:") {
-            // Drop legacy reason field — we now use a prose section.
+            // Drop legacy reason field -- we now use a prose section.
         } else {
             out.push(line.to_string());
         }
