@@ -171,40 +171,40 @@ verb's `require`).
 **`terminal` is derived, not declared.** A terminal state is one with no
 outgoing transition in the verb-declared graph — computed (and cached) at
 runtime, not listed by the user (a declared list can silently drift from the
-actual graph — a footgun). Here that derives `terminal = {done, abandoned}`.
-Note `archived` is deliberately **not** a lifecycle state — archival is a
-storage relocation (live tree → git history, §5), orthogonal to status; an
-archived ticket keeps whatever terminal status it had.
+actual graph — a footgun). Note `archived` is deliberately **not** a lifecycle
+state — archival is a storage relocation (live tree → git history, §5),
+orthogonal to status; an archived ticket keeps whatever terminal status it had.
 
-**Deriving `terminal` with `from`-less transitions.** This looks circular —
-`terminal(S)` means "no transition leaves `S`," yet a `from`-less transition
-(e.g. `abandon`) appears to leave *every* state. It is resolved by
-**stratification**: `from`-less transitions are *consumers* of the terminal
-set, never *contributors* to it.
+The derivation looks circular — `terminal(S)` means "no transition leaves `S`,"
+yet a `from`-less transition (e.g. `abandon`) appears to leave *every* state
+(R4). It resolves by **stratification**: `from`-less transitions are *consumers*
+of the terminal set, never *contributors* to it.
 
 1. Derive terminal from **explicit-`from` transitions only** (ignore `from`-less
    verbs): `terminal = { S : no verb declares from: S }`.
 2. *Then* expand each `from`-less transition to "originates from every state
    ∉ terminal."
 
-Non-circular because step 2 never feeds back into step 1; sound because the
+Step 2 never feeds step 1, so it is non-circular; it is sound because the
 **absorbing rule** *defines* a `from`-less transition not to originate in a
 terminal state — so it only ever fires from states that already had an explicit
-exit (already non-terminal) and thus can never flip a terminal state to
-non-terminal. Worked example: with explicit `claim`/`submit`/`approve`/
-`request-changes`/`close`/`qa` and `from`-less `abandon`, step 1 sees no explicit
+exit (already non-terminal) and can never flip a terminal state to non-terminal.
+Worked example: with explicit `claim`/`submit`/`approve`/`request-changes`/
+`close`/`qa` and `from`-less `abandon`, step 1 sees no explicit
 `from: done|abandoned|blocked` → those are terminal (computed without ever
 looking at `abandon`); step 2 lets `abandon` fire from the non-terminals
 (todo, in_progress, review, approved) but not from `done`.
 
-**The guardrail (lint):** a `from`-less verb may not be a state's *sole* exit.
-If it were, step 1 would mark that state terminal and step 2 would then refuse
-to apply the verb to it — silently freezing the state. So `lint` requires every
-intended-non-terminal state to have at least one **explicit-`from`** transition;
-any state with no explicit outgoing transition is *declared* terminal, and if
-that is not intended you add an explicit-`from` verb. (Note: `blocked` has no
-explicit exit in the current verb set, so it derives as terminal — if `blocked`
-is meant to be recoverable it needs an explicit-`from` `unblock` verb.)
+**Lint guardrail:** a `from`-less verb may not be a state's *sole* exit — else
+step 1 marks the state terminal, step 2 refuses to apply the verb, and the state
+silently freezes. So every intended-non-terminal state must have ≥1
+explicit-`from` transition; any state with no explicit outgoing transition is
+*declared* terminal, and if that is wrong you add an explicit-`from` verb.
+
+**`blocked` is an open design decision:** with the current verbs it has no
+transition in *or* out — an orphan that derives as unintended-terminal. Either
+drop it, or add `block` / `unblock` verbs (`unblock` with explicit
+`from: blocked`) if `blocked` is meant to be a recoverable workflow state.
 
 ### 3.4 `verbs` — lifecycle mutations as composable recipes
 
