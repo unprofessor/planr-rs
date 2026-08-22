@@ -555,9 +555,10 @@ derived index (§5.1), without paying the DB's costs.
 
 ## 7. Backward compatibility & migration
 
-- The **default schema** encodes exactly v1: `kinds: [epic, story, task]`, the
-  v1 verbs, the v1 lifecycle. Existing backlogs run unchanged; the default is a
-  regression test of the generalization.
+- The **default schema** encodes v1: `kinds: [epic, story, task]`, the v1 verbs,
+  the v1 lifecycle. Existing backlogs run unchanged. *(See R8: "byte-for-byte" is
+  not literally true — the recommended default carries two intentional bug-fixes;
+  a separate **strict-v1 preset** is the true byte-for-byte regression baseline.)*
 - Migration from `epics/ stories/ tasks/` dirs to flat `tickets/` is mechanical
   (move files, drop numeric prefix, kind already in frontmatter). A `planr
   migrate` verb can do it.
@@ -588,3 +589,96 @@ derived index (§5.1), without paying the DB's costs.
    persisted git-ignored cache; when does scan cost justify persistence?
 9. **Filesystem legibility** — is `board`/`graph` + generated symlink views
    enough to replace `ls`-by-kind for humans?
+
+## 9. Fresh-eyes review findings (round 1, 2026-08-21)
+
+An independent fresh-context review (no prior design context) cross-checked the
+doc against the v1 source. Assessment column is *this author's* triage, not the
+reviewer's. Findings drive the next rework pass; nothing below is fixed in the
+prose above yet except where noted.
+
+### Load-bearing — must fix before implementation
+
+- **R1 — No primitive/verb mutates an *edge*.** `transition` writes `status`,
+  `annotate` writes sections; nothing writes `parent`/`depends_on`/`milestone`.
+  So reparent, move-into-milestone (§4 sells this as a one-field edit — by whom?),
+  and drop-a-dependency are all hand-edits → **violates CLI completeness (§2).**
+  Needs an edge-mutation primitive + verbs. *Agreed; biggest gap; designing next.*
+- **R2 — Abandoned-dependency "decision" has no CLI resolution.** `depends_on`
+  gates on `done`, so an abandoned dep blocks the dependent pending a decision
+  (drop the edge / abandon the dependent). "Drop the edge" is R1 — a hand-edit.
+  *Agreed; resolved once R1 lands.*
+- **R3 — Verdict-in-a-section-body breaks the "pure, graph-derived `require`"
+  claim (§3.6).** `self: {verdict: approved}` reads a `$message`-templated
+  free-text `## Review` body; across a rework loop the "current" verdict is a
+  *git-order* fact, not a node fact (v1 has `extract_last_review_verdict`,
+  undocumented last-wins). *Agreed. Fix: make the verdict a **frontmatter
+  field** (`review_verdict:` + `review_at:`) written by a primitive, so `self:`
+  is a real attribute check. Feeds R1 — we need frontmatter-writing primitives.*
+- **R4 — `terminal` derivation (§3.3) contradicts optional `from` (§3.4).** A
+  from-less `request-changes → in_progress` is an outgoing edge from *every*
+  state incl. `done`, so `done` isn't terminal and a done ticket could be bounced
+  back — collapsing the "can't leave terminal" guarantee R-negation/`abandon`
+  lean on. *Agreed. Fix: rework verbs get explicit `from`; terminal states are
+  absorbing (from-less transitions don't originate from them).*
+- **R5 — `require`↔`lint` "one vocabulary" is overstated (§3.6).** The lint form
+  ("∀ nodes *where status==review*, has Validation") needs a **guarded
+  quantifier** the require grammar excludes. *Agreed. Fix: shared operators +
+  a per-state guard wrapper for the invariant form — not "identical grammar."*
+- **R6 — Per-kind lifecycle / non-spine kinds unspecified (§3.3, §3.1).**
+  Milestone's `planned→in_progress→released` has nowhere in the single global
+  `lifecycle.states`, and `kinds` adjacency can't declare a non-spine kind
+  (`parents: []` collides with epic-as-root). *Agreed; milestone-as-kind is
+  asserted but not expressible — needs per-kind lifecycle + a grouping-kind role.*
+- **R7 — Ref/actor model unspecified (§4/§8).** Where the reviewer runs
+  `approve`/`request-changes` (branch vs trunk) decides the whole concurrency
+  story. *Agreed; open. Presumed v1 model (reviewer verbs commit on the branch,
+  `close` reads the verdict pre-merge, board sees it via branch-scan) — but the
+  doc must say so. This is the deferred concurrency pressure-test.*
+
+### Real but smaller
+
+- **R8 — "Byte-for-byte v1" (§2/§7) is false.** We changed container-close
+  (`done`→`terminal`) and turned manual edits into verbs. *Fix: split a
+  **strict-v1 preset** (byte-for-byte, the regression baseline) from the
+  **recommended default** (with the two intentional bug-fixes).*
+- **R9 — `neighbors` argument namespace (§3.6).** `children`/`members` are
+  *inverse-role* names absent from the `edges` map (which declares `parent`).
+  *Fix: register inverse-role names.*
+- **R10 — Cold-search index is O(history), not O(live) (§5.1).** Undersold.
+  *Partly agreed; bounded — history is append-only, so the index is
+  incrementally maintained (steady-state O(new)); the O(history) walk is a rare
+  cold rebuild. This is the one place a persisted cache is genuinely justified.*
+- **R11 — Primitive contracts thin (§3.5).** `merge`/`cleanup`/`archive` lack
+  precise semantics / partial-failure behavior; `release` isn't decomposed.
+  *Agreed as a tightening (not a design hole), except the R1 half — the set was
+  not closed.*
+
+### Pushed back on
+
+- **R12 — Rollup-under-archival (reviewer's #13): rejected.** `archive` requires
+  `self: {status: terminal}`, so an incomplete child can't be archived, and
+  archiving an already-terminal child doesn't change the parent's closeability.
+  Not a real problem.
+
+### Nits (cheap fixes)
+
+- `qa` example transitions `to: qa`, not in `lifecycle.states` (§3.4/§3.3) — a
+  project adding a verb must add its state.
+- `$branch` is undefined at `new`/creation time (§3.7) — template-var
+  availability is context-dependent.
+- `sections: [validation]` checks *existence*, not content (§3.6) — consistent
+  with the structural pin, weaker than the prose implies; state it.
+- Tamper-check (§3.9) vs. index location (§5.1) — the index must live outside the
+  tamper-checked `.plan/` path (or be excluded) or a legit rebuild trips it.
+- Naming: `neighbors` reads bidirectional but means one edge/one direction;
+  `link` ("undirected-ish, cosmetic") is too vague for an agent to place vs
+  `depends_on`.
+
+### Validated as sound (no change)
+
+Storage-side = ownership (§3.2); milestone-as-group-edge removing the epic-07
+directory hack; needs-vs-decomposition asymmetry (§3.6, confirmed against v1
+`close_cmd.rs`); per-kind available actions from `applies-to` (§3.4);
+git-history-as-archive with commit trailers (§5). The design's *spine* holds; the
+*mutation/enforcement actuators* (R1, R3, R7) are the unfinished part.
