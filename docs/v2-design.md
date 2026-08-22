@@ -41,11 +41,11 @@ These are the constraints that keep "configurable" from becoming "unbounded":
 - **Derive, don't store.** All groupings/rollups are computed by scanning at
   read time (as v1 already does for the board). Any index is a *disposable,
   rebuildable cache*, never authoritative.
-- **Enforce structure, never semantics.** The tool may check that a review
-  section exists with `verdict: approved` (structural); it must never judge
-  whether the acceptance criteria are *actually* met (semantic — that's the
-  reviewer agent's natural-language judgment). This line is frozen into the
-  `require` predicate vocabulary, so it holds by construction.
+- **Enforce structure, never semantics.** The tool may check that a ticket is in
+  the `approved` state (structural); it must never judge whether the acceptance
+  criteria are *actually* met (semantic — that's the reviewer agent's
+  natural-language judgment). This line is frozen into the `require` predicate
+  vocabulary, so it holds by construction.
 - **Few fixed rules, shared by stateless agents.** planr's value is that
   independently-spawned, fresh-context leader/worker/reviewer agents coordinate
   because the rules are few and fixed. Every configurable axis is an axis where
@@ -155,8 +155,13 @@ a separate graph — don't conflate the two.)
 
 ```yaml
 lifecycle:
-  states: [todo, in_progress, review, done, blocked, abandoned]
+  states: [todo, in_progress, review, approved, done, blocked, abandoned]
 ```
+
+`approved` is a real state between `review` and `done` (R3): the review outcome
+is modeled as a transition, not a parsed free-text field, so the close gate is a
+pure `self: {status: approved}` check and the board can distinguish "in review"
+from "approved, awaiting merge".
 
 Transitions are declared *on the verbs* that drive them (§3.4), not as a
 free-floating table. The state machine is **declared for derivation** (board
@@ -193,19 +198,20 @@ verbs:
     require: { sections: [validation] } # a ## Validation section exists (structural)
     do: [ transition: { to: review } ]
 
-  - name: approve                       # reviewer: record verdict, no transition
+  - name: approve                       # reviewer: outcome is a STATE, not a field
     applies-to: [task]
-    do: [ annotate: { section: Review, body: "verdict: approved\n$message" } ]
+    do: [ annotate: { section: Review, body: $message },
+          transition: { from: review, to: approved } ]
 
   - name: request-changes               # reviewer: bounce back to the worker
     applies-to: [task]
-    do: [ annotate: { section: Review, body: "verdict: changes-requested\n$message" },
-          transition: { to: in_progress } ]
+    do: [ annotate: { section: Review, body: $message },
+          transition: { from: review, to: in_progress } ]
 
   - name: close                         # unit variant: merges a branch
     applies-to: [task]
-    require: { self: { verdict: approved } }
-    do: [ transition: { to: done }, merge, cleanup ]
+    require: { self: { status: approved } }
+    do: [ transition: { from: approved, to: done }, merge, cleanup ]
 
   - name: close                         # container variant: trunk-local gate, no merge
     applies-to: [epic, story]
@@ -221,18 +227,36 @@ verbs:
     require: { self: { status: terminal } }
     do: [ archive ]
 
+  # --- edge mutation (leader backlog restructuring, R1/R2) ---
+  - name: reparent
+    applies-to: [story, task]
+    do: [ edge: { set: { parent: $target } } ]
+
+  - name: add-dep
+    applies-to: [task]
+    do: [ edge: { add: { depends_on: $target } } ]
+
+  - name: drop-dep                      # resolves the abandoned-dependency decision (R2)
+    applies-to: [task]
+    do: [ edge: { remove: { depends_on: $target } } ]
+
+  - name: assign                        # (un)assign a milestone
+    applies-to: [epic, story]
+    do: [ edge: { set: { milestone: $target } } ]
+
   - name: qa                            # example project extension
     applies-to: [task]
-    require: { self: { verdict: approved } }
-    do: [ transition: { from: review, to: qa }, hook: "./ci.sh" ]
+    require: { self: { status: approved } }
+    do: [ transition: { from: approved, to: qa }, hook: "./ci.sh" ]
 ```
 
 Every state change flows through a verb — including the ones v1 did as **manual
 file edits** (the worker hand-setting `status: review`, the reviewer hand-writing
 the verdict). In v2 those become `submit` / `approve` / `request-changes`, which
 is strictly better: they get atomic commits and structural guards too. `approve`
-writes the verdict via `annotate`; `close`'s `require: {verdict: approved}` reads
-exactly that — the verbs interlock.
+*transitions* the ticket to the `approved` state; `close`'s
+`require: {self: {status: approved}}` reads that state — a pure graph fact, so
+the verbs interlock without parsing a free-text verdict (R3).
 
 Decisions baked in:
 
@@ -243,17 +267,21 @@ Decisions baked in:
   express both, so ordering lives in the sequence.
 - **`require`** is a **separate key**, not a `do` item — it is a precondition,
   evaluated before any side effect. Its vocabulary is structural predicates
-  only: `{field: value}` on self (`verdict: approved`) and aggregates over
+  only: `{field: value}` on self (`status: approved`) and aggregates over
   edge-neighbors (`children: done`). No semantic judgment (the pin).
 - **`applies-to`** selects which kinds a verb definition serves. The same
   `name` may appear multiple times with **disjoint** `applies-to` — this is how
   `close` overloads (merge on units, gate-only on containers). The CLI surface
   stays `planr close <slug>`; the engine resolves `(name, kind-of-slug)` to one
   definition. Overlapping `applies-to` for one name is a lint error.
-- **`from`** on a transition is optional; omit it to allow the verb from any
-  state. Prefer gating by `require` over gating by `from` — requires are
-  structural and compose; from-states are brittle and often redundant (a
-  `verdict: approved` can't exist without review, so it subsumes `from: review`).
+- **`from`** on a transition is optional, but a from-less transition originates
+  from **any non-terminal state** (never from a terminal one — terminal states
+  are absorbing, which is what keeps `terminal` derivable, R4). Rework verbs that
+  must originate from a specific state (`approve`/`request-changes` from
+  `review`, `close` from `approved`) declare `from` explicitly; otherwise a
+  `request-changes` could fire from `todo` (the rework-guard footgun, R4).
+  Prefer a structural `require`
+  over `from` where a graph fact already implies the state.
 - **Per-kind capability is derivable**: an epic offers no `claim` because no
   `claim` verb applies to it. The board can list available actions per ticket
   for free.
@@ -262,35 +290,56 @@ Decisions baked in:
 
 The binary owns a small, git-aware primitive set; verbs are recipes over it.
 The set is where the enforce/don't-enforce line is frozen (there is no
-primitive that evaluates quality). **The set is closed for all known lifecycle
-verbs** — nine primitives in three flavors:
+primitive that evaluates quality). Ten primitives in four flavors:
 
 - **Content** (edit the ticket file; staged and committed as the verb's single
-  atomic commit): `transition`, `annotate`.
+  atomic commit): `transition`, `annotate`, `edge`. Each guards its own
+  invariant — that is why they are typed, not a single generic `set`.
 - **Git** (manipulate refs/worktrees/history): `new-worktree`, `branch`,
   `merge`, `cleanup`, `archive`.
 - **Output** (read-only, produce text): `brief`.
 - **Escape hatch**: `hook` (run a project script) — opt-in, rare, kept off the
   main path so a stateless agent can still read what a verb does.
 
-Only the two content primitives mutate ticket state, and both are pure file
-edits the engine stages and commits atomically. This was proven by expressing
-every verb against the set: six of seven composed cleanly; `abandon` was the
-one gap (it must persist a free-text reason), which is exactly what `annotate`
-fills.
+The three content primitives are the only ones that mutate ticket state; all
+are pure file edits the engine stages and commits atomically.
 
-**`annotate`** writes a **named section with a templated body** into the ticket
-(structured section+body form, not a frontmatter field):
+**`transition`** writes the `status` frontmatter field, validated against the
+state machine (a transition not declared by any verb is refused). The **review
+outcome is a state, not an attribute** (R3): `approve` transitions
+`review → approved`, so `close`'s gate is the *pure* `self: {status: approved}`
+— no free-text verdict field, no git-order dependency.
+
+**`annotate`** writes a **named section with a templated body** (structured
+section+body form). Reviewer prose still goes in a `## Review` section, but it
+is *commentary*, not a gate:
 
 ```yaml
 - annotate: { section: "Abandoned", body: "$message" }
 ```
 
-Semi-structured data (e.g. a reviewer's `verdict: approved`) lives inside
-section bodies and is parsed back out by `require` — consistent with v1, where
-`## Review` / `## Validation` / `## Notes` are sections. Frontmatter stays
-minimal (id, kind, status, parent, depends_on, axes); `transition` is the only
-primitive that writes frontmatter (the `status` field).
+**`edge`** writes a **forward edge field on the owning node** (R1) —
+`set` (single-valued: `parent`, `milestone`), `add`/`remove` (multi-valued:
+`depends_on`, `link`):
+
+```yaml
+- edge: { set:    { parent: $target } }
+- edge: { add:    { depends_on: $target } }
+- edge: { remove: { depends_on: $target } }
+```
+
+It enforces edge validity as a precondition — the same checks `lint` runs
+(double duty): **target exists**, **adjacency legal** (a new `parent`'s kind is
+allowed by the `kinds` graph), **acyclic** (`parent`/`depends_on` must not form
+a cycle), **cardinality** (`set` on single-valued, `add`/`remove` on
+multi-valued; cardinality is declared per edge in the `edges` schema). You only
+ever write the *forward* field from the *owner* — inverse roles (`children`,
+`members`) stay read-only derived and are never written, which is why edge
+mutation sidesteps the R9 naming question entirely.
+
+Frontmatter stays minimal (id, kind, status, parent, depends_on, axes). No
+generic attribute-writing primitive exists: everything that was tempted toward
+one is either a state (`transition`) or an edge (`edge`).
 
 **Commit boundary.** A verb produces exactly **one commit** (its net content
 mutation), so `commit` is the verb boundary, not a primitive. Bumping
@@ -318,7 +367,7 @@ Three operators:
 
 ```yaml
 require:
-  self:      { verdict: approved }      # attribute(s) of THIS ticket equal / in a set
+  self:      { status: approved }       # attribute(s) of THIS ticket equal / in a set
   neighbors: { depends_on: done }       # ∀ direct neighbors along an edge are in a state/set
   sections:  [ validation ]             # these body sections must exist
 ```
@@ -331,12 +380,12 @@ arguments (an edge/section/field the schema doesn't define). Coverage proof:
 |---|---|
 | `claim` (task) | `neighbors: {depends_on: done}` |
 | `submit` (task) | `sections: [validation]` |
-| `close` (task) | `self: {verdict: approved}` |
+| `close` (task) | `self: {status: approved}` |
 | `close` (container) | `neighbors: {children: terminal}` |
 | `release` (milestone) | `neighbors: {members: terminal}` |
 | `archive` | `self: {status: terminal}` |
-| `qa` | `self: {verdict: approved}` |
-| `review`, `approve`, `request-changes`, `abandon` | none |
+| `qa` | `self: {status: approved}` |
+| `review`, `approve`, `request-changes`, `abandon`, edge verbs | none |
 
 **Double duty:** these same operators power `lint` as *standing invariants*, not
 just verb *preconditions*. `submit` gates `→review` on `sections: [validation]`;
@@ -481,7 +530,19 @@ in-repo (observable, same trust boundary as the code being built).
   serialization; only trunk merge in `close` still serializes).
 - **All structure lives in frontmatter** (kind, `parent`, grouping axes,
   `depends_on`, status). The directory no longer encodes the kind. Every
-  grouping/view is derived at read time.
+  grouping/view is derived at read time. **Multi-valued edges (`depends_on`,
+  `link`) are stored as block lists (one target per line)**, not inline `[a, b]`
+  — so concurrent `add-dep` of *different* targets land on different lines and
+  git auto-merges (see optimistic concurrency below).
+- **Optimistic concurrency, git as the detector.** Edge mutation (`reparent`
+  etc., §3.5) edits a ticket's frontmatter on trunk; if that ticket is also
+  claimed, its file lives on a branch too. No lock and no version field: **git
+  is the optimistic-concurrency mechanism** — the merge detects any clash. With
+  verb↔commit correspondence + field-level granularity, most cases *auto-merge*
+  (a `reparent` touches the `parent:` line, a `submit` the `status:` line —
+  different lines). A true conflict needs two edits to the *same* field (two
+  concurrent `reparent`s of one ticket), which is rare (hours-to-days apart, not
+  milliseconds) and one line — resolved by the existing rebase-on-`close` path.
 - **Consequences we like:**
   - Milestone membership is a frontmatter field, not a location →
     "move an epic into a milestone" is a one-field edit, conflict-free on any
@@ -597,30 +658,27 @@ doc against the v1 source. Assessment column is *this author's* triage, not the
 reviewer's. Findings drive the next rework pass; nothing below is fixed in the
 prose above yet except where noted.
 
-### Load-bearing — must fix before implementation
+### Load-bearing
 
-- **R1 — No primitive/verb mutates an *edge*.** `transition` writes `status`,
-  `annotate` writes sections; nothing writes `parent`/`depends_on`/`milestone`.
-  So reparent, move-into-milestone (§4 sells this as a one-field edit — by whom?),
-  and drop-a-dependency are all hand-edits → **violates CLI completeness (§2).**
-  Needs an edge-mutation primitive + verbs. *Agreed; biggest gap; designing next.*
-- **R2 — Abandoned-dependency "decision" has no CLI resolution.** `depends_on`
-  gates on `done`, so an abandoned dep blocks the dependent pending a decision
-  (drop the edge / abandon the dependent). "Drop the edge" is R1 — a hand-edit.
-  *Agreed; resolved once R1 lands.*
-- **R3 — Verdict-in-a-section-body breaks the "pure, graph-derived `require`"
-  claim (§3.6).** `self: {verdict: approved}` reads a `$message`-templated
-  free-text `## Review` body; across a rework loop the "current" verdict is a
-  *git-order* fact, not a node fact (v1 has `extract_last_review_verdict`,
-  undocumented last-wins). *Agreed. Fix: make the verdict a **frontmatter
-  field** (`review_verdict:` + `review_at:`) written by a primitive, so `self:`
-  is a real attribute check. Feeds R1 — we need frontmatter-writing primitives.*
-- **R4 — `terminal` derivation (§3.3) contradicts optional `from` (§3.4).** A
-  from-less `request-changes → in_progress` is an outgoing edge from *every*
-  state incl. `done`, so `done` isn't terminal and a done ticket could be bounced
-  back — collapsing the "can't leave terminal" guarantee R-negation/`abandon`
-  lean on. *Agreed. Fix: rework verbs get explicit `from`; terminal states are
-  absorbing (from-less transitions don't originate from them).*
+- **R1 — No primitive/verb mutates an *edge*. ✅ RESOLVED.** Added the typed
+  **`edge` primitive** (`set`/`add`/`remove`, per-edge cardinality, validity
+  guards: target-exists / adjacency-legal / acyclic) and leader verbs
+  `reparent` / `add-dep` / `drop-dep` / `assign` (§3.4, §3.5). Only forward
+  fields are written, from the owner. CLI-completeness restored.
+- **R2 — Abandoned-dependency decision has no CLI resolution. ✅ RESOLVED** by
+  R1: `drop-dep` removes the edge; `abandon` abandons the dependent.
+- **R3 — Verdict-in-a-section-body breaks require purity. ✅ RESOLVED — better
+  than the proposed fix.** The review outcome is modeled as a **state**
+  (`approved`), not a frontmatter attribute: `approve` transitions
+  `review → approved`; `close` gates on the pure `self: {status: approved}`. No
+  verdict field, no append-log, no git-order dependency — and no
+  attribute-writing primitive needed. Reviewer prose stays as *commentary* in
+  `## Review`.
+- **R4 — `terminal` vs optional `from`. ✅ RESOLVED.** From-less transitions
+  originate from any **non-terminal** state (terminal states are absorbing);
+  rework verbs (`approve`/`request-changes`/`close`) declare `from` explicitly
+  (§3.4). `terminal = {done, abandoned}` derives cleanly; the rework-guard
+  footgun (reviewer's #12) closed.
 - **R5 — `require`↔`lint` "one vocabulary" is overstated (§3.6).** The lint form
   ("∀ nodes *where status==review*, has Validation") needs a **guarded
   quantifier** the require grammar excludes. *Agreed. Fix: shared operators +
@@ -633,8 +691,8 @@ prose above yet except where noted.
 - **R7 — Ref/actor model unspecified (§4/§8).** Where the reviewer runs
   `approve`/`request-changes` (branch vs trunk) decides the whole concurrency
   story. *Agreed; open. Presumed v1 model (reviewer verbs commit on the branch,
-  `close` reads the verdict pre-merge, board sees it via branch-scan) — but the
-  doc must say so. This is the deferred concurrency pressure-test.*
+  `close` reads the `approved` state pre-merge, board sees it via branch-scan) —
+  but the doc must say so. This is the deferred concurrency pressure-test.*
 
 ### Real but smaller
 
