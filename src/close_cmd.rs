@@ -10,7 +10,7 @@ use crate::git;
 use crate::lock::PlanrLock;
 use crate::parse::extract_last_review_verdict;
 use crate::ticket::{parse_ticket, ParsedTicket};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 // ---------------------------------------------------------------------------
@@ -147,44 +147,53 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
     // ---- 2. Under exclusive lock ----
     let _lock = PlanrLock::exclusive(cwd).map_err(|e| format!("lock error: {e}"))?;
 
-    let wt_path = find_worktree_path(&branch);
+    let wt_path = git::find_worktree_for_branch(&branch);
+
+    // Resolve the worktree that holds trunk; the merge (and, when the task has
+    // no worktree of its own, the status flip) happen there so `close` works
+    // even when planr is invoked from another worktree on a different branch.
+    let trunk_dir = git::trunk_worktree(trunk, cwd)?;
 
     // Flip status on the branch
     let branch_content = git::show_ref(&branch, &task_file)?;
     let date = local_date_string();
     let new_content = flip_frontmatter(&branch_content, "done", &date)?;
 
-    // Write to the worktree (if found) or to the branch (via checkout)
+    // Write to the task's own worktree if it has one; otherwise check the
+    // branch out in the trunk worktree, commit the flip, then return trunk
+    // there before merging.
     if let Some(ref wt) = wt_path {
-        let fpath = Path::new(wt).join(&task_file);
+        let fpath = wt.join(&task_file);
         std::fs::write(&fpath, &new_content)
             .map_err(|e| format!("cannot write {}: {e}", fpath.display()))?;
-        git::add_file(&task_file, Path::new(wt))?;
-        git::commit_in(&format!("plan: mark {slug} done"), Path::new(wt))?;
+        git::add_file(&task_file, wt)?;
+        git::commit_in(&format!("plan: mark {slug} done"), wt)?;
     } else {
-        // No worktree -- need to do this differently.
-        // Checkout branch, write, commit, then merge.
-        git::checkout(&branch)?;
-        let fpath = Path::new(&task_file);
-        std::fs::write(fpath, &new_content)
-            .map_err(|e| format!("cannot write {task_file}: {e}"))?;
-        git::add_file(&task_file, Path::new("."))?;
-        git::commit_in(&format!("plan: mark {slug} done"), Path::new("."))?;
+        git::checkout_in(&trunk_dir, &branch)?;
+        let fpath = trunk_dir.join(&task_file);
+        std::fs::write(&fpath, &new_content)
+            .map_err(|e| format!("cannot write {}: {e}", fpath.display()))?;
+        git::add_file(&task_file, &trunk_dir)?;
+        git::commit_in(&format!("plan: mark {slug} done"), &trunk_dir)?;
+        git::checkout_in(&trunk_dir, trunk)?;
     }
 
-    // Checkout trunk and merge
-    git::checkout(trunk)?;
-
-    // Merge --no-ff with custom message
-    let merge_result = try_merge(&branch, &format!("plan: merge {slug}"), trunk, slug);
+    // Merge --no-ff with custom message, in the trunk worktree.
+    let merge_result = try_merge(
+        &branch,
+        &format!("plan: merge {slug}"),
+        trunk,
+        slug,
+        &trunk_dir,
+    );
     match merge_result {
         Ok(_) => {
             // Flip is already on the merged branch commit; the merge brings it to trunk.
             // Cleanup: tolerant worktree remove + branch delete
             if let Some(ref wt) = wt_path {
-                let _ = git::worktree_remove(Path::new(wt), false);
+                let _ = git::worktree_remove(wt, false);
             }
-            let _ = git::branch_delete(&branch, false);
+            let _ = git::branch_delete(&branch, false, &trunk_dir);
 
             // Check if parent story can also be closed
             if let Some(ref pslug) = parent_story {
@@ -212,9 +221,17 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
     }
 }
 
-/// Try a merge, capturing the full output for conflict reporting.
-fn try_merge(branch: &str, message: &str, trunk: &str, slug: &str) -> Result<String, String> {
+/// Try a merge, capturing the full output for conflict reporting. Runs in
+/// `cwd` (the worktree that has trunk checked out).
+fn try_merge(
+    branch: &str,
+    message: &str,
+    trunk: &str,
+    slug: &str,
+    cwd: &Path,
+) -> Result<String, String> {
     let mut cmd = Command::new("git");
+    cmd.current_dir(cwd);
     cmd.args(["merge", "--no-ff", branch, "-m", message]);
 
     let out = cmd.output().map_err(|e| format!("git merge failed: {e}"))?;
@@ -229,6 +246,7 @@ fn try_merge(branch: &str, message: &str, trunk: &str, slug: &str) -> Result<Str
 
         // List conflicted files
         let conflicted = Command::new("git")
+            .current_dir(cwd)
             .args(["diff", "--name-only", "--diff-filter=U"])
             .output()
             .ok()
@@ -242,7 +260,10 @@ fn try_merge(branch: &str, message: &str, trunk: &str, slug: &str) -> Result<Str
             .unwrap_or_else(|| "<unknown>".to_string());
 
         // Abort the merge
-        let _ = Command::new("git").args(["merge", "--abort"]).output();
+        let _ = Command::new("git")
+            .current_dir(cwd)
+            .args(["merge", "--abort"])
+            .output();
 
         // Build error message with guidance
         let mut err = String::new();
@@ -260,22 +281,6 @@ fn try_merge(branch: &str, message: &str, trunk: &str, slug: &str) -> Result<Str
 
         Err(err)
     }
-}
-
-/// Detect the worktree path for a branch from `worktree list --porcelain`.
-fn find_worktree_path(branch: &str) -> Option<PathBuf> {
-    let lines = git::worktree_list().ok()?;
-    let branch_ref = format!("refs/heads/{branch}");
-    let mut current_wt: Option<PathBuf> = None;
-
-    for line in &lines {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            current_wt = Some(PathBuf::from(path));
-        } else if line.strip_prefix("branch ") == Some(&branch_ref) {
-            return current_wt;
-        }
-    }
-    None
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +312,7 @@ pub fn close_story(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Resul
 
     // Under exclusive lock: flip story status on trunk
     let _lock = PlanrLock::exclusive(cwd).map_err(|e| format!("lock error: {e}"))?;
-    flip_and_commit_kind(slug, "stories", trunk, plan_dir)?;
+    flip_and_commit_kind(slug, "stories", trunk, plan_dir, cwd)?;
 
     // Check if parent epic can also be closed
     if let Some(ref pslug) = parent_epic {
@@ -352,7 +357,7 @@ pub fn close_epic(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
     // Under exclusive lock: flip epic status on trunk
     let _lock = PlanrLock::exclusive(cwd).map_err(|e| format!("lock error: {e}"))?;
 
-    flip_and_commit_kind(slug, "epics", trunk, plan_dir)?;
+    flip_and_commit_kind(slug, "epics", trunk, plan_dir, cwd)?;
 
     Ok(format!("closed epic {slug}; all stories done"))
 }
@@ -384,25 +389,29 @@ fn flip_and_commit_kind(
     kind_dir: &str,
     trunk: &str,
     plan_dir: &str,
+    cwd: &Path,
 ) -> Result<(), String> {
     let file = find_ticket_by_slug(slug, kind_dir, trunk, plan_dir)?;
 
-    // Checkout trunk first (in case we're on a different branch)
-    git::checkout(trunk)?;
+    // Resolve the working directory that has trunk checked out (possibly a
+    // different worktree) so the commit lands on the authoritative backlog,
+    // even when planr was invoked from a task worktree on another branch.
+    let trunk_dir = git::trunk_worktree(trunk, cwd)?;
 
     let blob = git::show_ref(trunk, &file)?;
     let date = local_date_string();
     let new_content = flip_frontmatter(&blob, "done", &date)?;
 
-    // After checkout, the file is available in the working tree
-    let fpath = Path::new(&file);
-    let parent = fpath.parent().unwrap_or(Path::new("."));
+    // The file is available in the trunk working tree.
+    let fpath = trunk_dir.join(&file);
+    let parent = fpath.parent().unwrap_or(&trunk_dir);
     std::fs::create_dir_all(parent)
         .map_err(|e| format!("cannot create dir {}: {e}", parent.display()))?;
-    std::fs::write(fpath, &new_content).map_err(|e| format!("cannot write {file}: {e}"))?;
+    std::fs::write(&fpath, &new_content)
+        .map_err(|e| format!("cannot write {}: {e}", fpath.display()))?;
 
-    git::add_file(&file, Path::new("."))?;
-    git::commit_in(&format!("plan: close {kind_dir} {slug}"), Path::new("."))?;
+    git::add_file(&file, &trunk_dir)?;
+    git::commit_in(&format!("plan: close {kind_dir} {slug}"), &trunk_dir)?;
 
     Ok(())
 }

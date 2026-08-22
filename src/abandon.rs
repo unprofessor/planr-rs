@@ -126,20 +126,22 @@ pub fn abandon_ticket(
         ));
     }
 
-    // Checkout trunk before writing so the commit lands on the authoritative
-    // backlog, even when the caller invoked planr from another branch.
-    git::checkout(trunk)?;
+    // Resolve the working directory that has trunk checked out (possibly a
+    // different worktree) so the commit lands on the authoritative backlog,
+    // even when planr was invoked from a task worktree on another branch.
+    let trunk_dir = git::trunk_worktree(trunk, cwd)?;
 
     let date = local_date_string();
     let new_content = abandon_frontmatter(&blob, message, &date)?;
-    let fpath = Path::new(&file);
-    let parent = fpath.parent().unwrap_or(Path::new("."));
+    let fpath = trunk_dir.join(&file);
+    let parent = fpath.parent().unwrap_or(&trunk_dir);
     std::fs::create_dir_all(parent)
         .map_err(|e| format!("cannot create dir {}: {e}", parent.display()))?;
-    std::fs::write(fpath, &new_content).map_err(|e| format!("cannot write {file}: {e}"))?;
+    std::fs::write(&fpath, &new_content)
+        .map_err(|e| format!("cannot write {}: {e}", fpath.display()))?;
 
-    git::add_file(&file, Path::new("."))?;
-    git::commit_in(&format!("plan: abandon {kind} {slug}"), Path::new("."))?;
+    git::add_file(&file, &trunk_dir)?;
+    git::commit_in(&format!("plan: abandon {kind} {slug}"), &trunk_dir)?;
 
     Ok(format!("abandoned {kind} {slug}"))
 }

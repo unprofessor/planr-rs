@@ -8,7 +8,7 @@
 //! last non-empty line) is returned as the error string. Callers should
 //! surface git's last-line message to the user.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Run a git command from the OS cwd.
@@ -84,10 +84,14 @@ pub fn worktree_remove(path: &Path, force: bool) -> Result<(), String> {
     git(&args).map(|_| ())
 }
 
-/// `git branch -d|-D <branch>`.
-pub fn branch_delete(branch: &str, force: bool) -> Result<(), String> {
+/// `git branch -d|-D <branch>` run in `cwd`.
+///
+/// The cwd matters: `-d` (safe delete) refuses unless the branch is merged
+/// into the HEAD of the worktree it runs in, so this must run in the worktree
+/// where the merge landed (trunk), not wherever planr was invoked from.
+pub fn branch_delete(branch: &str, force: bool, cwd: &Path) -> Result<(), String> {
     let flag = if force { "-D" } else { "-d" };
-    git(&["branch", flag, branch]).map(|_| ())
+    git_in(cwd, &["branch", flag, branch]).map(|_| ())
 }
 
 /// `git merge --no-ff <branch>`.
@@ -97,8 +101,14 @@ pub fn merge_no_ff(branch: &str) -> Result<String, String> {
 }
 
 /// `git checkout <branch>`.
+#[allow(dead_code)]
 pub fn checkout(branch: &str) -> Result<(), String> {
     git(&["checkout", branch]).map(|_| ())
+}
+
+/// `git checkout <branch>` run in `cwd`.
+pub fn checkout_in(cwd: &Path, branch: &str) -> Result<(), String> {
+    git_in(cwd, &["checkout", branch]).map(|_| ())
 }
 
 /// `git commit [-m <message>] [-- files...]`.
@@ -163,6 +173,42 @@ pub fn worktree_list() -> Result<Vec<String>, String> {
 /// `git rev-parse --verify <ref>`. Returns the full SHA on success.
 pub fn rev_parse_verify(ref_: &str) -> Result<String, String> {
     git(&["rev-parse", "--verify", ref_])
+}
+
+/// Find the worktree path where `branch` is currently checked out, if any.
+/// Parses `git worktree list --porcelain`, pairing each `worktree <path>`
+/// stanza with its `branch refs/heads/<branch>` line.
+pub fn find_worktree_for_branch(branch: &str) -> Option<PathBuf> {
+    let lines = worktree_list().ok()?;
+    let branch_ref = format!("refs/heads/{branch}");
+    let mut current_wt: Option<PathBuf> = None;
+
+    for line in &lines {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_wt = Some(PathBuf::from(path));
+        } else if line.strip_prefix("branch ") == Some(branch_ref.as_str()) {
+            return current_wt;
+        }
+    }
+    None
+}
+
+/// Resolve a working directory that has `trunk` checked out, for trunk-local
+/// writes and commits.
+///
+/// If `trunk` is already checked out in some worktree -- the common case, the
+/// leader's main worktree -- return that path with no checkout, so the caller
+/// can write and commit there even when planr was invoked from another
+/// worktree on a different branch. `git checkout <trunk>` cannot be used from
+/// such a worktree because trunk is already used elsewhere. If trunk is not
+/// checked out anywhere, check it out in `cwd` and return `cwd`.
+pub fn trunk_worktree(trunk: &str, cwd: &Path) -> Result<PathBuf, String> {
+    if let Some(path) = find_worktree_for_branch(trunk) {
+        Ok(path)
+    } else {
+        git_in(cwd, &["checkout", trunk])?;
+        Ok(cwd.to_path_buf())
+    }
 }
 
 /// Discover the git common directory, trimming trailing `/` and resolving
