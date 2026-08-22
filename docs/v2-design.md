@@ -155,13 +155,24 @@ a separate graph — don't conflate the two.)
 
 ```yaml
 lifecycle:
-  states: [todo, in_progress, review, approved, done, blocked, abandoned]
+  states: [todo, in_progress, review, approved, done, abandoned]
 ```
 
 `approved` is a real state between `review` and `done` (R3): the review outcome
 is modeled as a transition, not a parsed free-text field, so the close gate is a
 pure `self: {status: approved}` check and the board can distinguish "in review"
 from "approved, awaiting merge".
+
+**`blocked` is not a state — it's derived (or commentary).** Two meanings,
+neither a status: *(1) blocked-by-dependency* is the exact negation of `claim`'s
+gate — `blocked(T) = ∃ d ∈ depends_on(T): status(d) ≠ done` — so it is a derived
+`board`/`lint` view, never stored (storing it would denormalize the graph and
+drift; and it automatically flags the R2 abandoned-dep decision, since an
+abandoned dep also fails `≠ done`). *(2) blocked-by-external-reason* ("waiting on
+vendor") is orthogonal to the lifecycle — it changes no legal transition — so it
+is commentary (`annotate` a note), or a project-specific schema extension, never
+a core status. A fixed-target `transition` also can't express "unblock to
+wherever you were," which is the tell it was never a state.
 
 Transitions are declared *on the verbs* that drive them (§3.4), not as a
 free-floating table. The state machine is **declared for derivation** (board
@@ -191,20 +202,16 @@ terminal state — so it only ever fires from states that already had an explici
 exit (already non-terminal) and can never flip a terminal state to non-terminal.
 Worked example: with explicit `claim`/`submit`/`approve`/`request-changes`/
 `close`/`qa` and `from`-less `abandon`, step 1 sees no explicit
-`from: done|abandoned|blocked` → those are terminal (computed without ever
-looking at `abandon`); step 2 lets `abandon` fire from the non-terminals
-(todo, in_progress, review, approved) but not from `done`.
+`from: done|abandoned` → those are terminal (computed without ever looking at
+`abandon`); step 2 lets `abandon` fire from the non-terminals (todo,
+in_progress, review, approved) but not from `done`. So `terminal =
+{done, abandoned}`.
 
 **Lint guardrail:** a `from`-less verb may not be a state's *sole* exit — else
 step 1 marks the state terminal, step 2 refuses to apply the verb, and the state
 silently freezes. So every intended-non-terminal state must have ≥1
 explicit-`from` transition; any state with no explicit outgoing transition is
 *declared* terminal, and if that is wrong you add an explicit-`from` verb.
-
-**`blocked` is an open design decision:** with the current verbs it has no
-transition in *or* out — an orphan that derives as unintended-terminal. Either
-drop it, or add `block` / `unblock` verbs (`unblock` with explicit
-`from: blocked`) if `blocked` is meant to be a recoverable workflow state.
 
 ### 3.4 `verbs` — lifecycle mutations as composable recipes
 
@@ -583,6 +590,43 @@ in-repo (observable, same trust boundary as the code being built).
   board`/`graph` views (same cheap derive-at-read-time), grep, and optionally a
   *generated, git-ignored* symlink view tree (`views/by-milestone/v1/…`).
 
+### 4.1 Refs, actors, and the two lanes (R7)
+
+Every verb lives in one of **two lanes**, which is the whole concurrency model:
+
+- **Branch lane — per-task, parallel, lock-free.** `claim`, `submit`,
+  `approve`, `request-changes` (plus `abandon` / edge-edits *of a claimed
+  task*). Run by the worker/reviewer in the task's own worktree; commit to
+  `plan/<slug>`; **touch only that one ticket file.** N tasks = N branches = zero
+  contention. This is where all parallelism lives — no serialization ever.
+- **Trunk lane — structure + integration, serialized, leader-only.** `new`,
+  `close` (task-merge *and* container), `archive`, `release`, and `abandon` /
+  edge-edits *of an unclaimed ticket*. Only the leader commits here; trunk
+  mutation serializes (the one remaining lock — `new`'s prefix-alloc lock is
+  gone).
+
+**`close` bridges the lanes** and dissolves the apparent chicken-and-egg: it
+reads the task's `approved` state *from its branch* (`git show
+plan/<slug>:tickets/<slug>.md` — v1's board already reads branches this way),
+gates on it, flips to `done` on the branch, then merges into trunk. The approval
+rides into trunk *via the merge*; trunk never needed to see it first.
+
+Two rules make it airtight:
+
+- **Actor rule** — only the leader mutates trunk; workers/reviewers touch only
+  their own branch. Preserves v1's single-writer-to-trunk property.
+- **Authority rule** — once claimed, a task's file is authoritative *on its
+  branch* until merge. A trunk-lane structural edit to a *claimed* task
+  (`reparent`) commits on trunk and reconciles via the optimistic field-level
+  merge (§4) — different line (`parent:`) than the branch's `status:`, so it
+  auto-merges. A same-field trunk-vs-branch clash (leader `abandon`s while the
+  worker `submit`s) is the rare genuine conflict, and it *should* surface to a
+  human — it means two actors disagree about the ticket's fate.
+
+Net: parallel workers never contend, parallel reviewers never contend, and only
+the leader's inherently-sequential integration steps serialize. The flat-file
+rewrite preserves v1's coordination guarantee and tightens it (one fewer lock).
+
 ## 5. Archival — bounded working tree, lossless recovery
 
 The problem: a mature project accumulates tens of thousands of tickets; a flat
@@ -718,11 +762,14 @@ prose above yet except where noted.
   `lifecycle.states`, and `kinds` adjacency can't declare a non-spine kind
   (`parents: []` collides with epic-as-root). *Agreed; milestone-as-kind is
   asserted but not expressible — needs per-kind lifecycle + a grouping-kind role.*
-- **R7 — Ref/actor model unspecified (§4/§8).** Where the reviewer runs
-  `approve`/`request-changes` (branch vs trunk) decides the whole concurrency
-  story. *Agreed; open. Presumed v1 model (reviewer verbs commit on the branch,
-  `close` reads the `approved` state pre-merge, board sees it via branch-scan) —
-  but the doc must say so. This is the deferred concurrency pressure-test.*
+- **R7 — Ref/actor model. ✅ RESOLVED (§4.1).** Two lanes: a **branch lane**
+  (`claim`/`submit`/`approve`/`request-changes` + claimed-task edits) — per-task,
+  parallel, lock-free; and a **trunk lane** (`new`/`close`/`archive`/`release` +
+  unclaimed-ticket edits) — leader-only, serialized. `close` bridges by reading
+  the `approved` state from the branch, then merging (no chicken-and-egg).
+  Actor rule (only the leader writes trunk) + authority rule (a claimed task's
+  file is branch-authoritative until merge). Also settles the deferred
+  concurrency pressure-test.
 
 ### Real but smaller
 
