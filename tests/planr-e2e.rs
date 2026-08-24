@@ -348,18 +348,20 @@ fn test_e2e_board_source_status_line() {
     let toplevel = git_stdout(td.path(), &["rev-parse", "--show-toplevel"]);
     let head = git_stdout(td.path(), &["rev-parse", "--short", "HEAD"]);
 
-    // Clean working tree, on branch main.
+    // Clean working tree, on branch main: "# <path> @ <sha> (main)".
     let header = board_header(td.path(), &["board"]);
     assert!(header.starts_with("# "), "header prefix: {header}");
     assert!(header.contains(&toplevel), "header path: {header}");
-    assert!(header.contains("@ main"), "header ref name: {header}");
-    assert!(header.contains(&head), "header commit id: {header}");
-    assert!(!header.contains("-dirty"), "clean tree not dirty: {header}");
+    assert!(
+        header.contains(&format!("@ {head} (main)")),
+        "header commit id + branch: {header}"
+    );
+    assert!(!header.contains("dirty"), "clean tree not dirty: {header}");
 
     // Dirty the working tree with an uncommitted ticket.
     planr_ok(td.path(), &["new", "task", "wip", "Work In Progress", "s1"]);
     let dirty = board_header(td.path(), &["board"]);
-    assert!(dirty.contains("-dirty"), "dirty marker: {dirty}");
+    assert!(dirty.contains("(main) dirty"), "dirty marker: {dirty}");
 
     // Ref mode reads committed data, so it is never marked dirty even when the
     // working tree has uncommitted changes.
@@ -369,7 +371,7 @@ fn test_e2e_board_source_status_line() {
         "ref header name: {ref_header}"
     );
     assert!(
-        !ref_header.contains("-dirty"),
+        !ref_header.contains("dirty"),
         "ref mode ignores working-tree dirt: {ref_header}"
     );
 

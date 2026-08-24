@@ -4,10 +4,10 @@
 
 ### Added
 
-- **`planr board`** now prints a `git describe`-style source header before
-  the board, showing where the tickets were read from: the working-tree
-  path, the ref name (branch, or the commit-ish you passed), and the
-  resolved commit id. In working-tree mode a `-dirty` suffix marks
+- **`planr board`** now prints a source header before the board, showing
+  where the tickets were read from: the working-tree path, the resolved
+  commit id, and the ref name (the current branch in parentheses, or the
+  commit-ish you passed). In working-tree mode a trailing `dirty` marks
   uncommitted changes; ref mode omits it since it reads committed data.
 
 ### Changed
