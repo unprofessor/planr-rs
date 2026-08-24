@@ -470,13 +470,28 @@ arguments (an edge/section/field the schema doesn't define). Coverage proof:
 | `qa` | `self: {status: approved}` |
 | `review`, `approve`, `request-changes`, `abandon`, edge verbs | none |
 
-**Double duty:** these same operators power `lint` as *standing invariants*, not
-just verb *preconditions*. `submit` gates `→review` on `sections: [validation]`;
-`lint` checks the whole-graph version ("no `review`-status task lacks a
-Validation section"), catching anyone who hand-edited around the verb (§ CLI
-completeness, principles). One vocabulary, both jobs — enforce at transition
-time, verify across the backlog. `lint` also surfaces the abandoned-dependency
-decision (below) as a standing check.
+**Double duty — shared operators, plus a quantifier (R5).** The same operators
+power `lint` as *standing invariants*, but a lint invariant is a statement over
+*all* tickets, so it needs a **guard** to select the population and the ∀ a
+single-ticket verb precondition doesn't. A lint rule is a `when`/`must` pair,
+**both built from the exact same operators**:
+
+```yaml
+invariants:
+  - when: { self: { status: review } }   # guard: selects the population
+    must: { sections: [validation] }      # assertion: held ∀ selected ticket
+```
+
+So the honest claim is *shared vocabulary*, not identical grammar: the operators
+build both guard and assertion; `lint` adds `∀ ticket where when(t): must(t)`. A
+verb precondition is the **degenerate case** — guard = the one ticket the verb
+targets (narrowed by `applies-to`/`from`), assertion = `require`.
+
+Many invariants are also **derivable** from verb requires: if the only verb
+entering a state `S` requires a *durable* predicate (sections/edges), then every
+`S` ticket satisfies it — so `lint` can surface the `submit → review` invariant
+above for free and catch anyone who hand-edited around the verb. `lint` likewise
+surfaces the abandoned-dependency decision (below) as a standing check.
 
 **Deliberate exclusions** (each safe because no gate needs it):
 
@@ -805,10 +820,11 @@ prose above yet except where noted.
   rework verbs (`approve`/`request-changes`/`close`) declare `from` explicitly
   (§3.4). `terminal = {done, abandoned}` derives cleanly; the rework-guard
   footgun (reviewer's #12) closed.
-- **R5 — `require`↔`lint` "one vocabulary" is overstated (§3.6).** The lint form
-  ("∀ nodes *where status==review*, has Validation") needs a **guarded
-  quantifier** the require grammar excludes. *Agreed. Fix: shared operators +
-  a per-state guard wrapper for the invariant form — not "identical grammar."*
+- **R5 — `require`↔`lint` grammar. ✅ RESOLVED (§3.6).** A lint invariant is a
+  `when`/`must` pair, both built from the same operators; `lint` adds
+  `∀ ticket where when(t): must(t)`. A verb precondition is the degenerate
+  single-ticket case. Claim corrected from "identical grammar" to "shared
+  vocabulary + a quantifier"; many invariants also derive from verb requires.
 - **R6 — Per-kind lifecycle / non-spine kinds. ✅ RESOLVED (§3.1, §3.3).**
   Non-spine kinds go in a separate **`groups`** key (§3.1), which materializes a
   grouping node-kind + its group edge, dissolving the `parents: []`/epic
