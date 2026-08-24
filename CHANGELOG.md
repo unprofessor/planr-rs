@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`planr board`** now prints a `git describe`-style source header before
+  the board, showing where the tickets were read from: the working-tree
+  path, the ref name (branch, or the commit-ish you passed), and the
+  resolved commit id. In working-tree mode a `-dirty` suffix marks
+  uncommitted changes; ref mode omits it since it reads committed data.
+
 ### Changed
 
 - **`planr board`** now defaults to the current on-disk working tree

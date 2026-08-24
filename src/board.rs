@@ -251,6 +251,41 @@ pub fn render_board(input: &BoardInput) -> String {
 // CLI I/O helpers (used by main.rs)
 // ---------------------------------------------------------------------------
 
+/// Build the one-line source header shown above the board: where the tickets
+/// were read from. `ref_arg` is the positional the user passed; `None` or an
+/// empty string means the on-disk working tree.
+///
+/// Working-tree mode reports the current branch (when not detached) and HEAD,
+/// with a `git describe`-style `-dirty` suffix when the tree has uncommitted
+/// changes. Ref mode reports the requested commit-ish and its resolved id; a
+/// dirty working tree is irrelevant there since the board reads committed data.
+pub fn source_status_line(ref_arg: Option<&str>) -> String {
+    let path = crate::git::show_toplevel().unwrap_or_else(|_| ".".to_string());
+    let ref_mode = ref_arg.is_some_and(|r| !r.is_empty());
+
+    if ref_mode {
+        let refname = ref_arg.unwrap();
+        let short = crate::git::rev_parse_short(refname).unwrap_or_else(|_| refname.to_string());
+        // Avoid the redundant "(1337d4d) 1337d4d" when the ref is itself a SHA.
+        if refname == short {
+            format!("# {path} @ {short}")
+        } else {
+            format!("# {path} @ {refname} {short}")
+        }
+    } else {
+        let short = crate::git::rev_parse_short("HEAD").unwrap_or_else(|_| "unknown".to_string());
+        let dirty = if crate::git::is_dirty().unwrap_or(false) {
+            "-dirty"
+        } else {
+            ""
+        };
+        match crate::git::current_branch() {
+            Some(branch) => format!("# {path} @ {branch} {short}{dirty}"),
+            None => format!("# {path} @ {short}{dirty}"),
+        }
+    }
+}
+
 /// Gather trunk tickets from a git ref using the git wrappers.
 pub fn read_ref_tickets(ref_: &str, plan_dir: &str) -> Vec<ParsedTicket> {
     let kinds = ["epics", "stories", "tasks"];
