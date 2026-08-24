@@ -93,23 +93,43 @@ kinds:
   YAGNI: we are *not* building multi-parent decomposition now, but the
   adjacency representation leaves the door open.
 
-### 3.2 Axes and edges — the typed graph, disciplined
+**Non-spine kinds live in `groups` (R6).** `kinds` is the *containment spine*, so
+a kind that isn't part of decomposition (a milestone) doesn't belong in it —
+which is exactly why `parents: []` there would collide with an epic-as-root. A
+grouping kind is declared separately and additively, so the common case stays a
+clean list:
+
+```yaml
+kinds: [epic, story, task]           # containment spine (unchanged)
+groups:
+  milestone: { inverse: members }    # a non-spine kind + its group edge, one declaration
+```
+
+`groups.milestone` materializes **both** the milestone *node-kind* (with its own
+derived lifecycle, §3.3) **and** the `milestone` *group edge* on members (forward
+field on the member; inverse role `members`, which also feeds R9's inverse-role
+registry). This is the concrete form of §3.2's "a milestone is both a kind and an
+edge." Each kind's lifecycle — spine or group — is *derived from the verbs that
+apply to it* (§3.3), so nothing per-kind is declared beyond the kind itself.
+
+### 3.2 Edges and groups — the typed graph, disciplined
 
 Relationships are typed edges. Only two carry gating semantics; the rest are
 grouping or informational:
 
-| edge / axis        | direction        | semantics                              |
+| edge               | direction        | semantics                              |
 |--------------------|------------------|----------------------------------------|
 | `parent`           | child → parent   | **rollup** (container done ⇐ children done) |
 | `depends_on`       | dependent → dep  | **gate** (blocks claim until deps done); a DAG (cycle-checked) |
-| grouping axes (e.g. `milestone`) | member → group | **group only**, no gate; derived views |
+| group edges (e.g. `milestone`) | member → group | **group only**, no gate; derived views |
 | `link` (`[[..]]`)  | undirected-ish   | **info**, cosmetic                     |
 
 The key insight: the decomposition tree could never express a *second*
 grouping (milestones group epics/stories that already have a parent). A typed
-**group axis** expresses it as an orthogonal edge, deleting the
+**group edge** expresses it as an orthogonal relationship, deleting the
 milestone-as-directory hack. Design shape: **one decomposition tree + N
-orthogonal grouping axes + the dependency DAG + info links.**
+orthogonal groups + the dependency DAG + info links.** (A group edge's anchor
+kind is declared in `groups`, §3.1.)
 
 **Storage-side = ownership.** Every edge is a frontmatter field on the node
 that *declares* it, pointing outward, and which side stores it encodes who owns
@@ -122,7 +142,7 @@ the relationship — which gives correct behavior under mutation for free:
 - `depends_on` on the **dependent** → the dependent owns its ordering; abandon a
   *dependency* and the edge is untouched, the ordering stays modeled, the dep
   just becomes `terminal` (non-blocking). Nothing to erase.
-- a grouping axis (`milestone`) on the **member** → same mechanic as `parent`.
+- a group edge (`milestone`) on the **member** → same mechanic as `parent`.
 
 A **milestone is both a kind and an edge**: a node of kind `milestone` (outside
 the decomposition spine — no `parent`, not a `unit`) that holds the release
@@ -133,8 +153,8 @@ grouping, gated only when explicitly released.
 
 So all four edge types are **one mechanism**: a directional field on the owning
 node, forward+inverse adjacency derived at read time, differentiated only by a
-semantics tag (`rollup` / `gate` / `group` / `info`). Declaring a new axis is a
-name + a tag; there is no "axis subsystem." (Precision: since `abandon` keeps
+semantics tag (`rollup` / `gate` / `group` / `info`). Declaring a new group is a
+name + a tag; there is no "group subsystem." (Precision: since `abandon` keeps
 the file, an abandoned child's `parent` edge persists — it stays in the child
 set but as `terminal`, satisfying the gate rather than leaving the set; it only
 truly vanishes on `archive`. Same end state — the owner controls participation.)
@@ -153,10 +173,27 @@ The lifecycle has a rework cycle (`review → changes-requested → in_progress 
 review`), so it is a **state machine**, not a DAG. (The DAG is `depends_on`,
 a separate graph — don't conflate the two.)
 
-```yaml
-lifecycle:
-  states: [todo, in_progress, review, approved, done, abandoned]
-```
+**The lifecycle is not authored — it is entirely emergent (R6).** There is no
+`lifecycle` block in the schema. The state set is *derived* as the union of every
+verb's `from`/`to`; **each kind's sub-machine** is derived from the transitions
+of verbs whose `applies-to` includes that kind; the initial state comes from the
+kind's `templates.<kind>.status` (§3.8); and `terminal` derives as below. So
+`task`, `epic`, and `milestone` each get a *different* lifecycle for free — a
+`task` runs `todo→in_progress→review→approved→done`, an `epic` only
+`todo→done` (no verb gives it the review states), a `milestone`
+`planned→in_progress→released` (§3.4). Sharing a label like `in_progress` across
+kinds is harmless — `self: {status: …}` reads one ticket's status; the per-kind
+sub-machine governs legality.
+
+Because nothing is declared, **validation is by derivation, not redundancy**:
+- **`lint` flags anomalies** — the from-less-sole-exit *freeze* (error, see
+  guardrail below); an **unreachable** state (no incoming transition and not a
+  template initial → typo or dead); a **reachable state with no exit** that is
+  newly terminal (surfaced so you notice — this catches e.g. a `qa` verb whose
+  target state has no exit verb).
+- **`planr lifecycle [kind]`** (fixed read tooling, like `board`/`graph`)
+  *renders* each kind's derived sub-machine as text + optional mermaid, so you
+  match it against intent by inspection — always-correct, never drift-prone.
 
 `approved` is a real state between `review` and `done` (R3): the review outcome
 is modeled as a transition, not a parsed free-text field, so the close gate is a
@@ -174,15 +211,13 @@ is commentary (`annotate` a note), or a project-specific schema extension, never
 a core status. A fixed-target `transition` also can't express "unblock to
 wherever you were," which is the tell it was never a state.
 
-Transitions are declared *on the verbs* that drive them (§3.4), not as a
-free-floating table. The state machine is **declared for derivation** (board
-coloring, "what's ready", lint) and **enforced only structurally** (via each
-verb's `require`).
+Transitions live *on the verbs* that drive them (§3.4), never as a free-floating
+table; the machine is **enforced only structurally** (via each verb's
+`require`).
 
 **`terminal` is derived, not declared.** A terminal state is one with no
-outgoing transition in the verb-declared graph — computed (and cached) at
-runtime, not listed by the user (a declared list can silently drift from the
-actual graph — a footgun). Note `archived` is deliberately **not** a lifecycle
+outgoing transition in the verb graph — computed (and cached) at runtime. Note
+`archived` is deliberately **not** a lifecycle
 state — archival is a storage relocation (live tree → git history, §5),
 orthogonal to status; an archived ticket keeps whatever terminal status it had.
 
@@ -281,6 +316,17 @@ verbs:
     applies-to: [epic, story]
     do: [ edge: { set: { milestone: $target } } ]
 
+  # --- milestone lifecycle (a non-spine `groups` kind, R6) ---
+  # created `planned` via templates.milestone.status; lifecycle emerges from these:
+  - name: start
+    applies-to: [milestone]
+    do: [ transition: { from: planned, to: in_progress } ]
+
+  - name: release
+    applies-to: [milestone]
+    require: { neighbors: { members: terminal } }
+    do: [ transition: { from: in_progress, to: released } ]
+
   - name: qa                            # example project extension
     applies-to: [task]
     require: { self: { status: approved } }
@@ -374,9 +420,9 @@ ever write the *forward* field from the *owner* — inverse roles (`children`,
 `members`) stay read-only derived and are never written, which is why edge
 mutation sidesteps the R9 naming question entirely.
 
-Frontmatter stays minimal (id, kind, status, parent, depends_on, axes). No
-generic attribute-writing primitive exists: everything that was tempted toward
-one is either a state (`transition`) or an edge (`edge`).
+Frontmatter stays minimal (id, kind, status, parent, depends_on, group edges).
+No generic attribute-writing primitive exists: everything that was tempted
+toward one is either a state (`transition`) or an edge (`edge`).
 
 **Commit boundary.** A verb produces exactly **one commit** (its net content
 mutation), so `commit` is the verb boundary, not a primitive. Bumping
@@ -494,9 +540,15 @@ workspace-initialization semantics):
 
 ```yaml
 templates:
-  task:  { status: todo, body: "## Goal\n\n## Acceptance\n\n## Notes\n" }
-  epic:  { status: todo, body: "## Goal\n\n## Context\n\n## Stories\n" }
+  task:      { status: todo,    body: "## Goal\n\n## Acceptance\n\n## Notes\n" }
+  epic:      { status: todo,    body: "## Goal\n\n## Context\n\n## Stories\n" }
+  milestone: { status: planned, body: "## Goal\n\n## Exit criteria\n" }
 ```
+
+The template's `status` is the kind's **initial state** — the one thing the
+derived lifecycle (§3.3) can't infer from verbs, since a from-less-free initial
+has no incoming transition. `milestone` starting `planned` is what seeds its
+`planned → in_progress → released` machine.
 
 `planr new <kind> <slug> <title>` reads `templates.<kind>` to scaffold, with the
 same `$var` substitution applied to the body.
@@ -565,7 +617,7 @@ in-repo (observable, same trust boundary as the code being built).
   (removes an arbitrary layer of indirection *and* removes the `planr new`
   prefix-allocation `flock` — one of the two operations that needed
   serialization; only trunk merge in `close` still serializes).
-- **All structure lives in frontmatter** (kind, `parent`, grouping axes,
+- **All structure lives in frontmatter** (kind, `parent`, group edges,
   `depends_on`, status). The directory no longer encodes the kind. Every
   grouping/view is derived at read time. **Multi-valued edges (`depends_on`,
   `link`) are stored as block lists (one target per line)**, not inline `[a, b]`
@@ -757,11 +809,14 @@ prose above yet except where noted.
   ("∀ nodes *where status==review*, has Validation") needs a **guarded
   quantifier** the require grammar excludes. *Agreed. Fix: shared operators +
   a per-state guard wrapper for the invariant form — not "identical grammar."*
-- **R6 — Per-kind lifecycle / non-spine kinds unspecified (§3.3, §3.1).**
-  Milestone's `planned→in_progress→released` has nowhere in the single global
-  `lifecycle.states`, and `kinds` adjacency can't declare a non-spine kind
-  (`parents: []` collides with epic-as-root). *Agreed; milestone-as-kind is
-  asserted but not expressible — needs per-kind lifecycle + a grouping-kind role.*
+- **R6 — Per-kind lifecycle / non-spine kinds. ✅ RESOLVED (§3.1, §3.3).**
+  Non-spine kinds go in a separate **`groups`** key (§3.1), which materializes a
+  grouping node-kind + its group edge, dissolving the `parents: []`/epic
+  collision. Per-kind lifecycle is **not declared — it's derived** from the
+  verbs that `apply-to` each kind (like `terminal`), with the initial state from
+  `templates.<kind>.status`. The authored `lifecycle` block disappears entirely;
+  `lint` flags anomalies and `planr lifecycle [kind]` renders the derived
+  machine (which also settles the `qa`-state nit).
 - **R7 — Ref/actor model. ✅ RESOLVED (§4.1).** Two lanes: a **branch lane**
   (`claim`/`submit`/`approve`/`request-changes` + claimed-task edits) — per-task,
   parallel, lock-free; and a **trunk lane** (`new`/`close`/`archive`/`release` +
@@ -798,8 +853,9 @@ prose above yet except where noted.
 
 ### Nits (cheap fixes)
 
-- `qa` example transitions `to: qa`, not in `lifecycle.states` (§3.4/§3.3) — a
-  project adding a verb must add its state.
+- ~~`qa` example transitions `to: qa`~~ — moot under R6: states are derived from
+  verbs, so `qa` needs no declaration; if it has no exit verb, `lint` flags it as
+  a reachable-but-terminal state (§3.3) rather than an undeclared one.
 - `$branch` is undefined at `new`/creation time (§3.7) — template-var
   availability is context-dependent.
 - `sections: [validation]` checks *existence*, not content (§3.6) — consistent
