@@ -301,7 +301,7 @@ verbs:
   - name: close                         # unit variant: merges a branch
     applies-to: [task]
     require: { self: { status: approved } }   # read from the branch (§4.1)
-    do: [ merge, transition: { from: approved, to: done }, cleanup ]  # flip on TRUNK, post-merge
+    do: [ transition: { from: approved, to: done }, merge, cleanup ]  # flip on the branch tip, THEN merge onto trunk
 
   - name: close                         # container variant: trunk-local gate, no merge
     applies-to: [epic, story]
@@ -363,11 +363,11 @@ Decisions baked in:
 
 - **`do`** is a single ordered list of primitives. Order is load-bearing:
   `claim` runs git actions *before* the state flip (establish the branch, then
-  commit the flip on it); `close` runs `merge` *before* its flip (merge the
-  `approved` branch into trunk, then flip the merged copy `approved → done` on
-  **trunk** — never committing to the branch, which the worker still has checked
-  out; git forbids one branch in two worktrees). A fixed field-order model can't
-  express both orders, so ordering lives in the sequence.
+  commit the flip on it); `close` runs its flip *before* the `merge` (flip
+  `approved → done` on the branch tip, then merge that into trunk, so `done`
+  rides in *with* the work as one integration — never a trailing trunk-only
+  edit). A fixed field-order model can't express both orders, so ordering lives
+  in the sequence.
 - **`require`** is a **separate key**, not a `do` item — it is a precondition,
   evaluated before any side effect. Its vocabulary is structural predicates
   only: `{field: value}` on self (`status: approved`) and aggregates over
@@ -732,11 +732,12 @@ Every verb lives in one of **two lanes**, which is the whole concurrency model:
 **`close` bridges the lanes** and dissolves the apparent chicken-and-egg: it
 reads the task's `approved` state *from its branch* (`git show
 plan/<slug>:tickets/<slug>.md` — v1's board already reads branches this way),
-gates on it, **merges the branch into trunk, then flips the merged copy
-`approved → done` on trunk** — never committing to the branch itself (the worker
-still holds it checked out; git forbids one branch in two worktrees). The
-approval rides into trunk *via the merge*; trunk never needed to see it first.
-`cleanup` then removes the worktree and branch.
+gates on it, **flips `approved → done` on the branch tip, then merges that into
+trunk** — so the terminal state rides into trunk *with* the work, as one
+integration, never a trailing trunk-only edit. The flip is built as a commit on
+the branch tip and merged in; it never checks out the branch or moves its ref,
+so the one-branch-one-worktree rule never binds. `cleanup` then removes the
+worktree and branch.
 
 Two rules make it airtight:
 
@@ -1007,8 +1008,9 @@ seams) + smaller items; all now fixed.
   `applies-to` **`milestone`** so milestones can be retired (§3.4); **`link`** is
   clarified as body `[[..]]` prose, *not* a frontmatter edge / not in `edge`'s
   domain — so its absence from the verb set is not a CLI-completeness gap
-  (§3.2/§3.5); **`close`** merges then flips `done` on **trunk** (not the
-  worker-held branch — git's one-checkout rule) (§3.4/§4.1).
+  (§3.2/§3.5); **`close`** flips `approved → done` on the branch tip, *then*
+  merges that into trunk — the terminal state rides in with the work as one
+  integration, not a trailing trunk-only edit (§3.4/§4.1).
 - **Validated by round 2 (no change):** storage-side ownership + the tightened
   R2 argument (a claimed task's deps are `done`, and `done` is terminal/
   un-abandonable, so claimed tasks never face an abandoned dep); verdict-as-state;
