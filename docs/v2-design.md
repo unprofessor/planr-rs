@@ -161,11 +161,20 @@ truly vanishes on `archive`. Same end state — the owner controls participation
 
 ```yaml
 edges:
-  parent:     rollup     # on child
-  depends_on: gate       # on dependent
-  milestone:  group      # on member; orthogonal, no gate
+  parent:     rollup     # on child;      inverse role: children
+  depends_on: gate       # on dependent;  inverse role: dependents
+  milestone:  group      # on member;     inverse role: members  (declared in `groups`)
   link:       info       # cosmetic
 ```
+
+**Inverse-role names (R9).** `neighbors` (§3.6) traverses an edge in either
+direction, so each edge registers a **forward name** (the frontmatter field, on
+the owner) and an **inverse-role name** for reading the other way: `parent ↔
+children`, `milestone ↔ members`, `depends_on ↔ dependents`. Built-ins are
+fixed; a group edge declares its inverse in `groups` (`{inverse: members}`,
+§3.1). `neighbors` may name either direction; `lint` validates the name against
+this registry (so `neighbors: {children: terminal}` resolves, and a typo does
+not).
 
 ### 3.3 Lifecycle — a state machine (not a DAG)
 
@@ -432,6 +441,21 @@ unwind-on-failure: a verb that fails before its commit leaves nothing behind;
 the only partial-state case is `merge`/`cleanup` failing *after*, which is the
 existing rebase-guidance path.
 
+**Git-primitive contracts (R11).** Each is a defined operation with a defined
+failure mode:
+- `new-worktree` / `branch` — create `../wt-<slug>` + `plan/<slug>` off trunk;
+  fail (verb aborts, nothing committed) if the branch/worktree already exists.
+- `merge` — fast-forward-or-merge the task branch into trunk; on conflict,
+  **abort and print rebase guidance** (v1 behavior) — trunk is left untouched.
+- `cleanup` — remove the merged worktree and delete its branch; idempotent
+  (a missing worktree/branch is a no-op, not an error), so a re-run after a
+  partial failure completes.
+- `archive` — `git rm` the ticket file in a trailer-carrying commit (§5); gated
+  on `self: {status: terminal}`, so it never removes in-flight work.
+Only `merge` can leave partial state (a conflict mid-integration), and it is the
+one case routed to human rebase — every other git primitive is
+create-or-abort / idempotent.
+
 ### 3.6 `require` — the gate predicate vocabulary
 
 A predicate is conceptually a **pure, referentially-transparent boolean check**
@@ -457,7 +481,10 @@ require:
 
 Entries combine by **implicit AND**. Operators are validated by `lint` (an
 unknown operator is a lint error — that is what makes "reserved" real); so are
-arguments (an edge/section/field the schema doesn't define). Coverage proof:
+arguments (an edge/section/field the schema doesn't define). `sections` checks
+**existence, not content** (a worker satisfies it with an empty `## Validation`)
+— deliberate: content quality is the reviewer's semantic call, not the tool's
+(the enforce-structure-never-semantics pin). Coverage proof:
 
 | verb | require |
 |---|---|
@@ -542,7 +569,13 @@ evaluating a DSL). The variable namespace is bounded and documented; starting
 set: `$message` (CLI-supplied), `$slug`, `$kind`, `$title`, `$date`, `$actor`,
 `$branch`.
 
-> **Open:** finalize the `$var` namespace.
+**Availability is context-dependent.** Not every var is defined for every verb:
+`$branch` is undefined during `new`/creation (the branch is the claim, which
+happens later), so template bodies must not reference it. A verb referencing a
+var not in *its* context is a `lint` error — the same reserved-name discipline
+as operators.
+
+> **Open:** finalize the `$var` namespace and each verb's available subset.
 
 ### 3.8 Creation: `new` is fixed tooling + a `templates` schema key
 
@@ -585,10 +618,13 @@ accidentally corrupts the graph — a far weaker adversary.
 
 **Integrity via git tamper-evidence: detect, don't prevent.** The verb engine
 snapshots git state, runs the hook, and verifies the hook left no unexpected
-modification to `.plan/`; if the tree came back dirty in a way the verb didn't
-author, it aborts and reports. Git makes any write *visible*, and the engine
-refuses to build on an unauthored change — a *practical* read-only guarantee
-without the (theoretically impossible) *prevention* one. No bwrap, no container,
+modification to **tracked** `.plan/` files; if the tree came back dirty in a way
+the verb didn't author, it aborts and reports. (The derived index is
+**git-ignored** and lives outside the tracked set — §5.1 — so a legitimate index
+rebuild during a hook does not trip the check; only tracked ticket/schema files
+are watched.) Git makes any write *visible*, and the engine refuses to build on
+an unauthored change — a *practical* read-only guarantee without the
+(theoretically impossible) *prevention* one. No bwrap, no container,
 no shimmed `planr` required; git is already the substrate. An **opt-in sandbox**
 (`hook: {run: "./ci.sh", sandbox: true}` → bwrap with ro-mounted `.plan/` where
 available) is defense-in-depth, never required. The scripting-engine route (an
@@ -735,11 +771,19 @@ defined once here: **the index is a disposable, git-ignored cache derived from
 the source of truth — never authoritative.** Live tickets are derived by
 scanning `tickets/` (as v1's board already does); cold tickets by walking
 `git log --diff-filter=D -- tickets/`. Delete it and it rebuilds; it is never
-committed and never merges. For most scales no persisted index is needed at all
-— the graph is built in memory per invocation; the persisted cache is a
-transparent optimization for when scan cost is *measured* to hurt (open
-question #8). This is what preserves both "derive, don't store" and fast queries
-without a database.
+committed and never merges.
+
+**Two different costs, honestly (R10).** The *live* scan is O(active work) —
+bounded and cheap; for most projects no persisted index is needed at all (build
+in memory per invocation). The *cold-archive* rebuild is O(lifetime history),
+**not** O(live) — walking every retirement commit. That's why the archive index
+is the one place a **persisted** cache earns its keep: because history is
+append-only, the index is maintained **incrementally** (each retirement appends
+one entry → steady-state O(new retirements)); the full O(history) walk happens
+only on a cold rebuild (cache lost / first build). Even persisted it stays
+disposable — losing it costs a one-time rebuild, never data (open question #8
+tracks the persistence trigger). This preserves both "derive, don't store" and
+fast queries without a database.
 
 ## 6. Why not a relational DB
 
@@ -757,13 +801,22 @@ derived index (§5.1), without paying the DB's costs.
 
 ## 7. Backward compatibility & migration
 
-- The **default schema** encodes v1: `kinds: [epic, story, task]`, the v1 verbs,
-  the v1 lifecycle. Existing backlogs run unchanged. *(See R8: "byte-for-byte" is
-  not literally true — the recommended default carries two intentional bug-fixes;
-  a separate **strict-v1 preset** is the true byte-for-byte regression baseline.)*
-- Migration from `epics/ stories/ tasks/` dirs to flat `tickets/` is mechanical
-  (move files, drop numeric prefix, kind already in frontmatter). A `planr
-  migrate` verb can do it.
+**Two presets, so "compatible" is not overstated (R8):**
+
+- **`v1-strict`** — byte-for-byte v1: container-close gates on children `== done`
+  (not `terminal`), and no `submit`/`approve`/`request-changes` verbs (those
+  steps stay manual, as in v1). This is the **regression baseline** — its output
+  must match v1 exactly, which is what makes the generalization testable.
+- **default (recommended)** — v1's structure plus the two intentional bug-fixes:
+  container-close gates on `terminal` (an abandoned child no longer deadlocks its
+  parent), and the manual review steps become real verbs. Behaviorally a
+  superset of v1, not identical to it — hence a *separate* preset from
+  `v1-strict`.
+
+Both share `kinds: [epic, story, task]`; they differ only in the two verbs/gates
+above. Migration from `epics/ stories/ tasks/` dirs to flat `tickets/` is
+mechanical (move files, drop numeric prefix, kind already in frontmatter); a
+`planr migrate` command does it.
 
 ## 8. Open questions
 
@@ -842,23 +895,24 @@ prose above yet except where noted.
   file is branch-authoritative until merge). Also settles the deferred
   concurrency pressure-test.
 
-### Real but smaller
+### Real but smaller — all resolved
 
-- **R8 — "Byte-for-byte v1" (§2/§7) is false.** We changed container-close
-  (`done`→`terminal`) and turned manual edits into verbs. *Fix: split a
-  **strict-v1 preset** (byte-for-byte, the regression baseline) from the
-  **recommended default** (with the two intentional bug-fixes).*
-- **R9 — `neighbors` argument namespace (§3.6).** `children`/`members` are
-  *inverse-role* names absent from the `edges` map (which declares `parent`).
-  *Fix: register inverse-role names.*
-- **R10 — Cold-search index is O(history), not O(live) (§5.1).** Undersold.
-  *Partly agreed; bounded — history is append-only, so the index is
-  incrementally maintained (steady-state O(new)); the O(history) walk is a rare
-  cold rebuild. This is the one place a persisted cache is genuinely justified.*
-- **R11 — Primitive contracts thin (§3.5).** `merge`/`cleanup`/`archive` lack
-  precise semantics / partial-failure behavior; `release` isn't decomposed.
-  *Agreed as a tightening (not a design hole), except the R1 half — the set was
-  not closed.*
+- **R8 — "Byte-for-byte v1" was false. ✅ RESOLVED (§7).** Two presets:
+  **`v1-strict`** (byte-for-byte regression baseline: `done`-gated close, manual
+  review steps) vs. the **recommended default** (a behavioral superset with the
+  two bug-fixes).
+- **R9 — `neighbors` inverse-role names. ✅ RESOLVED (§3.2).** Each edge
+  registers a forward name and an inverse-role name (`parent↔children`,
+  `milestone↔members`, `depends_on↔dependents`); group edges declare their
+  inverse in `groups`; `lint` validates `neighbors` args against the registry.
+- **R10 — Cold-index cost. ✅ RESOLVED (§5.1).** Now stated honestly: live scan
+  is O(active), cold-archive rebuild is O(history); the archive index is
+  maintained incrementally (steady-state O(new)), and it is the one place a
+  persisted (still-disposable) cache is justified.
+- **R11 — Primitive contracts. ✅ RESOLVED (§3.5).** `merge` (conflict → abort +
+  rebase guidance), `cleanup` (idempotent), `archive` (`git rm`, gated terminal),
+  `new-worktree`/`branch` (create-or-abort) now have defined semantics and
+  failure modes; only `merge` can leave partial state.
 
 ### Pushed back on
 
@@ -867,25 +921,30 @@ prose above yet except where noted.
   archiving an already-terminal child doesn't change the parent's closeability.
   Not a real problem.
 
-### Nits (cheap fixes)
+### Nits — resolved
 
-- ~~`qa` example transitions `to: qa`~~ — moot under R6: states are derived from
-  verbs, so `qa` needs no declaration; if it has no exit verb, `lint` flags it as
-  a reachable-but-terminal state (§3.3) rather than an undeclared one.
-- `$branch` is undefined at `new`/creation time (§3.7) — template-var
-  availability is context-dependent.
-- `sections: [validation]` checks *existence*, not content (§3.6) — consistent
-  with the structural pin, weaker than the prose implies; state it.
-- Tamper-check (§3.9) vs. index location (§5.1) — the index must live outside the
-  tamper-checked `.plan/` path (or be excluded) or a legit rebuild trips it.
-- Naming: `neighbors` reads bidirectional but means one edge/one direction;
-  `link` ("undirected-ish, cosmetic") is too vague for an agent to place vs
-  `depends_on`.
+- ~~`qa` transitions `to: qa`~~ — moot under R6 (states derived; `lint` flags a
+  reachable-but-terminal state, §3.3).
+- ~~`$branch` undefined at `new`~~ — §3.7: template-var availability is
+  context-dependent; referencing an out-of-context var is a `lint` error.
+- ~~`sections` checks existence not content~~ — §3.6: stated, and it's the
+  structural pin working as intended (content quality is the reviewer's call).
+- ~~Tamper-check vs. index location~~ — §3.9: the check watches only *tracked*
+  `.plan/` files; the git-ignored index is outside that set.
+- **Naming (residual):** `link` ("undirected-ish, cosmetic") is still vague vs
+  `depends_on` — worth a one-line "when to use which" in a future edit. `neighbors`
+  kept (its inverse-role args, §3.2, make the direction explicit).
 
 ### Validated as sound (no change)
 
 Storage-side = ownership (§3.2); milestone-as-group-edge removing the epic-07
 directory hack; needs-vs-decomposition asymmetry (§3.6, confirmed against v1
 `close_cmd.rs`); per-kind available actions from `applies-to` (§3.4);
-git-history-as-archive with commit trailers (§5). The design's *spine* holds; the
-*mutation/enforcement actuators* (R1, R3, R7) are the unfinished part.
+git-history-as-archive with commit trailers (§5).
+
+### Status
+
+All load-bearing findings (R1–R7) and all smaller items (R8–R11) resolved; nits
+addressed bar one residual naming note (`link` guidance). The *spine* (validated
+above) and the *mutation/enforcement actuators* (edge primitive, verdict-as-
+state, two-lane refs) now both hold.
