@@ -84,9 +84,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Show the backlog board (trunk + in-flight branches)
+    /// Show the backlog board (tickets + in-flight branches)
     Board {
-        /// Git ref to read (default: trunk; empty string = working tree)
+        /// Commit-ish to read tickets from, e.g. main, HEAD, HEAD~2, a
+        /// branch, or a SHA (default: the current on-disk working tree)
         r#ref: Option<String>,
     },
 
@@ -161,9 +162,8 @@ fn main() {
     match cli.command {
         Command::Board { r#ref } => {
             let tickets = match r#ref {
-                Some(ref_) if ref_.is_empty() => board::read_working_tree_tickets(&cli.plan_dir),
-                Some(ref_) => board::read_ref_tickets(&ref_, &cli.plan_dir),
-                None => board::read_ref_tickets(&cli.trunk, &cli.plan_dir),
+                Some(ref_) if !ref_.is_empty() => board::read_ref_tickets(&ref_, &cli.plan_dir),
+                _ => board::read_working_tree_tickets(&cli.plan_dir),
             };
             let branches = board::read_in_flight_branches(&cli.plan_dir);
             let input = board::BoardInput {

@@ -279,6 +279,46 @@ fn test_e2e_board_summary() {
     assert!(out.contains("## tasks"), "board missing tasks");
 }
 
+#[test]
+fn test_e2e_board_defaults_to_working_tree() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    // Add a task on disk but do NOT commit it -- it exists only in the
+    // working tree, not in any committed ref.
+    planr_ok(td.path(), &["new", "task", "wip", "Work In Progress", "s1"]);
+
+    // Default (no ref) reads the current on-disk tree: the uncommitted task
+    // is visible.
+    let working = planr_ok(td.path(), &["board"]);
+    assert!(
+        working.lines().any(|l| {
+            let fields: Vec<_> = l.split_whitespace().collect();
+            fields.first() == Some(&"wip")
+        }),
+        "working-tree board should show uncommitted task: {working}"
+    );
+
+    // An explicit commit-ish reads that ref, where the task was never
+    // committed, so it is absent.
+    let committed = planr_ok(td.path(), &["board", "main"]);
+    assert!(
+        !committed.lines().any(|l| {
+            let fields: Vec<_> = l.split_whitespace().collect();
+            fields.first() == Some(&"wip")
+        }),
+        "main board should not show uncommitted task: {committed}"
+    );
+    // The committed task t1 is still there under the explicit ref.
+    assert!(
+        committed.lines().any(|l| {
+            let fields: Vec<_> = l.split_whitespace().collect();
+            fields.first() == Some(&"t1")
+        }),
+        "main board should show committed task: {committed}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Scenario: abandon without review
 // ---------------------------------------------------------------------------
