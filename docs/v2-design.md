@@ -52,8 +52,11 @@ These are the constraints that keep "configurable" from becoming "unbounded":
   two agents can silently diverge unless both load and read the same schema
   identically. So: keep the schema tiny, ship **named presets** for the common
   cases, and make bespoke schemas the exception.
-- **Default schema reproduces v1 byte-for-byte**, so existing backlogs Just
-  Work and the default doubles as a regression test of the generalization.
+- **Compatibility is outcome-equivalence, not byte-identity** (round-2). The
+  default schema runs existing v1 backlogs and produces the same *gate/merge
+  outcomes* — but it is not byte-for-byte v1 (verdict-as-state alone guarantees
+  that, §3.3), and "byte-for-byte" is not a goal. The regression test compares
+  outcomes on migrated backlogs. See §7 for the (non-byte-identical) presets.
 - **CLI completeness.** Every intended operation by every expected actor
   (leader/worker/reviewer) is achievable as a verb. Hand-editing files stays
   *permitted* (it's git — can't and shouldn't be prevented) but is the fallback,
@@ -122,7 +125,13 @@ grouping or informational:
 | `parent`           | child → parent   | **rollup** (container done ⇐ children done) |
 | `depends_on`       | dependent → dep  | **gate** (blocks claim until deps done); a DAG (cycle-checked) |
 | group edges (e.g. `milestone`) | member → group | **group only**, no gate; derived views |
-| `link` (`[[..]]`)  | undirected-ish   | **info**, cosmetic                     |
+| `link` (`[[..]]`)  | undirected-ish   | **info**, cosmetic; **body prose, not a frontmatter edge** |
+
+`parent`, `depends_on`, and group edges are **frontmatter fields** written by the
+`edge` primitive (§3.5). `link` is different: it is a `[[slug]]` reference in the
+**body**, authored inline like any prose (via an `annotate` body or ordinary
+editing) and *derived* by parsing — so it needs no verb and no `edge` op, and its
+absence from the `edge` primitive is not a CLI-completeness gap (round-2).
 
 The key insight: the decomposition tree could never express a *second*
 grouping (milestones group epics/stories that already have a parent). A typed
@@ -268,7 +277,7 @@ verbs:
   - name: claim
     applies-to: [task]
     require: { neighbors: { depends_on: done } }   # deps must have SUCCEEDED, not merely be terminal
-    do: [ new-worktree, branch, transition: { to: in_progress } ]
+    do: [ new-worktree, branch, transition: { from: todo, to: in_progress } ]
 
   - name: review
     applies-to: [task]
@@ -277,7 +286,7 @@ verbs:
   - name: submit                        # worker: "ready for review"
     applies-to: [task]
     require: { sections: [validation] } # a ## Validation section exists (structural)
-    do: [ transition: { to: review } ]
+    do: [ transition: { from: in_progress, to: review } ]
 
   - name: approve                       # reviewer: outcome is a STATE, not a field
     applies-to: [task]
@@ -291,20 +300,20 @@ verbs:
 
   - name: close                         # unit variant: merges a branch
     applies-to: [task]
-    require: { self: { status: approved } }
-    do: [ transition: { from: approved, to: done }, merge, cleanup ]
+    require: { self: { status: approved } }   # read from the branch (§4.1)
+    do: [ merge, transition: { from: approved, to: done }, cleanup ]  # flip on TRUNK, post-merge
 
   - name: close                         # container variant: trunk-local gate, no merge
     applies-to: [epic, story]
     require: { neighbors: { children: terminal } }   # abandoned child is a resolved decision
-    do: [ transition: { to: done } ]
+    do: [ transition: { from: todo, to: done } ]
 
-  - name: abandon
-    applies-to: [task, story, epic]
+  - name: abandon                       # from-less: the "any non-terminal state" verb
+    applies-to: [task, story, epic, milestone]
     do: [ annotate: { section: Abandoned, body: $message }, transition: { to: abandoned } ]
 
   - name: archive                       # relocate to history; NOT a status change
-    applies-to: [task, story, epic]
+    applies-to: [task, story, epic, milestone]
     require: { self: { status: terminal } }
     do: [ archive ]
 
@@ -354,9 +363,11 @@ Decisions baked in:
 
 - **`do`** is a single ordered list of primitives. Order is load-bearing:
   `claim` runs git actions *before* the state flip (establish the branch, then
-  commit the flip on it); `close` runs the flip *before* `merge` (flip to
-  `done` on the branch, then merge that flip). A fixed field-order model can't
-  express both, so ordering lives in the sequence.
+  commit the flip on it); `close` runs `merge` *before* its flip (merge the
+  `approved` branch into trunk, then flip the merged copy `approved → done` on
+  **trunk** — never committing to the branch, which the worker still has checked
+  out; git forbids one branch in two worktrees). A fixed field-order model can't
+  express both orders, so ordering lives in the sequence.
 - **`require`** is a **separate key**, not a `do` item — it is a precondition,
   evaluated before any side effect. Its vocabulary is structural predicates
   only: `{field: value}` on self (`status: approved`) and aggregates over
@@ -366,14 +377,17 @@ Decisions baked in:
   `close` overloads (merge on units, gate-only on containers). The CLI surface
   stays `planr close <slug>`; the engine resolves `(name, kind-of-slug)` to one
   definition. Overlapping `applies-to` for one name is a lint error.
-- **`from`** on a transition is optional, but a from-less transition originates
-  from **any non-terminal state** (never from a terminal one — terminal states
-  are absorbing, which is what keeps `terminal` derivable, R4). Rework verbs that
-  must originate from a specific state (`approve`/`request-changes` from
-  `review`, `close` from `approved`) declare `from` explicitly; otherwise a
-  `request-changes` could fire from `todo` (the rework-guard footgun, R4).
-  Prefer a structural `require`
-  over `from` where a graph fact already implies the state.
+- **`from` and `require` are orthogonal, and `from` is the norm (R4/round-2).**
+  `from` declares a transition's *source state* — structural, and what makes the
+  per-kind sub-machine well-formed and `terminal` derivable (§3.3). **Every
+  progression verb that is the sole exit of its source state must declare
+  `from`** — that's `claim` (`todo`), `submit` (`in_progress`), container-`close`
+  (`todo`), `approve`/`request-changes` (`review`), `close` (`approved`), the
+  milestone verbs. `from`-less is *not* the ergonomic default; it is reserved for
+  the **"any non-terminal state"** verb — `abandon` — which is never a sole exit,
+  so it can't freeze a state. (This corrects an earlier "prefer `require` over
+  `from`" framing: `require` adds a *precondition*, it never substitutes for the
+  structural `from`.)
 - **Per-kind capability is derivable**: an epic offers no `claim` because no
   `claim` verb applies to it. The board can list available actions per ticket
   for free.
@@ -412,7 +426,8 @@ is *commentary*, not a gate:
 
 **`edge`** writes a **forward edge field on the owning node** (R1) —
 `set` (single-valued: `parent`, `milestone`), `add`/`remove` (multi-valued:
-`depends_on`, `link`):
+`depends_on`). `link` is *not* in `edge`'s domain — it is body `[[..]]` prose,
+authored inline (§3.2), not a frontmatter edge:
 
 ```yaml
 - edge: { set:    { parent: $target } }
@@ -587,11 +602,16 @@ declared in a dedicated schema key (working name **`templates`**, echoing v1's
 workspace-initialization semantics):
 
 ```yaml
-templates:
-  task:      { status: todo,    body: "## Goal\n\n## Acceptance\n\n## Notes\n" }
+templates:                            # one entry per kind — spine kinds AND groups
   epic:      { status: todo,    body: "## Goal\n\n## Context\n\n## Stories\n" }
+  story:     { status: todo,    body: "## Goal\n\n## Context\n\n## Tasks\n" }
+  task:      { status: todo,    body: "## Goal\n\n## Acceptance\n\n## Notes\n" }
   milestone: { status: planned, body: "## Goal\n\n## Exit criteria\n" }
 ```
+
+Every kind needs a `templates` entry — it is the sole source of the kind's
+**initial state**, so a kind without one has no state to start in and nothing to
+scaffold; `lint` flags a kind missing its template.
 
 The template's `status` is the kind's **initial state** — the one thing the
 derived lifecycle (§3.3) can't infer from verbs, since a from-less-free initial
@@ -670,10 +690,11 @@ in-repo (observable, same trust boundary as the code being built).
   serialization; only trunk merge in `close` still serializes).
 - **All structure lives in frontmatter** (kind, `parent`, group edges,
   `depends_on`, status). The directory no longer encodes the kind. Every
-  grouping/view is derived at read time. **Multi-valued edges (`depends_on`,
-  `link`) are stored as block lists (one target per line)**, not inline `[a, b]`
-  — so concurrent `add-dep` of *different* targets land on different lines and
-  git auto-merges (see optimistic concurrency below).
+  grouping/view is derived at read time. **The multi-valued edge `depends_on` is
+  stored as a block list (one target per line)**, not inline `[a, b]` — so
+  concurrent `add-dep` of *different* targets land on different lines and git
+  auto-merges (see optimistic concurrency below). (`link` is *not* a frontmatter
+  edge — see §3.2.)
 - **Optimistic concurrency, git as the detector.** Edge mutation (`reparent`
   etc., §3.5) edits a ticket's frontmatter on trunk; if that ticket is also
   claimed, its file lives on a branch too. No lock and no version field: **git
@@ -711,8 +732,11 @@ Every verb lives in one of **two lanes**, which is the whole concurrency model:
 **`close` bridges the lanes** and dissolves the apparent chicken-and-egg: it
 reads the task's `approved` state *from its branch* (`git show
 plan/<slug>:tickets/<slug>.md` — v1's board already reads branches this way),
-gates on it, flips to `done` on the branch, then merges into trunk. The approval
-rides into trunk *via the merge*; trunk never needed to see it first.
+gates on it, **merges the branch into trunk, then flips the merged copy
+`approved → done` on trunk** — never committing to the branch itself (the worker
+still holds it checked out; git forbids one branch in two worktrees). The
+approval rides into trunk *via the merge*; trunk never needed to see it first.
+`cleanup` then removes the worktree and branch.
 
 Two rules make it airtight:
 
@@ -801,27 +825,37 @@ derived index (§5.1), without paying the DB's costs.
 
 ## 7. Backward compatibility & migration
 
-**Two presets, so "compatible" is not overstated (R8):**
+**Compatibility is outcome-equivalence, not byte-identity (R8/round-2).**
+"Byte-for-byte v1" is impossible by construction: v1 has no `approved` state and
+gates `close` by parsing free-text `verdict:` from a `## Review` body
+(`extract_last_review_verdict` in `close_cmd.rs`) — the exact semantic
+content-parse the v2 `require` vocabulary deliberately *cannot* do (§3.6). Since
+verdict-as-state (R3) is core to v2, reproducing v1's file/history exactly is a
+non-goal. So there is **one recommended preset**, and compatibility means the
+same *gate/merge outcomes* on a migrated backlog:
 
-- **`v1-strict`** — byte-for-byte v1: container-close gates on children `== done`
-  (not `terminal`), and no `submit`/`approve`/`request-changes` verbs (those
-  steps stay manual, as in v1). This is the **regression baseline** — its output
-  must match v1 exactly, which is what makes the generalization testable.
-- **default (recommended)** — v1's structure plus the two intentional bug-fixes:
-  container-close gates on `terminal` (an abandoned child no longer deadlocks its
-  parent), and the manual review steps become real verbs. Behaviorally a
-  superset of v1, not identical to it — hence a *separate* preset from
-  `v1-strict`.
+- **default (recommended)** — `kinds: [epic, story, task]`, the v2 verbs and
+  derived lifecycle. Relative to v1 it carries two intentional fixes: container
+  `close` gates on `terminal` (an abandoned child no longer deadlocks its parent)
+  and the manual review steps (`status: review`, hand-written verdict) become the
+  `submit`/`approve`/`request-changes` verbs with an `approved` state.
+- A more conservative variant (container-close on `done`, review left as manual
+  edits) is expressible as a schema, but is *not* byte-for-byte v1 either — the
+  verdict mechanism still differs. A project that genuinely needs v1's exact
+  section-parse can put it in a `do` hook (the escape hatch), accepting that this
+  steps outside the schema-as-data model.
 
-Both share `kinds: [epic, story, task]`; they differ only in the two verbs/gates
-above. Migration from `epics/ stories/ tasks/` dirs to flat `tickets/` is
+The **regression test** compares outcomes (which tickets gate/merge, given the
+same inputs) between v1 and the v2 default on migrated backlogs — not byte
+identity. Migration from `epics/ stories/ tasks/` dirs to flat `tickets/` is
 mechanical (move files, drop numeric prefix, kind already in frontmatter); a
 `planr migrate` command does it.
 
 ## 8. Open questions
 
-1. ~~Primitive set completeness~~ — **resolved.** Nine primitives (§3.5), closed
-   for all known verbs; `annotate` added, `commit` is the verb boundary.
+1. ~~Primitive set completeness~~ — **resolved.** Ten primitives (§3.5)
+   — `transition`/`annotate`/`edge` (content), `new-worktree`/`branch`/`merge`/
+   `cleanup`/`archive` (git), `brief`, `hook`; `commit` is the verb boundary.
 2. ~~`new`/scaffold~~ — **resolved.** `new` is fixed tooling; per-kind
    `templates` schema key (§3.7); no `scaffold` primitive.
 3. ~~`require` predicate vocabulary~~ — **resolved** (§3.6). Three reserved
@@ -897,10 +931,10 @@ prose above yet except where noted.
 
 ### Real but smaller — all resolved
 
-- **R8 — "Byte-for-byte v1" was false. ✅ RESOLVED (§7).** Two presets:
-  **`v1-strict`** (byte-for-byte regression baseline: `done`-gated close, manual
-  review steps) vs. the **recommended default** (a behavioral superset with the
-  two bug-fixes).
+- **R8 — "Byte-for-byte v1" was false. ✅ RESOLVED (§7)** — *superseded by B2
+  (round 2), which went further:* "byte-for-byte" is dropped entirely (v1's
+  verdict-parse isn't expressible in `require`); compatibility is
+  outcome-equivalence, one recommended preset. See §9a/B2.
 - **R9 — `neighbors` inverse-role names. ✅ RESOLVED (§3.2).** Each edge
   registers a forward name and an inverse-role name (`parent↔children`,
   `milestone↔members`, `depends_on↔dependents`); group edges declare their
@@ -942,9 +976,47 @@ directory hack; needs-vs-decomposition asymmetry (§3.6, confirmed against v1
 `close_cmd.rs`); per-kind available actions from `applies-to` (§3.4);
 git-history-as-archive with commit trailers (§5).
 
+### Status (round 1)
+
+All round-1 findings (R1–R11) resolved. But a second pass then found two
+blockers the *rework itself* introduced — see below.
+
+## 9a. Fresh-eyes review findings (round 2, 2026-08-24)
+
+A second cold review checked whether the round-1 resolutions held and whether the
+heavy rework introduced new contradictions. Two blockers (both in the rework
+seams) + smaller items; all now fixed.
+
+- **B1 — terminal-derivation contradicted the default verbs. ✅ FIXED (§3.3/§3.4).**
+  `claim`/`submit`/container-`close` were written `from`-less but are the *sole
+  exits* of `todo`/`in_progress`/`todo` — which the §3.3 derivation marks
+  terminal and the lint guardrail freezes, so the default schema failed its own
+  lint and the §3.3 worked example silently mislabeled those verbs "explicit."
+  Fix: **progression verbs declare explicit `from`; `from`-less is reserved for
+  the "any non-terminal" verb (`abandon`).** Corrects the earlier "prefer
+  `require` over `from`" framing — `from` is structural (source state), `require`
+  is an orthogonal precondition; the former is the norm.
+- **B2 — "byte-for-byte v1" was self-contradictory and unbuildable. ✅ FIXED
+  (§2/§7).** §2 claimed the default is byte-for-byte while §7 said it's a
+  superset; and `v1-strict` couldn't reproduce v1's free-text `verdict:` parse
+  within the `require` vocabulary. Fix: **drop "byte-for-byte" entirely** —
+  compatibility is *outcome-equivalence* on migrated backlogs; one recommended
+  preset; v1's exact section-parse is only reachable via a `do` hook.
+- **Smaller (all fixed):** primitive count 9→**ten** (§8); added the **`story`
+  template** and stated every kind needs one (§3.7); `abandon`/`archive` now
+  `applies-to` **`milestone`** so milestones can be retired (§3.4); **`link`** is
+  clarified as body `[[..]]` prose, *not* a frontmatter edge / not in `edge`'s
+  domain — so its absence from the verb set is not a CLI-completeness gap
+  (§3.2/§3.5); **`close`** merges then flips `done` on **trunk** (not the
+  worker-held branch — git's one-checkout rule) (§3.4/§4.1).
+- **Validated by round 2 (no change):** storage-side ownership + the tightened
+  R2 argument (a claimed task's deps are `done`, and `done` is terminal/
+  un-abandonable, so claimed tasks never face an abandoned dep); verdict-as-state;
+  the edge primitive; two-lane concurrency; git-history archival; the
+  structural-only `require` pin.
+
 ### Status
 
-All load-bearing findings (R1–R7) and all smaller items (R8–R11) resolved; nits
-addressed bar one residual naming note (`link` guidance). The *spine* (validated
-above) and the *mutation/enforcement actuators* (edge primitive, verdict-as-
-state, two-lane refs) now both hold.
+Both review rounds' findings resolved. Remaining: one residual naming note
+(`link` usage guidance) and the standing open questions (§8). Ready to move from
+design into implementation planning.
