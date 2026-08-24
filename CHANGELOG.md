@@ -6,9 +6,9 @@
 
 - **`planr board`** now defaults to the current on-disk working tree
   instead of trunk, matching `planr lint`. Pass a commit-ish to read a
-  specific ref (`planr board main`, `planr board HEAD~2`, `planr board
-  <sha>`); omit it to see the `.plan` files in whatever worktree or
-  branch you have checked out.
+  specific ref (e.g. `planr board main`, `planr board HEAD~2`, or a SHA);
+  omit it to see the `.plan` files in whatever worktree or branch you have
+  checked out.
 
 ## [0.3.1]
 
