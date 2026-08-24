@@ -319,6 +319,70 @@ fn test_e2e_board_defaults_to_working_tree() {
     );
 }
 
+/// Read the first output line of `planr board [args]` -- the source header.
+fn board_header(dir: &Path, args: &[&str]) -> String {
+    let out = planr(dir, args);
+    assert!(out.status.success(), "planr {args:?} failed");
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn git_stdout(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+#[test]
+fn test_e2e_board_source_status_line() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let toplevel = git_stdout(td.path(), &["rev-parse", "--show-toplevel"]);
+    let head = git_stdout(td.path(), &["rev-parse", "--short", "HEAD"]);
+
+    // Clean working tree, on branch main: "# <path> @ <sha> (main)".
+    let header = board_header(td.path(), &["board"]);
+    assert!(header.starts_with("# "), "header prefix: {header}");
+    assert!(header.contains(&toplevel), "header path: {header}");
+    assert!(
+        header.contains(&format!("@ {head} (main)")),
+        "header commit id + branch: {header}"
+    );
+    assert!(!header.contains("dirty"), "clean tree not dirty: {header}");
+
+    // Dirty the working tree with an uncommitted ticket.
+    planr_ok(td.path(), &["new", "task", "wip", "Work In Progress", "s1"]);
+    let dirty = board_header(td.path(), &["board"]);
+    assert!(dirty.contains("(main) dirty"), "dirty marker: {dirty}");
+
+    // Ref mode reads committed data, so it is never marked dirty even when the
+    // working tree has uncommitted changes.
+    let ref_header = board_header(td.path(), &["board", "main"]);
+    assert!(
+        ref_header.contains("@ main"),
+        "ref header name: {ref_header}"
+    );
+    assert!(
+        !ref_header.contains("dirty"),
+        "ref mode ignores working-tree dirt: {ref_header}"
+    );
+
+    // A ref given as a SHA is not repeated as both name and id.
+    let sha_header = board_header(td.path(), &["board", &head]);
+    assert!(
+        sha_header.ends_with(&format!("@ {head}")),
+        "sha ref not duplicated: {sha_header}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Scenario: abandon without review
 // ---------------------------------------------------------------------------

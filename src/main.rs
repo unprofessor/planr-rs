@@ -161,6 +161,7 @@ fn main() {
 
     match cli.command {
         Command::Board { r#ref } => {
+            let source = board::source_status_line(r#ref.as_deref());
             let tickets = match r#ref {
                 Some(ref_) if !ref_.is_empty() => board::read_ref_tickets(&ref_, &cli.plan_dir),
                 _ => board::read_working_tree_tickets(&cli.plan_dir),
@@ -171,6 +172,7 @@ fn main() {
                 branch_statuses: branches,
             };
             let out = board::render_board(&input);
+            println!("{source}\n");
             if !out.is_empty() {
                 print!("{out}");
             }

@@ -175,6 +175,32 @@ pub fn rev_parse_verify(ref_: &str) -> Result<String, String> {
     git(&["rev-parse", "--verify", ref_])
 }
 
+/// `git rev-parse --show-toplevel`: absolute path to the working-tree root
+/// containing the process cwd.
+pub fn show_toplevel() -> Result<String, String> {
+    Ok(git(&["rev-parse", "--show-toplevel"])?.trim().to_string())
+}
+
+/// `git rev-parse --short <ref>`: abbreviated commit id for a commit-ish.
+pub fn rev_parse_short(ref_: &str) -> Result<String, String> {
+    Ok(git(&["rev-parse", "--short", ref_])?.trim().to_string())
+}
+
+/// Current branch name, or `None` when HEAD is detached (abbrev-ref == "HEAD").
+pub fn current_branch() -> Option<String> {
+    let name = git(&["rev-parse", "--abbrev-ref", "HEAD"])
+        .ok()?
+        .trim()
+        .to_string();
+    (!name.is_empty() && name != "HEAD").then_some(name)
+}
+
+/// Whether the working tree has uncommitted changes (tracked or untracked),
+/// via `git status --porcelain`.
+pub fn is_dirty() -> Result<bool, String> {
+    Ok(!git(&["status", "--porcelain"])?.trim().is_empty())
+}
+
 /// Find the worktree path where `branch` is currently checked out, if any.
 /// Parses `git worktree list --porcelain`, pairing each `worktree <path>`
 /// stanza with its `branch refs/heads/<branch>` line.
