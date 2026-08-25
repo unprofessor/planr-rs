@@ -63,16 +63,22 @@ pub struct FrontmatterSplit {
 
 /// Parse frontmatter YAML into a value map using serde_yaml.
 ///
-/// Returns `None` when the input is empty, null, or not a mapping (matching
-/// the TS `parseFrontmatter` which returns `{}` for those cases).
-pub fn parse_frontmatter(fm: &str) -> Option<serde_yaml::Value> {
+/// `Ok(None)` means there was nothing to parse -- empty input, an explicit
+/// null, or a document that is not a mapping (matching the TS
+/// `parseFrontmatter` which returns `{}` for those cases).
+///
+/// `Err` carries the serde_yaml message. Callers must distinguish it from
+/// `Ok(None)`: a block that fails to parse reads as "every field missing",
+/// so reporting it as a parse failure is the difference between one accurate
+/// error and a cascade of bogus ones about fields that are actually present.
+pub fn parse_frontmatter(fm: &str) -> Result<Option<Value>, String> {
     if fm.trim().is_empty() {
-        return None;
+        return Ok(None);
     }
     match serde_yaml::from_str::<Value>(fm) {
-        Ok(Value::Mapping(_)) => serde_yaml::from_str(fm).ok(),
-        Ok(Value::Null) => None,
-        _ => None,
+        Ok(v @ Value::Mapping(_)) => Ok(Some(v)),
+        Ok(_) => Ok(None),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -245,7 +251,7 @@ mod tests {
     #[test]
     fn test_parse_inline_deps() {
         let raw = "id: proxy\nkind: task\ndepends_on: [a, b]\n";
-        let val = parse_frontmatter(raw).unwrap();
+        let val = parse_frontmatter(raw).unwrap().unwrap();
         assert_eq!(val["id"].as_str(), Some("proxy"));
         assert_eq!(val["depends_on"][0].as_str(), Some("a"));
     }
@@ -253,7 +259,7 @@ mod tests {
     #[test]
     fn test_parse_block_deps() {
         let raw = "id: proxy\ndepends_on:\n  - a\n  - b\n";
-        let val = parse_frontmatter(raw).unwrap();
+        let val = parse_frontmatter(raw).unwrap().unwrap();
         assert_eq!(val["id"].as_str(), Some("proxy"));
         assert_eq!(val["depends_on"][0].as_str(), Some("a"));
         assert_eq!(val["depends_on"][1].as_str(), Some("b"));
@@ -261,22 +267,49 @@ mod tests {
 
     #[test]
     fn test_parse_empty() {
-        assert!(parse_frontmatter("").is_none());
-        assert!(parse_frontmatter("   ").is_none());
+        assert_eq!(parse_frontmatter(""), Ok(None));
+        assert_eq!(parse_frontmatter("   "), Ok(None));
     }
 
     #[test]
     fn test_parse_quoted_status() {
         let raw = "status: \"done\"\n";
-        let val = parse_frontmatter(raw).unwrap();
+        let val = parse_frontmatter(raw).unwrap().unwrap();
         assert_eq!(val["status"].as_str(), Some("done"));
     }
 
     #[test]
     fn test_parse_null() {
         let raw = "parent:\n";
-        let val = parse_frontmatter(raw).unwrap();
+        let val = parse_frontmatter(raw).unwrap().unwrap();
         assert!(val["parent"].is_null());
+    }
+
+    #[test]
+    fn test_parse_unquoted_colon_in_title_is_an_error() {
+        // The exact shape `planr new` used to scaffold: a colon-bearing title
+        // left unquoted turns the whole block into a parse error, not a
+        // mapping with missing fields.
+        let raw = "id: shadow-remote
+kind: epic
+title: The shadow remote: git-native sync
+";
+        let err = parse_frontmatter(raw).unwrap_err();
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn test_parse_non_mapping_is_not_an_error() {
+        // A scalar or sequence document parses fine but carries no fields.
+        assert_eq!(parse_frontmatter("just a string").unwrap(), None);
+        assert_eq!(
+            parse_frontmatter(
+                "- a
+- b"
+            )
+            .unwrap(),
+            None
+        );
     }
 
     // -----------------------------------------------------------------------

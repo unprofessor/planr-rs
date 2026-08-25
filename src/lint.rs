@@ -90,6 +90,17 @@ fn escape_regex(s: &str) -> String {
     regex::escape(s)
 }
 
+/// Directory name a kind lives in -- `story` lives in `stories/`, so the
+/// plural cannot be built by appending an `s`.
+fn dir_name_for_kind(kind: &'static str) -> &'static str {
+    match kind {
+        "epic" => "epics",
+        "story" => "stories",
+        "task" => "tasks",
+        other => other,
+    }
+}
+
 /// Return the parent kind that a given kind expects.
 fn expected_parent_kind(kind: &Kind) -> Option<&'static str> {
     match kind {
@@ -108,6 +119,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
     let mut issues: Vec<LintIssue> = Vec::new();
 
     // Indexes built in pass 1
+    let mut unparsed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut file_of: HashMap<String, String> = HashMap::new(); // id -> file
     let mut kind_of: HashMap<String, Kind> = HashMap::new();
     let mut parent_of: HashMap<String, Option<String>> = HashMap::new();
@@ -121,6 +133,36 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
 
         let dir_kind = dir_kind_from_path(file);
         let fslug = slug_from_filename(file);
+
+        // Frontmatter that failed to parse reads as every-field-missing, so
+        // the per-file checks below would all fire on fields that are in fact
+        // present. Report the parse failure alone, then index the ticket under
+        // what the path still tells us (slug and kind) so its children do not
+        // cascade dangling-parent and wrong-parent-kind findings either.
+        if let Some(err) = &ticket.frontmatter_error {
+            issues.push(LintIssue {
+                file: file.clone(),
+                level: Level::Error,
+                message: format!(
+                    "frontmatter failed to parse -- an unquoted colon in a \
+                     value? (within the frontmatter block: {err})"
+                ),
+            });
+            if !file_of.contains_key(&fslug) {
+                unparsed.insert(fslug.clone());
+                let kind = match dir_kind {
+                    Some("epic") => Kind::Epic,
+                    Some("story") => Kind::Story,
+                    _ => Kind::Task,
+                };
+                file_of.insert(fslug.clone(), file.clone());
+                kind_of.insert(fslug.clone(), kind);
+                parent_of.insert(fslug.clone(), None);
+                deps_of.insert(fslug.clone(), Vec::new());
+                links_of.insert(fslug.clone(), Vec::new());
+            }
+            continue;
+        }
 
         // Validate id matches filename slug
         if ticket.id.is_empty() {
@@ -153,8 +195,9 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
                     file: file.clone(),
                     level: Level::Error,
                     message: format!(
-                        "kind '{}' but the file lives in the {}s directory",
-                        ticket_kind_str, dk
+                        "kind '{}' but the file lives in the {} directory",
+                        ticket_kind_str,
+                        dir_name_for_kind(dk)
                     ),
                 });
             }
@@ -216,6 +259,11 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
     let mut sorted_ids: Vec<&String> = file_of.keys().collect();
     sorted_ids.sort();
     for id in &sorted_ids {
+        // Its own fields are unreadable, so every check here would be a guess.
+        // It stays in the index purely so its children resolve.
+        if unparsed.contains(*id) {
+            continue;
+        }
         let file = file_of.get(*id).unwrap();
         let kind = kind_of.get(*id).unwrap();
         let parent = parent_of.get(*id).and_then(|p| p.as_deref());
@@ -503,6 +551,7 @@ pub fn lint_working_tree(plan_dir: &str) -> LintReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ticket::parse_ticket;
 
     fn make(id: &str, kind: &str) -> ParsedTicket {
         let k = match kind {
@@ -521,6 +570,7 @@ mod tests {
             aliases: vec![],
             links: vec![],
             raw: String::new(),
+            frontmatter_error: None,
         }
     }
 
@@ -582,6 +632,71 @@ mod tests {
         // Only one error: missing id. (parent exists, status valid, slug matches)
         assert_eq!(r.error_count, 1);
         assert!(r.issues.iter().any(|i| i.message.contains("missing id")));
+    }
+
+    #[test]
+    fn test_unparsed_frontmatter_reports_once_and_does_not_cascade() {
+        // Issue #1: a colon-bearing unquoted title makes the whole block
+        // unreadable, so every field looks absent. Report the parse failure,
+        // not the fields it swallowed.
+        let mut broken = parse_ticket(
+            "---\nid: shadow-remote\nkind: epic\ntitle: The shadow remote: git-native sync\nstatus: todo\n---\n",
+        );
+        assert!(
+            broken.frontmatter_error.is_some(),
+            "test fixture must be broken"
+        );
+        broken.parent = None;
+
+        let mut child = make("net", "story");
+        child.parent = Some("shadow-remote".to_string());
+
+        let inputs = vec![
+            LintInput {
+                file: ".plan/epics/09-shadow-remote.md".to_string(),
+                ticket: broken,
+            },
+            LintInput {
+                file: ".plan/stories/01-net.md".to_string(),
+                ticket: child,
+            },
+        ];
+        let r = check_backlog(&inputs);
+        assert_eq!(r.error_count, 1, "issues: {:?}", r.issues);
+        assert!(r.issues[0].message.contains("frontmatter failed to parse"));
+        assert!(r.issues[0].message.contains("unquoted colon"));
+        // None of the fields the failed parse swallowed get their own finding,
+        // and the child sees a real epic parent rather than a phantom task.
+        assert!(!r.issues.iter().any(|i| i.message.contains("missing id")));
+        assert!(!r.issues.iter().any(|i| i.message.contains("<missing>")));
+        assert!(!r
+            .issues
+            .iter()
+            .any(|i| i.message.contains("must name a parent")));
+        assert_eq!(r.warning_count, 0, "issues: {:?}", r.issues);
+    }
+
+    #[test]
+    fn test_wrong_kind_in_stories_dir_says_stories() {
+        // "storys" is not a directory that exists.
+        let mut t = make("net", "task");
+        t.parent = Some("p".to_string());
+        let inputs = vec![
+            LintInput {
+                file: ".plan/stories/01-net.md".to_string(),
+                ticket: t,
+            },
+            parent_ticket(),
+        ];
+        let r = check_backlog(&inputs);
+        let msg = r
+            .issues
+            .iter()
+            .find(|i| i.message.contains("lives in the"))
+            .map(|i| i.message.clone())
+            .unwrap_or_default();
+        assert!(msg.contains("the stories directory"), "message: {msg}");
+        assert!(!msg.contains("storys"), "message: {msg}");
     }
 
     #[test]

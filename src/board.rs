@@ -434,6 +434,7 @@ mod tests {
             aliases: vec![],
             links: vec![],
             raw: String::new(),
+            frontmatter_error: None,
         }
     }
 
