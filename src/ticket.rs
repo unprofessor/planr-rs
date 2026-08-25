@@ -43,12 +43,19 @@ pub struct ParsedTicket {
     pub links: Vec<String>,
     /// Raw body text (everything after the frontmatter block).
     pub raw: String,
+    /// serde_yaml's message when the frontmatter block failed to parse. Every
+    /// field above then reads as absent, so consumers must report this rather
+    /// than the fields it swallowed.
+    pub frontmatter_error: Option<String>,
 }
 
 /// Parse a complete ticket blob (frontmatter + body) into a `ParsedTicket`.
 pub fn parse_ticket(blob: &str) -> ParsedTicket {
     let split = split_frontmatter(blob);
-    let front = parse_frontmatter(&split.fm);
+    let (front, frontmatter_error) = match parse_frontmatter(&split.fm) {
+        Ok(front) => (front, None),
+        Err(e) => (None, Some(e)),
+    };
 
     let get_str = |key: &str| -> String {
         front
@@ -106,6 +113,7 @@ pub fn parse_ticket(blob: &str) -> ParsedTicket {
         aliases,
         links,
         raw: split.body,
+        frontmatter_error,
     }
 }
 
@@ -202,6 +210,25 @@ mod tests {
         let blob = "---\nid: test\nkind: task\nparent: story\nstatus: \"done\"\ntitle: Test\n---\n";
         let t = parse_ticket(blob);
         assert_eq!(t.status, "done");
+    }
+
+    #[test]
+    fn test_parse_unquoted_colon_records_frontmatter_error() {
+        let blob = "---\nid: shadow-remote\nkind: epic\ntitle: The shadow remote: git-native sync\nstatus: todo\n---\n\n## Goal\n";
+        let t = parse_ticket(blob);
+        assert!(t.frontmatter_error.is_some());
+        // Every field is swallowed by the failed parse -- that is exactly why
+        // callers need the error instead of the empty fields.
+        assert_eq!(t.id, "");
+        assert_eq!(t.kind, None);
+    }
+
+    #[test]
+    fn test_parse_clean_frontmatter_has_no_error() {
+        let blob = "---\nid: test\nkind: task\nparent: story\nstatus: todo\ntitle: \"Quoted: colon\"\n---\n";
+        let t = parse_ticket(blob);
+        assert_eq!(t.frontmatter_error, None);
+        assert_eq!(t.title, "Quoted: colon");
     }
 
     #[test]

@@ -261,6 +261,80 @@ fn test_e2e_lint_dangling_dep() {
     );
 }
 
+#[test]
+fn test_e2e_new_ticket_with_colon_in_title_lints_clean() {
+    // Issue #1: `planr new` scaffolded an unquoted `title:`, so planr's own
+    // reader failed on the file planr had just written -- silently at
+    // creation, then as bogus lint errors about fields that were present.
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+
+    let title = "The shadow remote: git-native sync through a sanitary staging repo";
+    let epic_path = planr_ok(td.path(), &["new", "epic", "shadow-remote", title]);
+    planr_ok(
+        td.path(),
+        &[
+            "new",
+            "story",
+            "sanitary",
+            "Sanitary history: boundary rev, rewriter",
+            "shadow-remote",
+        ],
+    );
+
+    // The scaffolded frontmatter quotes the colon-bearing title...
+    let content = std::fs::read_to_string(td.path().join(&epic_path)).unwrap();
+    assert!(
+        content.contains(&format!("title: '{title}'")),
+        "expected a quoted title in the scaffold: {content}"
+    );
+
+    // ...and the backlog reads back clean, with no cascade onto the child.
+    let out = planr(td.path(), &["lint"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "lint failed: {stdout}");
+    assert!(
+        stdout.is_empty() || stdout.contains("0 error(s)"),
+        "expected clean lint: {stdout}"
+    );
+}
+
+#[test]
+fn test_e2e_lint_reports_unparsed_frontmatter_not_missing_fields() {
+    // Hand-written (or pre-0.3.2-scaffolded) tickets can still carry an
+    // unquoted colon. Lint must name the real defect.
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let epic = td.path().join(".plan/epics/01-e1.md");
+    let content = std::fs::read_to_string(&epic).unwrap();
+    std::fs::write(
+        &epic,
+        content.replace("title: Epic One", "title: Epic One: with a colon"),
+    )
+    .unwrap();
+
+    let out = planr(td.path(), &["lint"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("frontmatter failed to parse"),
+        "expected a parse-failure finding: {stdout}"
+    );
+    assert!(
+        !stdout.contains("missing id"),
+        "should not cascade into field errors: {stdout}"
+    );
+    assert!(
+        !stdout.contains("<missing>"),
+        "should not cascade into field errors: {stdout}"
+    );
+    // The story under this epic keeps a well-typed parent.
+    assert!(
+        !stdout.contains("is a task"),
+        "should not cascade onto children: {stdout}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Scenario: board
 // ---------------------------------------------------------------------------

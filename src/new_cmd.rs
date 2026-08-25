@@ -154,6 +154,21 @@ fn allocate_and_write(dir: &std::path::Path, slug: &str, content: &str) -> Resul
 // Template substitution
 // ---------------------------------------------------------------------------
 
+/// Render a string as a YAML scalar safe to sit after `key: ` on one line.
+///
+/// serde_yaml picks the minimal representation -- plain when the value is
+/// unambiguous, quoted when a colon, a leading indicator character, or a
+/// trailing space would otherwise break the parser. Titles of the shape
+/// `Foo: bar and baz` are common, and an unquoted one makes the whole
+/// frontmatter block unparseable to planr's own reader.
+fn yaml_scalar(value: &str) -> String {
+    match serde_yaml::to_string(&value) {
+        Ok(s) => s.trim_end_matches('\n').to_string(),
+        // serde_yaml does not fail on a plain string; quote defensively anyway.
+        Err(_) => format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")),
+    }
+}
+
 fn substitute_template(
     template: &str,
     slug: &str,
@@ -161,7 +176,13 @@ fn substitute_template(
     parent: Option<&str>,
     date: &str,
 ) -> String {
+    // Quote the frontmatter title first: the body's `__TITLE__` under `## Goal`
+    // is prose and must stay raw, so only the `title:` line gets the scalar.
     template
+        .replace(
+            "title: __TITLE__",
+            &format!("title: {}", yaml_scalar(title)),
+        )
         .replace("__SLUG__", slug)
         .replace("__TITLE__", title)
         .replace("__PARENT__", parent.unwrap_or(""))
@@ -416,6 +437,58 @@ mod tests {
         assert!(result.contains("title: My Title"));
         assert!(result.contains("parent: parent-epic"));
         assert!(result.contains("date: 2026-08-05"));
+    }
+
+    #[test]
+    fn test_substitute_template_quotes_colon_title() {
+        // Issue #1: an unquoted colon-bearing title made planr's own reader
+        // fail on the file planr had just written.
+        let tpl = "id: __SLUG__\ntitle: __TITLE__\n";
+        let result = substitute_template(
+            tpl,
+            "shadow-remote",
+            "The shadow remote: git-native sync",
+            None,
+            "2026-08-25",
+        );
+        assert!(
+            result.contains("title: 'The shadow remote: git-native sync'"),
+            "expected a quoted title, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_substitute_template_body_title_stays_raw() {
+        // Only the frontmatter `title:` is a YAML scalar; the `## Goal` copy
+        // is prose and must not pick up quotes.
+        let tpl = "title: __TITLE__\n---\n\n## Goal\n\n__TITLE__\n";
+        let result = substitute_template(tpl, "s", "A title: with a colon", None, "2026-08-25");
+        assert!(result.contains("title: 'A title: with a colon'"));
+        assert!(result.ends_with("## Goal\n\nA title: with a colon\n"));
+    }
+
+    #[test]
+    fn test_scaffolded_ticket_round_trips_through_the_parser() {
+        // The end-to-end invariant the issue was really about: whatever
+        // `planr new` writes, planr must be able to read back.
+        for title in [
+            "Plain title",
+            "Sanitary history: boundary rev, rewriter, range scan",
+            "#hash leading",
+            "- dash leading",
+            "quotes \"inside\" it",
+            "trailing space ",
+            "123",
+            "null",
+        ] {
+            let content =
+                substitute_template(TTASK, "my-task", title, Some("my-story"), "2026-08-25");
+            let t = crate::ticket::parse_ticket(&content);
+            assert_eq!(t.frontmatter_error, None, "title {title:?}: {content}");
+            assert_eq!(t.title, title, "title {title:?} did not round-trip");
+            assert_eq!(t.id, "my-task");
+            assert_eq!(t.kind, Some(crate::ticket::Kind::Task));
+        }
     }
 
     #[test]

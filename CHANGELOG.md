@@ -18,6 +18,23 @@
   omit it to see the `.plan` files in whatever worktree or branch you have
   checked out.
 
+### Fixed
+
+- **`planr new` quotes the `title:` it writes** ([#1]). A colon in the title
+  (`"Sanitary history: boundary rev, rewriter"`) produced frontmatter that
+  planr's own YAML reader could not parse -- silently at creation, then as
+  lint errors later. Titles are now emitted as YAML scalars, quoted whenever
+  a colon, a leading indicator character, or a trailing space would otherwise
+  break the parse.
+- **`planr lint` reports a frontmatter parse failure as itself** ([#1]).
+  A block that fails to parse reads as every-field-missing, so lint used to
+  cascade into `missing id`, `kind '<missing>'`, and `must name a parent`
+  findings about fields that were present -- and children of the broken
+  ticket picked up wrong-parent-kind warnings. Lint now emits one error
+  naming the parse failure, and still resolves the ticket's slug and kind
+  from its path so its children stay clean.
+- **`planr lint` says `stories directory`**, not `storys directory`.
+
 ## [0.3.1]
 
 ### Fixed
@@ -114,3 +131,5 @@
   `cargo-semvertag` for version-regression checks in CI.
 - Removed all non-ASCII characters and applied `cargo clippy --fix` / `cargo fmt`.
 - Licensed project under MIT.
+
+[#1]: https://github.com/unprofessor/planr-rs/issues/1
