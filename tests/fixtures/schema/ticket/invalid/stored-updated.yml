@@ -1,0 +1,4 @@
+# Derive from the ticket file's most recent commit.
+kind: task
+title: Wire the verb runner
+updated: 2026-08-28

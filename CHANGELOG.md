@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Published schema for the v2 language**, served at
+  `https://schemas.columnzero.com/planr/v1/planr.schema.json` and kept in-tree
+  at `schemas/planr/v1/planr.schema.json` so validation never needs the
+  network. One JSON Schema 2020-12 document covers all three artifacts: the
+  root schema validates `.plan/schema.yml`, the `#ticket` anchor validates
+  ticket frontmatter, and the `#commit` anchor validates a commit's `Planr-*`
+  trailer block.
+- **Schema validation in CI.** `cargo test` now meta-validates the schema
+  document against draft 2020-12, checks that its `$id` still agrees with the
+  path it is published at, confirms both anchors resolve, and runs a corpus of
+  28 accept/reject fixtures under `tests/fixtures/schema/`. No new CI job --
+  the existing `test` job covers it.
+
 ## [0.3.1]
 
 ### Fixed

@@ -1,0 +1,30 @@
+# The unit is a declared cut, not necessarily a leaf: story gets the worktree
+# while task survives below it as sub-unit structure with its own small
+# lifecycle. Nothing declares this -- the unit is derived from `worktree: create`.
+kinds: [epic, story, task]
+verbs:
+  - name: claim
+    applies-to: [story]
+    from: todo
+    to: in_progress
+    base: home
+    effect: create
+    worktree: create
+  - name: close
+    applies-to: [story]
+    from: approved
+    to: done
+    require: { neighbors: { children: terminal } }
+    base: own
+    effect: merge
+    worktree: remove
+  - name: start
+    applies-to: [task]
+    from: todo
+    to: in_progress
+    base: own
+  - name: finish
+    applies-to: [task]
+    from: in_progress
+    to: done
+    base: own

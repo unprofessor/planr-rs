@@ -1,0 +1,4 @@
+# Derive from the ticket file's first commit.
+kind: task
+title: Wire the verb runner
+created: 2026-08-01

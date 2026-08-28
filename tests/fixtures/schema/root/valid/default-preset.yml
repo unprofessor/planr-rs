@@ -1,0 +1,107 @@
+# The default preset: v1's Epic/Story/Task workflow expressed in the v2 language.
+$schema: https://schemas.columnzero.com/planr/v1/planr.schema.json
+kinds: [epic, story, task]
+groups:
+  milestone: { inverse: members }
+edges:
+  depends_on: { cardinality: many, semantics: gate }
+templates:
+  task:
+    sections: [Acceptance Criteria, Validation]
+worktrees: .plan/worktrees/$kind/$slug
+verbs:
+  - name: claim
+    applies-to: [task]
+    from: todo
+    to: in_progress
+    require: { neighbors: { depends_on: done } }
+    base: home
+    effect: create
+    worktree: create
+
+  - name: submit
+    applies-to: [task]
+    from: in_progress
+    to: review
+    require: { sections: [Validation] }
+    base: own
+
+  - name: approve
+    applies-to: [task]
+    from: review
+    to: approved
+    base: own
+    content:
+      - annotate: { section: Review, body: $message }
+
+  - name: request-changes
+    applies-to: [task]
+    from: review
+    to: in_progress
+    base: own
+    content:
+      - annotate: { section: Review, body: $message }
+
+  - name: yield
+    applies-to: [task]
+    from: in_progress
+    to: todo
+    base: own
+    content:
+      - annotate: { section: Blocked, body: $message }
+
+  - name: close
+    applies-to: [task]
+    from: approved
+    to: done
+    require: { self: { status: approved } }
+    base: own
+    effect: merge
+    worktree: remove
+
+  - name: close
+    applies-to: [epic, story]
+    from: todo
+    to: done
+    require: { neighbors: { children: terminal } }
+    base: home
+
+  - name: abandon
+    applies-to: [task, story, epic, milestone]
+    to: abandoned
+
+  - name: archive
+    applies-to: [task, story, epic, milestone]
+    require: { self: { status: terminal } }
+    content: [remove]
+
+  - name: reparent
+    applies-to: [story, task]
+    content:
+      - edge: { set: { parent: $target } }
+
+  - name: add-dep
+    applies-to: [task]
+    content:
+      - edge: { add: { depends_on: $target } }
+
+  - name: drop-dep
+    applies-to: [task]
+    content:
+      - edge: { remove: { depends_on: $target } }
+
+  - name: assign
+    applies-to: [epic, story]
+    content:
+      - edge: { set: { milestone: $target } }
+
+  - name: start
+    applies-to: [milestone]
+    from: planned
+    to: in_progress
+
+  - name: release
+    applies-to: [milestone]
+    from: in_progress
+    to: released
+    require: { neighbors: { members: terminal } }
