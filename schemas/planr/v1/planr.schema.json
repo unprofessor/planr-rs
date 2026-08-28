@@ -109,8 +109,8 @@
             "description": "'one' takes edge/set; 'many' takes edge/add and edge/remove. A multi-valued edge is stored as a block list, one target per line, so concurrent additions of different targets land on different lines and merge cleanly."
           },
           "semantics": {
-            "enum": ["rollup", "gate", "group", "link"],
-            "description": "What the edge means to the engine. 'rollup' feeds container closure; 'gate' blocks a verb until its targets are done; 'group' groups without gating or rolling up; 'link' is informational body prose and is not a frontmatter field."
+            "enum": ["rollup", "gate", "group", "info"],
+            "description": "What the edge means to the engine. 'rollup' feeds container closure; 'gate' blocks a verb until its targets are done; 'group' groups without gating or rolling up; 'info' is cosmetic. Note `link` is body [[..]] prose rather than a frontmatter edge, so it is not declared here."
           },
           "inverse": { "$ref": "#/$defs/identifier" }
         }
