@@ -29,4 +29,6 @@ semvertag-shell = "0.2"
 [dev-dependencies]
 # assert_cmd & tempfile -- end-to-end CLI tests in throwaway git repos
 assert_cmd = "2"
+boon = "0.6.1"
+serde_json = "1.0.151"
 tempfile = "3"

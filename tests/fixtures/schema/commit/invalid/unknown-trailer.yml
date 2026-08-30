@@ -1,0 +1,5 @@
+# The trailer vocabulary is closed. A state trailer in particular would
+# re-create the stored-status footgun in a new location.
+Planr-Verb: close
+Planr-Ticket: verb-runner
+Planr-Status: done
