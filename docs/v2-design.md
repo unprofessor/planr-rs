@@ -1,9 +1,9 @@
 # planr v2.0 — schema-driven, typed-graph backlog
 
 > **Status:** design exploration (pre-v1.0). No engine code is written yet, but
-> the schema language is pinned: `schemas/planr/v1/planr.schema.json` is
-> published at `https://schemas.columnzero.com/planr/v1/planr.schema.json` and
-> validated in CI against a fixture corpus.
+> the schema language is pinned: `schemas/planr/v1/1.0.0/planr.schema.json` is
+> published at `https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json`
+> and validated in CI against a fixture corpus.
 >
 > This captures the reasoning and decisions from the v2 brainstorm so they
 > survive the conversation. Open questions are flagged inline and collected in
@@ -656,6 +656,15 @@ on trunk does not retroactively rewrite what the worker meant.
 $schema: https://schemas.columnzero.com/planr/v1/planr.schema.json
 ```
 
+The registry distinguishes two URL forms, and the distinction matters: a
+**canonical** URL carries the full version and never moves, while an **alias**
+carries only the major line and moves forward with each release. The document's
+own `$id` is canonical, because `$id` is a permanent identity and an alias would
+name a different document after the next release. A *project* cites the alias, so
+compatible releases do not churn every repo. A validator fetching the alias
+therefore gets a document whose `$id` differs from the retrieval URL — intended
+registry behaviour, since the embedded `$id` establishes the base URI.
+
 A content hash would be *too* precise — a typo fix in a comment would read as a
 different schema. The URL is a stable, dereferenceable identity with room for
 compatible evolution; the registry entry carries the sha256 separately, which is
@@ -663,7 +672,7 @@ the right split, since identity wants stability across cosmetic edits and
 integrity wants byte-exactness. The document is a JSON Schema 2020-12 file whose
 root validates `.plan/schema.yml`, with `#ticket` and `#commit` anchors for
 frontmatter and the trailer block, so it is a *validator* and not merely a label.
-It ships in-tree at `schemas/planr/v1/planr.schema.json`: **planr never
+It ships in-tree at `schemas/planr/v1/1.0.0/planr.schema.json`: **planr never
 dereferences it at runtime**, so the tool works offline, air-gapped, and in CI.
 An unrecognized major version is a clear "this backlog declares planr schema v2;
 this binary understands v1" error, never a download. The version tracks the
@@ -1470,7 +1479,7 @@ handoff presented:
 
 The model is materially different from round 2 and materially simpler: fewer
 primitives, fewer stored fields, no ordering, one fewer lock. The published
-schema at `schemas/planr/v1/planr.schema.json` now pins it — 28 fixtures encode
+schema at `schemas/planr/v1/1.0.0/planr.schema.json` now pins it — 28 fixtures encode
 what the language must accept and reject, including the legacy `do` list, and
 they run in CI. Writing that schema caught a real gap in this design
 in the process, which is the argument for pinning a contract in something

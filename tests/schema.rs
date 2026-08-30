@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use boon::{Compiler, SchemaIndex, Schemas};
 use serde_json::Value;
 
-const SCHEMA_PATH: &str = "schemas/planr/v1/planr.schema.json";
-const SCHEMA_ID: &str = "https://schemas.columnzero.com/planr/v1/planr.schema.json";
+const SCHEMA_PATH: &str = "schemas/planr/v1/1.0.0/planr.schema.json";
+const SCHEMA_ID: &str = "https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json";
 const METASCHEMA: &str = "https://json-schema.org/draft/2020-12/schema";
 const FIXTURE_ROOT: &str = "tests/fixtures/schema";
 
@@ -136,9 +136,11 @@ fn schema_id_matches_its_published_path() {
         .and_then(Value::as_str)
         .expect("schema document has no $id");
 
-    // The registry serves the document at the path it lives at in-tree. If the
-    // file moves, the $id has to move with it or every ticket in the wild is
-    // citing a URL that 404s.
+    // The in-tree layout mirrors what the registry serves, and $id is the
+    // CANONICAL versioned URL -- canonical URLs never move, so this pins the
+    // document's permanent identity. Projects cite the alias
+    // (.../planr/v1/planr.schema.json) instead, which moves forward with each
+    // release; that is why $id must not be alias-shaped.
     let expected = format!(
         "https://schemas.columnzero.com/{}",
         SCHEMA_PATH.trim_start_matches("schemas/")

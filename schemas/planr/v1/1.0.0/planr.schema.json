@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.columnzero.com/planr/v1/planr.schema.json",
+  "$id": "https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json",
   "title": "planr v1 schema",
   "description": "The planr schema language, version 1. The root schema validates a project's .plan/schema.yml. Two further artifacts are addressable by anchor: '#ticket' validates a ticket file's YAML frontmatter, and '#commit' validates the parsed Planr-* trailer block of a planr commit. These schemas constrain FORM only. The vocabulary they admit -- which kind names are legal, which verb names exist -- is supplied by the project's own schema file and checked by planr against the tree at each commit, never here. This document is an identifier and an offline validator; planr never dereferences it at runtime.",
   "type": "object",
@@ -11,7 +11,7 @@
     "$schema": {
       "type": "string",
       "pattern": "^https://schemas\\.columnzero\\.com/planr/v1/(\\d+\\.\\d+\\.\\d+/)?planr\\.schema\\.json$",
-      "description": "Declares which planr schema language this file speaks. Optional -- a file with no declaration is assumed to be v1. Cite the major line for compatible evolution, or pin an exact version. A URL naming a different major version is a clear 'this binary understands v1' error rather than a parse failure."
+      "description": "Declares which planr schema language this file speaks. Optional -- a file with no declaration is assumed to be v1. Cite the alias -- the major line -- so compatible releases do not churn every repo, or pin the canonical versioned URL. This document's own $id is the canonical form, which never moves; the alias moves forward with each release, so a validator that fetches the alias gets a document whose $id differs from the retrieval URL. That is the intended registry behaviour: the embedded $id establishes the base URI. A URL naming a different major version is a clear 'this binary understands v1' error rather than a parse failure."
     },
 
     "kinds": { "$ref": "#/$defs/kinds" },
