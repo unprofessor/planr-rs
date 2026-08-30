@@ -14,6 +14,8 @@ mod git;
 mod lint;
 mod lock;
 mod new_cmd;
+#[cfg(feature = "next")]
+mod next;
 mod parse;
 mod review;
 mod ticket;
@@ -154,12 +156,75 @@ enum Command {
         /// ticket slug
         slug: String,
     },
+
+    /// The 0.4 typed-graph model: schema-driven verbs, state derived from
+    /// commit events. Experimental -- the schema is not yet pinned.
+    #[cfg(feature = "next")]
+    Next {
+        #[command(subcommand)]
+        command: NextCommand,
+    },
+}
+
+#[cfg(feature = "next")]
+#[derive(Subcommand)]
+enum NextCommand {
+    /// Create a ticket (fixed tooling -- genesis is not a verb)
+    New {
+        kind: String,
+        slug: String,
+        title: String,
+        /// slug of the containing ticket
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    /// Fold a ticket's state from its commit events
+    State { slug: String },
+    /// Render each kind's derived lifecycle
+    Lifecycle { kind: Option<String> },
+    /// List every live ticket with its folded state
+    Board,
+    /// Run a schema-declared verb
+    Do {
+        verb: String,
+        slug: String,
+        /// message for $message in annotate bodies, or an edge $target
+        #[arg(default_value = "")]
+        message: String,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        #[cfg(feature = "next")]
+        Command::Next { command } => {
+            let ctx = match next::load_ctx(&cli.plan_dir, &cli.trunk) {
+                Ok(c) => c,
+                Err(e) => fail(&e),
+            };
+            let out = match command {
+                NextCommand::New {
+                    kind,
+                    slug,
+                    title,
+                    parent,
+                } => next::new_ticket(&ctx, &kind, &slug, &title, parent.as_deref()),
+                NextCommand::State { slug } => next::cmd_state(&ctx, &slug),
+                NextCommand::Lifecycle { kind } => next::cmd_lifecycle(&ctx, kind.as_deref()),
+                NextCommand::Board => next::cmd_board(&ctx),
+                NextCommand::Do {
+                    verb,
+                    slug,
+                    message,
+                } => next::verb::run(&ctx, &verb, &slug, &message),
+            };
+            match out {
+                Ok(s) => println!("{s}"),
+                Err(e) => fail(&e),
+            }
+        }
         Command::Board { r#ref } => {
             let source = board::source_status_line(r#ref.as_deref());
             let tickets = match r#ref {

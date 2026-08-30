@@ -15,7 +15,15 @@ pkg-fmt = "tgz"
 lto = true
 strip = true
 
+[features]
+# The 0.4 typed-graph model. Enabled by default while it is being
+# experimented with, so it stays compiled and tested; drop it from `default`
+# to build a release without the experiment.
+default = ["next"]
+next = []
+
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde_yaml = "0.9"
 regex = "1"

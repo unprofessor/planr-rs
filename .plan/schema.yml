@@ -1,0 +1,116 @@
+# planr 0.4 schema -- EXPERIMENTAL, deliberately unpinned.
+#
+# No `$schema:` URL yet: the language is still being experimented with, and
+# pinning it to the registry is what freezes it. Add the declaration once the
+# model has survived contact with real work.
+#
+# Every verb has the same shape and no ordering:
+#     require  ->  build a tree from BASE  ->  move the TARGET ref
+# `base` is `home` (the integration ref -- trunk today) or `own`
+# (plan/<kind>/<slug>). `effect` is the single ref movement.
+
+kinds: [epic, story, task]
+
+worktrees: .plan/worktrees/$kind/$slug
+
+templates:
+  # `initial` is only needed where a rework cycle reaches back to the entry
+  # state: `yield` returns a task to `todo`, so `todo` is both a `from` and a
+  # `to` and can no longer be derived. epic and story have no such cycle, so
+  # theirs stay derived.
+  epic:  { body: "## Goal\n\n## Context\n\n## Stories\n" }
+  story: { body: "## Goal\n\n## Context\n\n## Tasks\n" }
+  # NOTE: the task template deliberately does NOT scaffold `## Validation`.
+  # `submit` gates on that section existing, and a template that scaffolds a
+  # gated section satisfies the gate at birth -- the gate then checks nothing.
+  # A template must not pre-create any section a verb requires.
+  task:  { initial: todo, body: "## Goal\n\n## Acceptance\n" }
+
+verbs:
+  # `todo` is DERIVED as the initial state: it is a `from` that is never a `to`.
+  - name: claim
+    applies-to: [task]
+    from: todo
+    to: in_progress
+    require: { neighbors: { depends_on: done } }
+    base: home                    # build against the integration ref...
+    effect: create                # ...then cut plan/task/<slug> at that commit
+    worktree: create              # declaring this is what makes `task` the unit
+
+  # The one verb in the default set with no content: "ready for review" is a
+  # pure assertion. Its gate reads content it does not write, which is what
+  # keeps an empty declaration from being a free pass.
+  - name: submit
+    applies-to: [task]
+    from: in_progress
+    to: review
+    require: { sections: [Validation] }
+    base: own
+
+  - name: approve
+    applies-to: [task]
+    from: review
+    to: approved
+    base: own
+    content:
+      - annotate: { section: Review, body: $message }
+
+  - name: request-changes
+    applies-to: [task]
+    from: review
+    to: in_progress
+    base: own
+    content:
+      - annotate: { section: Review, body: $message }
+
+  # Hand back rather than discard: the ref is KEPT, so the partial work and
+  # the record of what was discovered both survive until a supervisor decides.
+  - name: yield
+    applies-to: [task]
+    from: in_progress
+    to: todo
+    base: own
+    content:
+      - annotate: { section: Blocked, body: $message }
+
+  - name: close
+    applies-to: [task]
+    from: approved
+    to: done
+    require: { self: { status: approved } }
+    base: own                     # build the declaration on the branch tip...
+    effect: merge                 # ...then merge it into home, as one ref move
+    worktree: remove
+
+  - name: close
+    applies-to: [epic, story]
+    from: todo
+    to: done
+    require: { neighbors: { children: terminal } }
+    base: home
+
+  - name: abandon
+    applies-to: [task, story, epic]
+    to: abandoned
+    content:
+      - annotate: { section: Abandoned, body: $message }
+
+  - name: archive
+    applies-to: [task, story, epic]
+    require: { self: { status: terminal } }
+    content: [remove]
+
+  - name: reparent
+    applies-to: [story, task]
+    content:
+      - edge: { set: { parent: $target } }
+
+  - name: add-dep
+    applies-to: [task]
+    content:
+      - edge: { add: { depends_on: $target } }
+
+  - name: drop-dep
+    applies-to: [task]
+    content:
+      - edge: { remove: { depends_on: $target } }
