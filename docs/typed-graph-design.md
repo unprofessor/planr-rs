@@ -1,11 +1,19 @@
-# planr v2.0 — schema-driven, typed-graph backlog
+# planr — the schema-driven, typed-graph model
 
-> **Status:** design exploration (pre-v1.0). No engine code is written yet, but
+> **Version names.** **0.3** means planr as it ships today (0.3.1 at the time
+> of writing). **0.4** means the model described here -- 0.4.0 under the
+> crate's pre-1.0 semver policy, since this is a breaking change; whether it
+> actually ships as 0.4.0 or is promoted to 1.0.0 is a product call that
+> changes nothing in this document. The **`v1` in the schema URL is neither**:
+> it versions the schema *language*, and moves only when the key set or a
+> primitive's meaning changes, never with a planr release.
+>
+> **Status:** design exploration (pre-1.0). No engine code is written yet, but
 > the schema language is pinned: `schemas/planr/v1/1.0.0/planr.schema.json` is
 > published at `https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json`
 > and validated in CI against a fixture corpus.
 >
-> This captures the reasoning and decisions from the v2 brainstorm so they
+> This captures the reasoning and decisions from the 0.4 brainstorm so they
 > survive the conversation. Open questions are flagged inline and collected in
 > §8; review and working rounds are recorded in §9, §9a and §9b. **Round 3
 > (§9b) changed the model** -- ticket state is now folded from commit events
@@ -13,7 +21,7 @@
 
 ## 1. Why change anything
 
-v1 hard-wires two things that turn out to be project-specific:
+0.3 hard-wires two things that turn out to be project-specific:
 
 1. **The hierarchy** is a closed `Epic → Story → Task` enum (`Kind` in
    `ticket.rs`), with a fixed directory mapping (`kind_to_subdir`) and fixed
@@ -45,7 +53,7 @@ These are the constraints that keep "configurable" from becoming "unbounded":
   in-repo. This is load-bearing and non-negotiable — it's why `branch = claim`
   works and why a relational DB is rejected (§6).
 - **Derive, don't store.** All groupings/rollups are computed by scanning at
-  read time (as v1 already does for the board). Any index is a *disposable,
+  read time (as 0.3 already does for the board). Any index is a *disposable,
   rebuildable cache*, never authoritative.
 - **Enforce structure, never semantics.** The tool may check that a ticket is in
   the `approved` state (structural); it must never judge whether the acceptance
@@ -59,8 +67,8 @@ These are the constraints that keep "configurable" from becoming "unbounded":
   identically. So: keep the schema tiny, ship **named presets** for the common
   cases, and make bespoke schemas the exception.
 - **Compatibility is outcome-equivalence, not byte-identity** (round-2). The
-  default schema runs existing v1 backlogs and produces the same *gate/merge
-  outcomes* — but it is not byte-for-byte v1 (verdict-as-state alone guarantees
+  default schema runs existing 0.3 backlogs and produces the same *gate/merge
+  outcomes* — but it is not byte-for-byte 0.3 (verdict-as-state alone guarantees
   that, §3.3), and "byte-for-byte" is not a goal. The regression test compares
   outcomes on migrated backlogs. See §7 for the (non-byte-identical) presets.
 - **CLI completeness.** Every intended operation by every expected actor
@@ -106,7 +114,7 @@ kinds:
   So a project can make `story` the unit while `task` survives beneath it with
   its own small lifecycle — keeping per-task acceptance criteria and graph
   visibility while paying for one worker and one reviewer per story instead of
-  per task. This decouples two things v1 conflated by accident: the execution
+  per task. This decouples two things 0.3 conflated by accident: the execution
   boundary and the bottom of the decomposition tree.
 - Decomposition stays a **tree** (single `parent` per node) at runtime. KISS/
   YAGNI: we are *not* building multi-parent decomposition now, but the
@@ -162,7 +170,7 @@ the relationship — which gives correct behavior under mutation for free:
 
 - `parent` on the **child** → the child owns its membership; abandon/archive the
   child and the edge travels with it, and the parent's rollup is re-derived from
-  whoever still points at it. This is v1's "no agent ever edits a parent to
+  whoever still points at it. This is 0.3's "no agent ever edits a parent to
   record child state," generalized.
 - `depends_on` on the **dependent** → the dependent owns its ordering; abandon a
   *dependency* and the edge is untouched, the ordering stays modeled, the dep
@@ -457,9 +465,9 @@ verbs:
     hook: { run: "./ci.sh" }
 ```
 
-Every state change flows through a verb — including the ones v1 did as **manual
+Every state change flows through a verb — including the ones 0.3 did as **manual
 file edits** (the worker hand-setting `status: review`, the reviewer hand-writing
-the verdict). In v2 those become `submit` / `approve` / `request-changes`, which
+the verdict). In 0.4 those become `submit` / `approve` / `request-changes`, which
 is strictly better: they get atomic commits and structural guards too. `approve`
 *declares* the ticket `approved`; `close`'s `require: {self: {status: approved}}`
 reads that state as folded from the branch's own events — a pure graph fact, so
@@ -587,7 +595,7 @@ call — `git rm` was never in the same category as `merge`.
   exists" and its commit is garbage-collected. No lock is needed for `claim` at
   all.
 - **`merge`** — integrate the new commit into `home`. On conflict, **abort and
-  print rebase guidance** (v1 behaviour); the target is left untouched, and the
+  print rebase guidance** (0.3 behaviour); the target is left untouched, and the
   built commit was never referenced, so a re-run after the human rebase simply
   rebuilds it. The ticket's own ref is deleted afterwards by default, since the
   commits are reachable from `home` either way; `retain-ref: true` keeps it for
@@ -633,7 +641,7 @@ content shapes, so only the declaration distinguishes them. `Planr-Ticket` is
 derivable from changed paths in the common case, but recorded explicitly so the
 event chain survives renames and so an archival commit, which deletes the path
 outright, stays attributable. The commit subject is conventionally
-`plan: <verb> <slug>`, asserting no state — v1's `plan: claim <slug>
+`plan: <verb> <slug>`, asserting no state — 0.3's `plan: claim <slug>
 (in_progress)` parenthetical is gone, because the state is computed rather than
 declared.
 
@@ -782,7 +790,7 @@ neighbor is treated differently depending on *why* the edge exists:
   relationships** → gate on `terminal`. Abandoning a child *is* a resolved
   scoping decision, so it doesn't block the parent's close.
 
-(This corrects an earlier draft that used `terminal` for both. v1 gated
+(This corrects an earlier draft that used `terminal` for both. 0.3 gated
 container-close on children `== done`, which lets an abandoned child block its
 parent forever — that half was right to change; deps were not.)
 
@@ -808,7 +816,7 @@ as operators.
 Creation is *genesis*, not a lifecycle mutation — it has no prior node and no
 from-transition — so `new` stays **fixed tooling** (like `board`/`lint`), not a
 verb, and no `scaffold` primitive is needed. Per-kind starter content is
-declared in a dedicated schema key (working name **`templates`**, echoing v1's
+declared in a dedicated schema key (working name **`templates`**, echoing 0.3's
 `templates/` dir; `init` was considered but risks colliding with
 workspace-initialization semantics):
 
@@ -911,8 +919,8 @@ in-repo (observable, same trust boundary as the code being built).
   the ref is derived from it. No kind-change verb exists; if one is ever added
   it must refuse on a claimed ticket.
 - **Worktrees live at `.plan/worktrees/$kind/$slug`** by default, and the path is
-  a configurable template (`worktrees:`, §3.4). v1 already had both the in-repo
-  default and the override — an earlier v2 draft froze `../wt-<slug>` into the
+  a configurable template (`worktrees:`, §3.4). 0.3 already had both the in-repo
+  default and the override — an earlier 0.4 draft froze `../wt-<slug>` into the
   primitive and dropped the knob, which was a regression, not a simplification.
   In-repo is the better default because a sibling path sits *outside* the
   sandbox boundary agent harnesses commonly enforce, and because two clones
@@ -979,12 +987,12 @@ work; "one ticket file" was just the special case where the cut sat at the leaf.
 `home` and creates `plan/<kind>/<slug>` at that commit. Because the commit exists
 before the ref does, the branch springs into existence already carrying the
 claim, and `git branch`'s atomic create-or-fail resolves two concurrent claims of
-one ticket by ref CAS (§3.5). v1 needed a lock here partly for prefix allocation,
+one ticket by ref CAS (§3.5). 0.3 needed a lock here partly for prefix allocation,
 which the flat layout deleted; this removes the rest of the reason.
 
 **`close` bridges the lanes** and dissolves the apparent chicken-and-egg: it
 folds the task's state *from its branch* (`git show plan/task/<slug>:...` plus
-that branch's `Planr-Verb` trailers — v1's board already reads branches this
+that branch's `Planr-Verb` trailers — 0.3's board already reads branches this
 way), gates on `approved`, **builds the `done` declaration on the branch tip,
 then merges that into `home`** — so the terminal state rides into trunk *with*
 the work, as one integration, never a trailing trunk-only edit. The declaration
@@ -1059,8 +1067,8 @@ single verb, so that hoping is never the path of least resistance.
 
 Net: parallel workers never contend, parallel reviewers never contend, same-slug
 claims resolve by ref CAS, and only the inherently-sequential integration steps
-serialize. The flat-file rewrite preserves v1's coordination guarantee and
-tightens it — two fewer locks than v1, and one fewer than the round-2 design.
+serialize. The flat-file rewrite preserves 0.3's coordination guarantee and
+tightens it — two fewer locks than 0.3, and one fewer than the round-2 design.
 
 ## 5. Archival — bounded working tree, lossless recovery
 
@@ -1106,7 +1114,7 @@ spine rather than a lifecycle state.
 Referenced throughout (archival search, query speed, the DB alternative), so
 defined once here: **the index is a disposable, git-ignored cache derived from
 the source of truth — never authoritative.** Live tickets are derived by
-scanning `tickets/` (as v1's board already does); cold tickets by walking
+scanning `tickets/` (as 0.3's board already does); cold tickets by walking
 `git log --diff-filter=D -- tickets/`. Delete it and it rebuilds; it is never
 committed and never merges.
 
@@ -1162,33 +1170,33 @@ and `git log --first-parent` already shows one merge per unit.
 ## 7. Backward compatibility & migration
 
 **Compatibility is outcome-equivalence, not byte-identity (R8/round-2).**
-"Byte-for-byte v1" is impossible by construction: v1 has no `approved` state and
+"Byte-for-byte 0.3" is impossible by construction: 0.3 has no `approved` state and
 gates `close` by parsing free-text `verdict:` from a `## Review` body
 (`extract_last_review_verdict` in `close_cmd.rs`) — the exact semantic
-content-parse the v2 `require` vocabulary deliberately *cannot* do (§3.6). Since
-verdict-as-state (R3) is core to v2, reproducing v1's file/history exactly is a
+content-parse the 0.4 `require` vocabulary deliberately *cannot* do (§3.6). Since
+verdict-as-state (R3) is core to 0.4, reproducing 0.3's file/history exactly is a
 non-goal. So there is **one recommended preset**, and compatibility means the
 same *gate/merge outcomes* on a migrated backlog:
 
-- **default (recommended)** — `kinds: [epic, story, task]`, the v2 verbs and
-  derived lifecycle. Relative to v1 it carries two intentional fixes: container
+- **default (recommended)** — `kinds: [epic, story, task]`, the 0.4 verbs and
+  derived lifecycle. Relative to 0.3 it carries two intentional fixes: container
   `close` gates on `terminal` (an abandoned child no longer deadlocks its parent)
   and the manual review steps (`status: review`, hand-written verdict) become the
   `submit`/`approve`/`request-changes` verbs with an `approved` state.
 - A more conservative variant (container-close on `done`, review left as manual
-  edits) is expressible as a schema, but is *not* byte-for-byte v1 either — the
-  verdict mechanism still differs. A project that genuinely needs v1's exact
+  edits) is expressible as a schema, but is *not* byte-for-byte 0.3 either — the
+  verdict mechanism still differs. A project that genuinely needs 0.3's exact
   section-parse can put it in a `hook` (the escape hatch), accepting that this
   steps outside the schema-as-data model.
 
 The **regression test** compares outcomes (which tickets gate/merge, given the
-same inputs) between v1 and the v2 default on migrated backlogs — not byte
+same inputs) between 0.3 and the 0.4 default on migrated backlogs — not byte
 identity. Migration from `epics/ stories/ tasks/` dirs to flat `tickets/` is
 mechanical (move files, drop numeric prefix, kind already in frontmatter); a
 `planr migrate` command does it.
 
 **Migration must also seed the event chain (round-3).** Frontmatter loses
-`status`, `id`, `created` and `updated`, but a v1 ticket carries no `Planr-Verb`
+`status`, `id`, `created` and `updated`, but a 0.3 ticket carries no `Planr-Verb`
 history, so a naive fold would compute every migrated ticket as sitting in its
 initial state. `planr migrate` therefore writes **one seed event per ticket** —
 a commit whose trailers declare the state the ticket was in at migration — and
@@ -1241,13 +1249,13 @@ known boundary.
     that keeps it cheap is already in (`base: home` resolves by walking the
     parent chain), but the workflow is not adopted.
 12. **Migration seed events** — the exact trailer shape `planr migrate` writes to
-    seed a v1 ticket's event chain (§7), and whether a seed is one commit per
+    seed a 0.3 ticket's event chain (§7), and whether a seed is one commit per
     ticket or one commit for the whole backlog.
 
 ## 9. Fresh-eyes review findings (round 1, 2026-08-21)
 
 An independent fresh-context review (no prior design context) cross-checked the
-doc against the v1 source. Assessment column is *this author's* triage, not the
+doc against the 0.3 source. Assessment column is *this author's* triage, not the
 reviewer's. Findings drive the next rework pass; nothing below is fixed in the
 prose above yet except where noted.
 
@@ -1296,8 +1304,8 @@ prose above yet except where noted.
 
 ### Real but smaller — all resolved
 
-- **R8 — "Byte-for-byte v1" was false. ✅ RESOLVED (§7)** — *superseded by B2
-  (round 2), which went further:* "byte-for-byte" is dropped entirely (v1's
+- **R8 — "Byte-for-byte 0.3" was false. ✅ RESOLVED (§7)** — *superseded by B2
+  (round 2), which went further:* "byte-for-byte" is dropped entirely (0.3's
   verdict-parse isn't expressible in `require`); compatibility is
   outcome-equivalence, one recommended preset. See §9a/B2.
 - **R9 — `neighbors` inverse-role names. ✅ RESOLVED (§3.2).** Each edge
@@ -1337,7 +1345,7 @@ prose above yet except where noted.
 ### Validated as sound (no change)
 
 Storage-side = ownership (§3.2); milestone-as-group-edge removing the epic-07
-directory hack; needs-vs-decomposition asymmetry (§3.6, confirmed against v1
+directory hack; needs-vs-decomposition asymmetry (§3.6, confirmed against 0.3
 `close_cmd.rs`); per-kind available actions from `applies-to` (§3.4);
 git-history-as-archive with commit trailers (§5).
 
@@ -1361,12 +1369,12 @@ seams) + smaller items; all now fixed.
   the "any non-terminal" verb (`abandon`).** Corrects the earlier "prefer
   `require` over `from`" framing — `from` is structural (source state), `require`
   is an orthogonal precondition; the former is the norm.
-- **B2 — "byte-for-byte v1" was self-contradictory and unbuildable. ✅ FIXED
+- **B2 — "byte-for-byte 0.3" was self-contradictory and unbuildable. ✅ FIXED
   (§2/§7).** §2 claimed the default is byte-for-byte while §7 said it's a
-  superset; and `v1-strict` couldn't reproduce v1's free-text `verdict:` parse
+  superset; and `0.3-strict` couldn't reproduce 0.3's free-text `verdict:` parse
   within the `require` vocabulary. Fix: **drop "byte-for-byte" entirely** —
   compatibility is *outcome-equivalence* on migrated backlogs; one recommended
-  preset; v1's exact section-parse is only reachable via a `do` hook.
+  preset; 0.3's exact section-parse is only reachable via a `do` hook.
 - **Smaller (all fixed):** primitive count 9→**ten** (§8); added the **`story`
   template** and stated every kind needs one (§3.7); `abandon`/`archive` now
   `applies-to` **`milestone`** so milestones can be retired (§3.4); **`link`** is
@@ -1449,8 +1457,8 @@ handoff presented:
   *story* is 2x-5x fewer agents, and it needs nothing from Request A.
 - **Request A — container integration branches: deferred**, but its *contract*
   change is adopted: `branch`/`merge` resolve base and target by walking the
-  parent chain, with trunk as the base case rather than a constant (§3.4). v1
-  left this variable and v2 had re-fixed it; restoring it makes A a later schema
+  parent chain, with trunk as the base case rather than a constant (§3.4). 0.3
+  left this variable and 0.4 had re-fixed it; restoring it makes A a later schema
   choice rather than a later rewrite. Two things A must answer before it lands.
   First, the derivation is half-specified: "a container is an integration point
   iff its `close` includes `merge`" says where the branch *ends*, not who *cuts*
@@ -1462,11 +1470,11 @@ handoff presented:
   direction is mechanically harder than the flip — merging trunk *down* into an
   open epic branch is a real three-way merge, worktree-free only while it does
   not conflict.
-- **Request C — no v1 changes**: nothing asked, nothing done.
+- **Request C — no 0.3 changes**: nothing asked, nothing done.
 
 ### Two corrections to the design as written
 
-- **Worktree location.** v1 already defaults to `.plan/worktrees/` and already
+- **Worktree location.** 0.3 already defaults to `.plan/worktrees/` and already
   accepts an override (`claim.rs`); the round-2 text had frozen `../wt-<slug>`
   into the primitive contract. A regression, now reverted and made a template
   (§4).
@@ -1479,7 +1487,7 @@ handoff presented:
 
 The model is materially different from round 2 and materially simpler: fewer
 primitives, fewer stored fields, no ordering, one fewer lock. The published
-schema at `schemas/planr/v1/1.0.0/planr.schema.json` now pins it — 28 fixtures encode
+schema at `schemas/planr/v1/1.0.0/planr.schema.json` now pins it — 29 fixtures encode
 what the language must accept and reject, including the legacy `do` list, and
 they run in CI. Writing that schema caught a real gap in this design
 in the process, which is the argument for pinning a contract in something
