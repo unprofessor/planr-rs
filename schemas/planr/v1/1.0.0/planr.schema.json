@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json",
-  "title": "planr v1 schema",
-  "description": "The planr schema language, version 1. The root schema validates a project's .plan/schema.yml. Two further artifacts are addressable by anchor: '#ticket' validates a ticket file's YAML frontmatter, and '#commit' validates the parsed Planr-* trailer block of a planr commit. These schemas constrain FORM only. The vocabulary they admit -- which kind names are legal, which verb names exist -- is supplied by the project's own schema file and checked by planr against the tree at each commit, never here. This document is an identifier and an offline validator; planr never dereferences it at runtime.",
+  "title": "planr schema language v1",
+  "description": "Version 1 of the planr schema language. This number tracks the LANGUAGE, not the planr binary: it does not mean 'the schema for planr v1', and it moves only when the key set or a primitive's meaning changes, never with a planr release. The root schema validates a project's .plan/schema.yml. Two further artifacts are addressable by anchor: '#ticket' validates a ticket file's YAML frontmatter, and '#commit' validates the parsed Planr-* trailer block of a planr commit. These schemas constrain FORM only. The vocabulary they admit -- which kind names are legal, which verb names exist -- is supplied by the project's own schema file and checked by planr against the tree at each commit, never here. This document is an identifier and an offline validator; planr never dereferences it at runtime.",
   "type": "object",
   "required": ["kinds", "verbs"],
   "additionalProperties": false,

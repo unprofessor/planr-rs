@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Published schema for the v2 language**, identified by its canonical URL
+- **Published schema for the typed-graph model**, identified by its canonical URL
   `https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json` and kept
   in-tree at the matching path so validation never needs the network.
   Projects cite the alias `.../planr/v1/planr.schema.json`, which moves
@@ -12,7 +12,9 @@
   is why it is the document's `$id`. One JSON Schema 2020-12 document covers
   all three artifacts: the root schema validates `.plan/schema.yml`, the
   `#ticket` anchor validates ticket frontmatter, and the `#commit` anchor
-  validates a commit's `Planr-*` trailer block.
+  validates a commit's `Planr-*` trailer block. The `v1` in the URL is the
+  schema language's own version and is independent of planr's release
+  number -- planr is at 0.3.x and the language is at its first version.
 - **Schema validation in CI.** `cargo test` now meta-validates the schema
   document against draft 2020-12, checks that its `$id` still agrees with the
   path it is published at, confirms both anchors resolve, and runs a corpus of
