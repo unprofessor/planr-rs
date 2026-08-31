@@ -825,49 +825,79 @@ fn test_e2e_claim_without_worktree_flag_does_the_work() {
     );
 }
 
-/// The default worktree lives inside the tracked plan dir, so it must ignore
-/// itself: otherwise trunk reads dirty after every claim and the leader's
-/// `git add .plan` commits the worktree as a gitlink -- a bogus submodule
-/// entry that a fresh clone cannot resolve.
+/// A worktree inside the repo is an embedded repo, so git stages it as a
+/// gitlink -- a bogus submodule that a fresh clone cannot resolve -- and
+/// trunk reads dirty until someone runs `git rm --cached`. Claim must add an
+/// ignore rule for it wherever it lands, default or explicit.
 #[test]
-fn test_e2e_default_worktree_does_not_dirty_trunk() {
+fn test_e2e_worktree_inside_repo_does_not_dirty_trunk() {
+    for placement in [
+        vec!["claim", "t1"],
+        vec!["claim", "t1", "--worktree", ".plan/wt"],
+        vec!["claim", "t1", "--worktree", "wt"],
+    ] {
+        let td = tempfile::tempdir().unwrap();
+        seed_lint_repo(td.path());
+        planr_ok(td.path(), &placement);
+        assert_trunk_undisturbed(td.path(), &format!("{placement:?}"));
+    }
+}
+
+/// A worktree outside the repo needs no rule -- git never looks at it.
+#[test]
+fn test_e2e_worktree_outside_repo_needs_no_ignore_rule() {
     let td = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
 
-    planr_ok(td.path(), &["claim", "t1"]);
+    let wt = outside.path().join("wt-t1");
+    planr_ok(
+        td.path(),
+        &["claim", "t1", "--worktree", &wt.to_string_lossy()],
+    );
+    assert_trunk_undisturbed(td.path(), "outside the repo");
 
+    let excl = std::fs::read_to_string(td.path().join(".git/info/exclude")).unwrap_or_default();
+    assert!(
+        !excl.contains("wt-t1"),
+        "no rule should be written for a worktree outside the repo: {excl}"
+    );
+}
+
+/// Trunk must stay clean after a claim: no dirty status, no `dirty` in the
+/// board header, and no gitlink staged by the leader's `git add`.
+fn assert_trunk_undisturbed(dir: &Path, case: &str) {
     let porcelain = Command::new("git")
         .args(["status", "--porcelain"])
-        .current_dir(td.path())
+        .current_dir(dir)
         .output()
         .unwrap();
     let porcelain = String::from_utf8(porcelain.stdout).unwrap();
     assert!(
         porcelain.trim().is_empty(),
-        "claim left trunk dirty: {porcelain}"
+        "{case}: claim left trunk dirty: {porcelain}"
     );
 
-    // The board's source header must not report `dirty` either.
-    let board = planr_ok(td.path(), &["board"]);
+    let board = planr_ok(dir, &["board"]);
     let header = board.lines().next().unwrap_or_default();
-    assert!(!header.contains("dirty"), "board header: {header}");
+    assert!(!header.contains("dirty"), "{case}: board header: {header}");
 
-    // The leader's normal flow must not stage a gitlink for the worktree.
-    planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
+    // The leader's normal flow must not stage the worktree as a gitlink.
+    planr_ok(dir, &["new", "task", "t9", "Task Nine", "s1"]);
     Command::new("git")
-        .args(["add", ".plan"])
-        .current_dir(td.path())
+        .args(["add", "-A"])
+        .current_dir(dir)
         .ok()
         .unwrap();
     let staged = Command::new("git")
-        .args(["ls-files", "-s", ".plan"])
-        .current_dir(td.path())
+        .args(["ls-files", "-s"])
+        .current_dir(dir)
         .output()
         .unwrap();
     let staged = String::from_utf8(staged.stdout).unwrap();
     assert!(
         !staged.contains("160000"),
-        "worktree staged as a gitlink: {staged}"
+        "{case}: worktree staged as a gitlink: {staged}"
     );
 }
 

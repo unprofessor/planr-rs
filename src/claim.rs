@@ -5,7 +5,7 @@
 
 use crate::git;
 use crate::lock::PlanrLock;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// The `findTask` predicate from TS: `f.replace(/^\d+-/, "").endsWith(slug + ".md")`.
 /// NOTE: on full paths (e.g. `tasks/03-http-proxy.md`), the `^\d+-` strip never
@@ -159,19 +159,74 @@ fn local_date_string() -> String {
     format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day(),)
 }
 
-/// Make `<plan-dir>/worktrees` invisible to git.
+/// Strip `.` and resolve `..` lexically -- the worktree does not exist yet,
+/// so `canonicalize` is not available to do it for us.
+fn normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Keep a worktree that lands inside the repository invisible to git.
 ///
-/// A `*` pattern ignores every entry including the `.gitignore` itself, so
-/// the whole tree stays untracked and trunk stays clean -- no new file for
-/// the leader to notice or commit.
-fn ensure_worktrees_ignored(worktrees_dir: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(worktrees_dir)
-        .map_err(|e| format!("cannot create {}: {e}", worktrees_dir.display()))?;
-    let ignore = worktrees_dir.join(".gitignore");
-    if ignore.exists() {
+/// A worktree inside the working tree is an embedded repo: `git add` stages
+/// it as a `160000` gitlink -- a bogus submodule that rides along through
+/// every close merge and that a fresh clone cannot resolve -- and trunk reads
+/// dirty until someone runs `git rm --cached`. Hiding an embedded repo takes
+/// a pattern in an ancestor's ignore rules naming its path; a `.gitignore`
+/// placed inside the worktree cannot do it, since git detects the gitlink
+/// from the `.git` file rather than from the directory contents.
+///
+/// The rule goes in `.git/info/exclude`, not a tracked `.gitignore`: a
+/// worktree exists only in this clone, so its ignore rule is local too, and
+/// writing it there leaves no new file for the leader to notice or commit.
+/// A path outside the repository needs no rule -- git never looks at it.
+fn ensure_worktree_ignored(target: &Path, cwd: &Path) -> Result<(), String> {
+    let Ok(root) = PathBuf::from(git::show_toplevel()?).canonicalize() else {
+        return Ok(());
+    };
+    let base = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let abs = normalize(&if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        base.join(target)
+    });
+
+    let Ok(rel) = abs.strip_prefix(&root) else {
+        return Ok(());
+    };
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    if rel.is_empty() {
         return Ok(());
     }
-    std::fs::write(&ignore, "*\n").map_err(|e| format!("cannot write {}: {e}", ignore.display()))
+    let pattern = format!("/{rel}/");
+
+    let info = PathBuf::from(git::git_common_dir(cwd)?).join("info");
+    std::fs::create_dir_all(&info).map_err(|e| format!("cannot create {}: {e}", info.display()))?;
+    let excl = info.join("exclude");
+    let existing = std::fs::read_to_string(&excl).unwrap_or_default();
+    if existing.lines().any(|l| l.trim() == pattern) {
+        return Ok(());
+    }
+
+    let mut out = existing;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !out.contains("# planr worktrees") {
+        out.push_str("\n# planr worktrees -- checkouts, not backlog content\n");
+    }
+    out.push_str(&pattern);
+    out.push('\n');
+    std::fs::write(&excl, out).map_err(|e| format!("cannot write {}: {e}", excl.display()))
 }
 
 // ---------------------------------------------------------------------------
@@ -265,24 +320,23 @@ pub fn claim_task(
     };
 
     let wt_path = if worktree_path.is_empty() {
-        // Default path: <plan-dir>/worktrees/wt-<slug>.
+        // Default path: <plan-dir>/worktrees/wt-<slug>. planr owns that
+        // directory, so ignore it wholesale -- one rule covers every task
+        // ever claimed at the default location.
         let mut p = cwd.to_path_buf();
         p.push(plan_dir);
         p.push("worktrees");
-        // The worktrees dir sits inside the tracked plan dir, so it has to
-        // ignore itself. Without this the leader's `git add <plan-dir>`
-        // commits each worktree as a gitlink (a bogus submodule that a
-        // fresh clone cannot resolve), and trunk reads dirty forever after.
-        ensure_worktrees_ignored(&p)?;
+        ensure_worktree_ignored(&p, cwd)?;
         p.push(format!("wt-{slug}"));
         p
     } else {
         let p = PathBuf::from(&worktree_path);
-        if p.is_absolute() {
-            p
-        } else {
-            cwd.join(&p)
-        }
+        let p = if p.is_absolute() { p } else { cwd.join(&p) };
+        // An explicit path is the caller's choice of location, but landing
+        // inside the repo corrupts trunk exactly the same way, so it gets
+        // the same guard.
+        ensure_worktree_ignored(&p, cwd)?;
+        p
     };
 
     // 3a. Create worktree branch

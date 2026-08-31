@@ -29,11 +29,14 @@
   `in_progress`. Omitting the flag now uses the documented default path
   `<plan-dir>/worktrees/wt-<slug>`, the same as passing `--worktree` with
   no value. `--no-worktree` remains the only way to opt out.
-  Because that default sits inside the tracked plan dir, planr now writes
-  `<plan-dir>/worktrees/.gitignore` when it creates the default worktree,
-  so worktrees stay invisible to git -- otherwise trunk read dirty after
-  every claim and `git add <plan-dir>` committed each worktree as a
-  gitlink that a fresh clone could not resolve.
+  `claim` also now adds an ignore rule to `.git/info/exclude` for any
+  worktree that lands inside the repository -- the default location and an
+  explicit `--worktree` path alike. A worktree inside the working tree is
+  an embedded repo, so without a rule `git add` staged it as a gitlink (a
+  bogus submodule that a fresh clone cannot resolve) and trunk read dirty
+  until someone ran `git rm --cached`. The rule is local because a worktree
+  is local, so nothing new appears for the leader to commit; a worktree
+  outside the repository gets no rule.
 
 - **`planr new` quotes the `title:` it writes** ([#1]). A colon in the title
   (`"Sanitary history: boundary rev, rewriter"`) produced frontmatter that
