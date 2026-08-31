@@ -232,7 +232,12 @@ pub fn merge_into(target: &str, source: &str, message: &str) -> Result<String, S
 ///
 /// Never fast-forwards -- a fast-forward would apply the work, which is the
 /// one thing this exists to avoid.
-pub fn absorb(target: &str, source: &str, tree: &str, message: &str) -> Result<String, String> {
+pub fn merge_ticket_only(
+    target: &str,
+    source: &str,
+    tree: &str,
+    message: &str,
+) -> Result<String, String> {
     let target_sha = rev_parse(target)?;
     let source_sha = rev_parse(source)?;
     let commit = commit_tree(tree, &[&target_sha, &source_sha], message)?;

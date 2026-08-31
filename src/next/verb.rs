@@ -358,30 +358,27 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
 
     check_require(ctx, &verb, &ticket, &base_ref)?;
 
-    // Releasing a ref discards every commit home cannot reach. That is a real
-    // loss -- a yielded ticket's partial work and the note explaining why it
-    // was handed back both live there -- so it is opt-in rather than implied.
-    // Checked before anything is built, so a refusal leaves nothing behind.
-    // Releasing a ref never destroys anything: `absorb` records the branch as
-    // a second parent, so its commits stay reachable from home. There is no
-    // opt-out, deliberately -- see the note on Effect::Absorb.
-    let releases_ref = verb.effect == Effect::Absorb;
-    let mut absorbing: Option<(String, usize)> = None;
+    // Releasing a ref never destroys anything: a ticket-only merge records the
+    // branch as a second parent, so its commits stay reachable from home even
+    // though the tree does not carry them. There is deliberately no
+    // destructive variant -- see the note on Effect::TicketOnly.
+    let releases_ref = verb.effect == Effect::TicketOnly;
+    let mut preserving: Option<(String, usize)> = None;
     if releases_ref && git::ref_exists(&own) {
         let ahead = git::count_unreachable(&ctx.trunk, &own)?;
         if ahead > 0 {
-            absorbing = Some((git::rev_parse(&own)?, ahead));
+            preserving = Some((git::rev_parse(&own)?, ahead));
         }
     }
 
     // ---- build the tree, then the commit; nothing is referenced yet ----
     let base_sha = git::rev_parse(&base_ref)?;
     let index = git::ScratchIndex::from_ref(&base_sha)?;
-    // Under Absorb the tree comes from home while the TICKET comes from the
-    // branch -- that is precisely how the worker's rationale reaches trunk
+    // Under TicketOnly the tree comes from home while the TICKET comes from
+    // the branch -- that is precisely how the worker's rationale reaches trunk
     // without the work coming with it.
-    let content_ref = match (verb.effect, absorbing.is_some()) {
-        (Effect::Absorb, true) => own.clone(),
+    let content_ref = match (verb.effect, preserving.is_some()) {
+        (Effect::TicketOnly, true) => own.clone(),
         _ => base_ref.clone(),
     };
     let touched = apply_content(ctx, &verb, &ticket, &content_ref, &index, message)?;
@@ -392,7 +389,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
     if !message.is_empty() && verb.content.is_empty() {
         body.push_str(&format!("\n\n{message}"));
     }
-    if let Some((tip, ahead)) = &absorbing {
+    if let Some((tip, ahead)) = &preserving {
         body.push_str(&format!(
             "\n\nPreserved {ahead} unmerged commit(s) from {own} at {tip} in history; \
              the work itself is not applied to {}.",
@@ -422,13 +419,13 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
             git::delete_ref(&own)?;
             report.push(format!("released {own}"));
         }
-        Effect::Absorb => {
-            if let Some((_tip, ahead)) = &absorbing {
-                let absorbed = git::absorb(&ctx.trunk, &own, &tree, &commit_msg)?;
+        Effect::TicketOnly => {
+            if let Some((_tip, ahead)) = &preserving {
+                let merged = git::merge_ticket_only(&ctx.trunk, &own, &tree, &commit_msg)?;
                 report.push(format!(
-                    "{} -> {} (absorbed {own}: {ahead} commit(s) preserved in history, not applied)",
+                    "{} -> {} (ticket only: {ahead} commit(s) from {own} preserved in history, not applied)",
                     ctx.trunk,
-                    &absorbed[..7]
+                    &merged[..7]
                 ));
             } else {
                 // Nothing in flight -- an ordinary advance on home.

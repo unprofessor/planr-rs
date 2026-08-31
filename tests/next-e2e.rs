@@ -311,7 +311,10 @@ fn abandoning_work_in_flight_preserves_the_rationale_and_the_work() {
     yield_with_work(dir, "held");
 
     let out = ok(dir, &["next", "do", "abandon", "held", "wrong layer"]);
-    assert!(out.contains("absorbed"), "unexpected output: {out}");
+    assert!(
+        out.contains("preserved in history"),
+        "unexpected output: {out}"
+    );
     assert!(ok(dir, &["next", "state", "held"]).contains("abandoned"));
 
     // 1. The rationale for the handback reaches trunk, alongside the reason
@@ -347,7 +350,7 @@ fn abandoning_work_in_flight_preserves_the_rationale_and_the_work() {
 }
 
 #[test]
-fn abandoning_an_unclaimed_ticket_has_nothing_to_absorb() {
+fn abandoning_an_unclaimed_ticket_has_nothing_to_preserve() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     setup(dir);
@@ -356,8 +359,8 @@ fn abandoning_an_unclaimed_ticket_has_nothing_to_absorb() {
     // No ref, so nothing to preserve -- an ordinary advance on trunk.
     let out = ok(dir, &["next", "do", "abandon", "idle", "out of scope"]);
     assert!(
-        !out.contains("absorbed"),
-        "nothing should be absorbed: {out}"
+        !out.contains("preserved"),
+        "nothing should have needed preserving: {out}"
     );
     assert!(ok(dir, &["next", "state", "idle"]).contains("abandoned"));
 }

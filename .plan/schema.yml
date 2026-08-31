@@ -90,16 +90,16 @@ verbs:
     base: home
 
   # Abandoning is how a supervisor resolves a yielded ticket when replanning
-  # is not worth it. `absorb` takes the ticket -- carrying the worker's
-  # `## Blocked` rationale onto trunk -- while leaving the work itself
-  # unapplied, reachable in history so the ref can be released without
+  # is not worth it. `ticket-only` integrates the ticket -- carrying the
+  # worker's `## Blocked` rationale onto trunk -- while leaving the work
+  # itself unapplied, reachable in history so the ref can be released without
   # destroying anything. There is no destructive variant: if a branch truly
   # must be destroyed, delete the ref with git first and there is nothing
-  # left for `absorb` to preserve.
+  # left to preserve.
   - name: abandon
     applies-to: [task, story, epic]
     to: abandoned
-    effect: absorb
+    effect: ticket-only
     content:
       - annotate: { section: Abandoned, body: $message }
 

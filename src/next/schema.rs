@@ -24,7 +24,7 @@ pub enum Base {
 
 /// The single ref movement a verb performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum Effect {
     /// The commit lands on `base` and the base ref moves.
     #[default]
@@ -33,12 +33,18 @@ pub enum Effect {
     Create,
     /// Integrate the new commit into `home`.
     Merge,
-    /// Take the ticket, leave the work: the commit's tree is home's tree with
-    /// this ticket taken from its own ref, and its parents are home and that
-    /// ref. An `ours`-style merge, so the branch's commits become reachable
-    /// from home -- preserved in history, absent from the tree -- and the ref
-    /// can then be released without destroying anything.
-    Absorb,
+    /// Integrate the ticket, not the work: the commit's tree is home's tree
+    /// with this ticket taken from its own ref, and its parents are home and
+    /// that ref. An `ours`-style merge -- SVN calls the same thing a
+    /// record-only merge -- so the branch's commits become reachable from
+    /// home, preserved in history and absent from the tree, and the ref can
+    /// then be released without destroying anything.
+    ///
+    /// Named for the mechanics rather than the intent, because intent belongs
+    /// to the verb. `abandon` supplies the sentiment here; a future verb with
+    /// different sentiment must still be able to read this effect and have it
+    /// mean the right thing.
+    TicketOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
