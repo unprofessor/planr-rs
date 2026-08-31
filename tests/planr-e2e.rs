@@ -769,6 +769,88 @@ fn test_e2e_claim_close_task() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Scenario: claim without --worktree (issue #4)
+// ---------------------------------------------------------------------------
+
+/// A bare `claim` must do the full job: default worktree, branch, status
+/// flip, commit. It used to print `claimed: <slug>` and exit 0 having
+/// changed nothing, which let a caller start editing on trunk.
+#[test]
+fn test_e2e_claim_without_worktree_flag_does_the_work() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let out = planr_ok(td.path(), &["claim", "t1"]);
+
+    // Output is the worktree path at the documented default location.
+    let wt_abs = td.path().join(".plan/worktrees/wt-t1");
+    assert!(
+        !out.contains("claimed:"),
+        "bare claim must not report a bare claim: {out}"
+    );
+    assert!(out.contains("wt-t1"), "worktree path expected: {out}");
+    assert!(wt_abs.is_dir(), "worktree dir not created: {out}");
+
+    // The branch exists.
+    let branches = Command::new("git")
+        .args(["branch", "--list"])
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+    let branches_str = String::from_utf8(branches.stdout).unwrap();
+    assert!(
+        branches_str.contains("plan/t1"),
+        "branch not created: {branches_str}"
+    );
+
+    // The status is flipped on the branch, and committed (not left dirty).
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let content = std::fs::read_to_string(wt_abs.join(&task_file)).unwrap();
+    assert!(
+        content.contains("status: in_progress"),
+        "status not flipped: {content}"
+    );
+    let porcelain = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&wt_abs)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8(porcelain.stdout)
+            .unwrap()
+            .trim()
+            .is_empty(),
+        "status flip was not committed"
+    );
+}
+
+/// `--no-worktree` remains the one opt-out: the caller manages its own
+/// workspace, so planr reports the claim and changes nothing.
+#[test]
+fn test_e2e_claim_no_worktree_opts_out() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let out = planr_ok(td.path(), &["claim", "t1", "--no-worktree"]);
+    assert!(out.contains("claimed: t1"), "claim output: {out}");
+
+    assert!(
+        !td.path().join(".plan/worktrees").exists(),
+        "--no-worktree must not create a worktree"
+    );
+    let branches = Command::new("git")
+        .args(["branch", "--list"])
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+    let branches_str = String::from_utf8(branches.stdout).unwrap();
+    assert!(
+        !branches_str.contains("plan/t1"),
+        "--no-worktree must not create a branch: {branches_str}"
+    );
+}
+
 fn find_ticket_filename(plan_dir: &Path, kind_dir: &str, slug: &str) -> String {
     let tickets_dir = plan_dir.join(format!(".plan/{kind_dir}"));
     for entry in std::fs::read_dir(tickets_dir).unwrap() {

@@ -116,9 +116,9 @@ enum Command {
         /// override trunk branch for this invocation
         trunk_override: Option<String>,
         /// Path for the worktree
-        /// (default: <plan-dir>/worktrees/wt-<slug>;
-        /// use --worktree with no value for default;
-        /// use --no-worktree to skip entirely)
+        /// (default: <plan-dir>/worktrees/wt-<slug>, used both when the
+        /// flag is omitted and when it is passed with no value;
+        /// use --no-worktree to skip worktree creation entirely)
         #[arg(
             long = "worktree",
             num_args = 0..=1,
@@ -221,8 +221,15 @@ fn main() {
             no_worktree,
         } => {
             let trunk = trunk_override.as_deref().unwrap_or(&cli.trunk);
-            // None -> skip worktree; Some(path/"") -> create worktree
-            let wt = if no_worktree { None } else { worktree };
+            // Only an explicit --no-worktree skips the worktree. An omitted
+            // --worktree means the default path, same as passing the flag
+            // with no value -- otherwise a bare `claim` would silently do
+            // nothing at all (no branch, no status flip, no commit).
+            let wt = if no_worktree {
+                None
+            } else {
+                Some(worktree.unwrap_or_default())
+            };
             match claim::claim_task(&slug, trunk, &cli.plan_dir, wt, std::path::Path::new(".")) {
                 Ok(out) => println!("{out}"),
                 Err(e) => fail(&e),

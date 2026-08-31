@@ -20,6 +20,16 @@
 
 ### Fixed
 
+- **`planr claim <slug>` without `--worktree` now does the full claim**
+  ([#4]). Since 0.3.0 an omitted `--worktree` was treated as
+  `--no-worktree`, so a bare `claim` printed `claimed: <slug>` and exited 0
+  having created no branch, no worktree, no status flip, and no commit --
+  an agent that trusted that output would start editing on trunk, and two
+  agents could each "claim" the same task without either showing as
+  `in_progress`. Omitting the flag now uses the documented default path
+  `<plan-dir>/worktrees/wt-<slug>`, the same as passing `--worktree` with
+  no value. `--no-worktree` remains the only way to opt out.
+
 - **`planr new` quotes the `title:` it writes** ([#1]). A colon in the title
   (`"Sanitary history: boundary rev, rewriter"`) produced frontmatter that
   planr's own YAML reader could not parse -- silently at creation, then as
@@ -133,3 +143,4 @@
 - Licensed project under MIT.
 
 [#1]: https://github.com/unprofessor/planr-rs/issues/1
+[#4]: https://github.com/unprofessor/planr-rs/issues/4
