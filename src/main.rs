@@ -191,6 +191,10 @@ enum NextCommand {
         /// message for $message in annotate bodies, or an edge $target
         #[arg(default_value = "")]
         message: String,
+        /// Allow a verb that releases the ticket's ref to destroy commits
+        /// trunk cannot reach. Without it such a verb is refused.
+        #[arg(long)]
+        discard_wip: bool,
     },
 }
 
@@ -218,7 +222,8 @@ fn main() {
                     verb,
                     slug,
                     message,
-                } => next::verb::run(&ctx, &verb, &slug, &message),
+                    discard_wip,
+                } => next::verb::run(&ctx, &verb, &slug, &message, discard_wip),
             };
             match out {
                 Ok(s) => println!("{s}"),

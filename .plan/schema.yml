@@ -89,9 +89,13 @@ verbs:
     require: { neighbors: { children: terminal } }
     base: home
 
+  # Abandoning is how a supervisor resolves a yielded ticket when replanning
+  # is not worth it. `delete` releases the ticket's ref -- refused when that
+  # ref carries commits trunk cannot reach, unless --discard-wip is passed.
   - name: abandon
     applies-to: [task, story, epic]
     to: abandoned
+    effect: delete
     content:
       - annotate: { section: Abandoned, body: $message }
 

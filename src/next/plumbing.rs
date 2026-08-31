@@ -91,6 +91,15 @@ pub fn show(ref_: &str, path: &str) -> Result<String, String> {
     run(&["show", &format!("{ref_}:{path}")])
 }
 
+/// How many commits `tip` carries that `base` cannot reach -- i.e. what would
+/// be lost if `tip`'s ref were deleted.
+pub fn count_unreachable(base: &str, tip: &str) -> Result<usize, String> {
+    let out = run(&["rev-list", "--count", &format!("{base}..{tip}")])?;
+    out.trim()
+        .parse()
+        .map_err(|e| format!("cannot count commits on {tip}: {e}"))
+}
+
 pub fn is_ancestor(a: &str, b: &str) -> bool {
     Command::new("git")
         .args(["merge-base", "--is-ancestor", a, b])

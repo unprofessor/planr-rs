@@ -315,7 +315,13 @@ fn worktree_path(ctx: &Ctx, kind: &str, slug: &str) -> PathBuf {
 }
 
 /// Run one verb. Returns a human-readable report of what it did.
-pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<String, String> {
+pub fn run(
+    ctx: &Ctx,
+    verb_name: &str,
+    slug: &str,
+    message: &str,
+    discard_wip: bool,
+) -> Result<String, String> {
     let ticket = read_ticket(ctx, &ctx.trunk, slug)?;
     let kind = ticket.kind.clone();
     let own = ctx.own_ref(&kind, slug);
@@ -358,6 +364,25 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
 
     check_require(ctx, &verb, &ticket, &base_ref)?;
 
+    // Releasing a ref discards every commit home cannot reach. That is a real
+    // loss -- a yielded ticket's partial work and the note explaining why it
+    // was handed back both live there -- so it is opt-in rather than implied.
+    // Checked before anything is built, so a refusal leaves nothing behind.
+    let mut discarding: Option<(String, usize)> = None;
+    if verb.effect == Effect::Delete && git::ref_exists(&own) {
+        let ahead = git::count_unreachable(&ctx.trunk, &own)?;
+        if ahead > 0 {
+            if !discard_wip {
+                return Err(format!(
+                    "refuse {verb_name}: '{slug}' has {ahead} commit(s) on {own} that {} cannot reach.\n\
+                     Pass --discard-wip to release the ref and destroy them, or merge or move the work first.",
+                    ctx.trunk
+                ));
+            }
+            discarding = Some((git::rev_parse(&own)?, ahead));
+        }
+    }
+
     // ---- build the tree, then the commit; nothing is referenced yet ----
     let base_sha = git::rev_parse(&base_ref)?;
     let index = git::ScratchIndex::from_ref(&base_sha)?;
@@ -368,6 +393,14 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
     let mut body = String::new();
     if !message.is_empty() && verb.content.is_empty() {
         body.push_str(&format!("\n\n{message}"));
+    }
+    if let Some((tip, ahead)) = &discarding {
+        // Prose, deliberately not a third trailer: the trailer vocabulary is
+        // closed, and this is a note for a human reading the log later. The
+        // sha stays recoverable from the reflog until gc.
+        body.push_str(&format!(
+            "\n\nDiscarded {ahead} unmerged commit(s) from {own} at {tip}."
+        ));
     }
     let commit_msg = format!("{subject}{body}\n\nPlanr-Verb: {verb_name}\nPlanr-Ticket: {slug}\n");
     let commit = git::commit_tree(&tree, &[&base_sha], &commit_msg)?;
@@ -393,8 +426,25 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
             report.push(format!("released {own}"));
         }
         Effect::Delete => {
-            git::delete_ref(&own)?;
-            report.push(format!("deleted {own}"));
+            // The declaration has to land somewhere before the ref goes, or
+            // the verb's own commit is orphaned along with the work.
+            git::update_ref(&base_ref, &commit)?;
+            report.push(format!("{base_ref} -> {}", &commit[..7]));
+            if git::ref_exists(&own) {
+                let path = worktree_path(ctx, &kind, slug);
+                if path.exists() {
+                    git::worktree_remove(&path.to_string_lossy())?;
+                    report.push(format!("removed worktree {}", path.display()));
+                }
+                git::delete_ref(&own)?;
+                match &discarding {
+                    Some((tip, ahead)) => report.push(format!(
+                        "DISCARDED {own} at {} -- {ahead} commit(s) destroyed",
+                        &tip[..7]
+                    )),
+                    None => report.push(format!("released {own} (nothing unmerged)")),
+                }
+            }
         }
     }
 

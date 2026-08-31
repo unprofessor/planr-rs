@@ -267,11 +267,110 @@ fn a_later_trunk_declaration_outranks_an_earlier_branch_one() {
     // The supervisor decides, on trunk, after the worker's branch event.
     ok(
         dir,
-        &["next", "do", "abandon", "scope-creep", "wrong layer"],
+        &[
+            "next",
+            "do",
+            "abandon",
+            "scope-creep",
+            "wrong layer",
+            "--discard-wip",
+        ],
     );
     let state = ok(dir, &["next", "state", "scope-creep"]);
     assert!(
         state.contains("abandoned"),
         "the supervisor's later decision lost to the worker's earlier one: {state}"
     );
+}
+
+/// Helper: claim a ticket and leave real work on its branch, then yield it.
+fn yield_with_work(dir: &Path, slug: &str) {
+    ok(dir, &["next", "new", "task", slug, "Work in flight"]);
+    ok(dir, &["next", "do", "claim", slug]);
+    let wt = dir.join(format!(".plan/worktrees/task/{slug}"));
+    std::fs::write(wt.join("partial.rs"), "half an implementation\n").unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["commit", "-m", "wip"]);
+    ok(
+        dir,
+        &["next", "do", "yield", slug, "needs a decision first"],
+    );
+}
+
+#[test]
+fn abandoning_work_in_flight_is_refused_by_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    yield_with_work(dir, "held");
+
+    let err = refused(dir, &["next", "do", "abandon", "held", "wrong layer"]);
+    assert!(err.contains("cannot reach"), "unexpected refusal: {err}");
+    assert!(err.contains("--discard-wip"), "no way out offered: {err}");
+
+    // A refusal must leave everything exactly as it was.
+    assert!(ok(dir, &["next", "state", "held"]).contains("todo"));
+    let refs = Command::new("git")
+        .args(["branch", "--list", "plan/task/held"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&refs.stdout).trim().is_empty());
+}
+
+#[test]
+fn discard_wip_releases_the_ref_and_records_the_loss() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    yield_with_work(dir, "doomed");
+
+    let out = ok(
+        dir,
+        &[
+            "next",
+            "do",
+            "abandon",
+            "doomed",
+            "wrong layer",
+            "--discard-wip",
+        ],
+    );
+    assert!(out.contains("DISCARDED"), "loss not announced: {out}");
+    assert!(ok(dir, &["next", "state", "doomed"]).contains("abandoned"));
+
+    let refs = Command::new("git")
+        .args(["branch", "--list", "plan/task/doomed"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&refs.stdout).trim().is_empty(),
+        "the ref survived a discard"
+    );
+    assert!(!dir.join(".plan/worktrees/task/doomed").exists());
+
+    // The log has to say what was destroyed; the reflog is the only recovery.
+    let log = Command::new("git")
+        .args(["log", "-1", "--format=%B", "main"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&log.stdout);
+    // Note what the count includes: the claim and yield declarations as
+    // well as the worker's commit. Releasing a ref destroys the ticket's
+    // own event history along with the work.
+    assert!(log.contains("Discarded 3 unmerged commit(s)"), "{log}");
+}
+
+#[test]
+fn abandoning_an_unclaimed_ticket_needs_no_flag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    ok(dir, &["next", "new", "task", "idle", "Never started"]);
+
+    // Nothing is at risk, so the safety gate must not get in the way.
+    ok(dir, &["next", "do", "abandon", "idle", "out of scope"]);
+    assert!(ok(dir, &["next", "state", "idle"]).contains("abandoned"));
 }
