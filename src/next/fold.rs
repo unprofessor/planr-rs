@@ -124,10 +124,7 @@ pub fn render_lifecycle(schema: &Schema, kind: &str) -> Result<String, String> {
         };
         let from = match &verb.from {
             Some(f) => f.clone(),
-            None => format!(
-                "{}",
-                non_terminal.iter().cloned().collect::<Vec<_>>().join("|")
-            ),
+            None => non_terminal.iter().cloned().collect::<Vec<_>>().join("|"),
         };
         let gate = if verb.require.is_empty() {
             String::new()
