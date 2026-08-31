@@ -159,6 +159,21 @@ fn local_date_string() -> String {
     format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day(),)
 }
 
+/// Make `<plan-dir>/worktrees` invisible to git.
+///
+/// A `*` pattern ignores every entry including the `.gitignore` itself, so
+/// the whole tree stays untracked and trunk stays clean -- no new file for
+/// the leader to notice or commit.
+fn ensure_worktrees_ignored(worktrees_dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(worktrees_dir)
+        .map_err(|e| format!("cannot create {}: {e}", worktrees_dir.display()))?;
+    let ignore = worktrees_dir.join(".gitignore");
+    if ignore.exists() {
+        return Ok(());
+    }
+    std::fs::write(&ignore, "*\n").map_err(|e| format!("cannot write {}: {e}", ignore.display()))
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -250,10 +265,15 @@ pub fn claim_task(
     };
 
     let wt_path = if worktree_path.is_empty() {
-        // --worktree with no value: use default
+        // Default path: <plan-dir>/worktrees/wt-<slug>.
         let mut p = cwd.to_path_buf();
         p.push(plan_dir);
         p.push("worktrees");
+        // The worktrees dir sits inside the tracked plan dir, so it has to
+        // ignore itself. Without this the leader's `git add <plan-dir>`
+        // commits each worktree as a gitlink (a bogus submodule that a
+        // fresh clone cannot resolve), and trunk reads dirty forever after.
+        ensure_worktrees_ignored(&p)?;
         p.push(format!("wt-{slug}"));
         p
     } else {

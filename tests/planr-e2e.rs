@@ -825,6 +825,52 @@ fn test_e2e_claim_without_worktree_flag_does_the_work() {
     );
 }
 
+/// The default worktree lives inside the tracked plan dir, so it must ignore
+/// itself: otherwise trunk reads dirty after every claim and the leader's
+/// `git add .plan` commits the worktree as a gitlink -- a bogus submodule
+/// entry that a fresh clone cannot resolve.
+#[test]
+fn test_e2e_default_worktree_does_not_dirty_trunk() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1"]);
+
+    let porcelain = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+    let porcelain = String::from_utf8(porcelain.stdout).unwrap();
+    assert!(
+        porcelain.trim().is_empty(),
+        "claim left trunk dirty: {porcelain}"
+    );
+
+    // The board's source header must not report `dirty` either.
+    let board = planr_ok(td.path(), &["board"]);
+    let header = board.lines().next().unwrap_or_default();
+    assert!(!header.contains("dirty"), "board header: {header}");
+
+    // The leader's normal flow must not stage a gitlink for the worktree.
+    planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
+    Command::new("git")
+        .args(["add", ".plan"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    let staged = Command::new("git")
+        .args(["ls-files", "-s", ".plan"])
+        .current_dir(td.path())
+        .output()
+        .unwrap();
+    let staged = String::from_utf8(staged.stdout).unwrap();
+    assert!(
+        !staged.contains("160000"),
+        "worktree staged as a gitlink: {staged}"
+    );
+}
+
 /// `--no-worktree` remains the one opt-out: the caller manages its own
 /// workspace, so planr reports the claim and changes nothing.
 #[test]
