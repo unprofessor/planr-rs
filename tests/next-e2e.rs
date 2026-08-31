@@ -239,3 +239,39 @@ fn a_stored_status_field_is_refused() {
     let err = refused(dir, &["next", "state", "legacy"]);
     assert!(err.contains("status"), "unexpected error: {err}");
 }
+
+#[test]
+fn a_later_trunk_declaration_outranks_an_earlier_branch_one() {
+    // Regression: events were once walked per-ref and concatenated, which put
+    // every trunk event before every branch event regardless of when they
+    // happened. A supervisor abandoning a yielded ticket then lost to the
+    // worker's earlier yield, and the ticket stayed `todo`.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+
+    ok(dir, &["next", "new", "task", "scope-creep", "Add caching"]);
+    ok(dir, &["next", "do", "claim", "scope-creep"]);
+    ok(
+        dir,
+        &[
+            "next",
+            "do",
+            "yield",
+            "scope-creep",
+            "needs a decision first",
+        ],
+    );
+    assert!(ok(dir, &["next", "state", "scope-creep"]).contains("todo"));
+
+    // The supervisor decides, on trunk, after the worker's branch event.
+    ok(
+        dir,
+        &["next", "do", "abandon", "scope-creep", "wrong layer"],
+    );
+    let state = ok(dir, &["next", "state", "scope-creep"]);
+    assert!(
+        state.contains("abandoned"),
+        "the supervisor's later decision lost to the worker's earlier one: {state}"
+    );
+}

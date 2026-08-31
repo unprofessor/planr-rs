@@ -9,9 +9,11 @@
 //!
 //! Two strategies, deliberately both:
 //!
-//! * [`on_ref`] -- the fast path for a single slug. A claimed ticket's events
-//!   all live on `plan/<kind>/<slug>`, so the ref name bounds the walk to that
-//!   ticket's own short history.
+//! * a union walk over trunk and the ticket's own ref -- the fast path for a
+//!   single slug, bounded by the ticket's own short history. It must be ONE
+//!   walk: ordering has to come from the commit graph, because trunk can move
+//!   after a branch is cut and a later trunk declaration must not be folded
+//!   before an earlier branch one.
 //! * [`scan`] -- the authoritative path. Walks a commit range reading
 //!   trailers, which is the only thing that still works once a ticket has been
 //!   archived and its file no longer exists in any tree.
@@ -67,20 +69,6 @@ fn parse_log(out: &str) -> Vec<Event> {
     events
 }
 
-/// Fast path: every event reachable from `ref_` but not from `exclude`.
-///
-/// For a claimed ticket this is `plan/<kind>/<slug>` excluding trunk, which
-/// bounds the walk to the ticket's own branch.
-pub fn on_ref(ref_: &str, exclude: Option<&str>) -> Result<Vec<Event>, String> {
-    let format = format!("--format={}", log_format());
-    let range = match exclude {
-        Some(base) => format!("{base}..{ref_}"),
-        None => ref_.to_string(),
-    };
-    let out = git::log_raw(&[&format, &range])?;
-    Ok(parse_log(&out))
-}
-
 /// Authoritative path: scan a commit range for trailers, optionally filtered
 /// to one slug. Works for archived tickets, whose files exist in no tree.
 pub fn scan(range: &str, slug: Option<&str>) -> Result<Vec<Event>, String> {
@@ -104,17 +92,25 @@ pub fn for_ticket(
     trunk: &str,
 ) -> Result<(Vec<Event>, &'static str), String> {
     let own = format!("plan/{kind}/{slug}");
-    let mut events = scan(trunk, Some(slug))?;
 
     if git::ref_exists(&own) {
-        // The branch carries everything since it was cut; trunk carries what
-        // came before. Concatenating is correct because the branch's events
-        // are strictly newer than the trunk events it descends from.
-        let mut branch_events = on_ref(&own, Some(trunk))?;
-        branch_events.retain(|e| e.ticket == slug);
-        events.append(&mut branch_events);
-        return Ok((events, "branch-ref fast path + trunk scan"));
+        // ONE walk over the union of both refs, date-ordered.
+        //
+        // An earlier version walked them separately and concatenated, on the
+        // reasoning that a branch's events are strictly newer than the trunk
+        // events it descends from. That is false the moment trunk moves after
+        // the branch was cut -- which is exactly what an integration-lane verb
+        // on a claimed ticket does, and the authority rule explicitly allows.
+        // Concatenating then ordered a later trunk declaration BEFORE an
+        // earlier branch one, and the fold silently took the wrong winner.
+        // Ordering has to come from the commit graph, never from which ref an
+        // event was read through.
+        let format = format!("--format={}", log_format());
+        let out = git::log_raw(&[&format, "--date-order", trunk, &own])?;
+        let mut events = parse_log(&out);
+        events.retain(|e| e.ticket == slug);
+        return Ok((events, "branch-ref fast path (union walk)"));
     }
 
-    Ok((events, "trunk trailer scan"))
+    Ok((scan(trunk, Some(slug))?, "trunk trailer scan"))
 }
