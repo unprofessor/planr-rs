@@ -31,6 +31,19 @@ fn planr(dir: &Path, args: &[&str]) -> (bool, String, String) {
     )
 }
 
+fn show(dir: &Path, spec: &str) -> String {
+    show_args(dir, &["show", spec])
+}
+
+fn show_args(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
 fn ok(dir: &Path, args: &[&str]) -> String {
     let (success, stdout, stderr) = planr(dir, args);
     assert!(success, "planr {args:?} failed:\n{stderr}");
@@ -267,14 +280,7 @@ fn a_later_trunk_declaration_outranks_an_earlier_branch_one() {
     // The supervisor decides, on trunk, after the worker's branch event.
     ok(
         dir,
-        &[
-            "next",
-            "do",
-            "abandon",
-            "scope-creep",
-            "wrong layer",
-            "--discard-wip",
-        ],
+        &["next", "do", "abandon", "scope-creep", "wrong layer"],
     );
     let state = ok(dir, &["next", "state", "scope-creep"]);
     assert!(
@@ -298,79 +304,60 @@ fn yield_with_work(dir: &Path, slug: &str) {
 }
 
 #[test]
-fn abandoning_work_in_flight_is_refused_by_default() {
+fn abandoning_work_in_flight_preserves_the_rationale_and_the_work() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     setup(dir);
     yield_with_work(dir, "held");
 
-    let err = refused(dir, &["next", "do", "abandon", "held", "wrong layer"]);
-    assert!(err.contains("cannot reach"), "unexpected refusal: {err}");
-    assert!(err.contains("--discard-wip"), "no way out offered: {err}");
+    let out = ok(dir, &["next", "do", "abandon", "held", "wrong layer"]);
+    assert!(out.contains("absorbed"), "unexpected output: {out}");
+    assert!(ok(dir, &["next", "state", "held"]).contains("abandoned"));
 
-    // A refusal must leave everything exactly as it was.
-    assert!(ok(dir, &["next", "state", "held"]).contains("todo"));
-    let refs = Command::new("git")
-        .args(["branch", "--list", "plan/task/held"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    assert!(!String::from_utf8_lossy(&refs.stdout).trim().is_empty());
-}
-
-#[test]
-fn discard_wip_releases_the_ref_and_records_the_loss() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path();
-    setup(dir);
-    yield_with_work(dir, "doomed");
-
-    let out = ok(
-        dir,
-        &[
-            "next",
-            "do",
-            "abandon",
-            "doomed",
-            "wrong layer",
-            "--discard-wip",
-        ],
-    );
-    assert!(out.contains("DISCARDED"), "loss not announced: {out}");
-    assert!(ok(dir, &["next", "state", "doomed"]).contains("abandoned"));
-
-    let refs = Command::new("git")
-        .args(["branch", "--list", "plan/task/doomed"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    // 1. The rationale for the handback reaches trunk, alongside the reason
+    //    for the abandonment. Losing it was the whole problem.
+    let ticket = show(dir, "main:.plan/tickets/held.md");
+    assert!(ticket.contains("## Blocked"), "yield note lost: {ticket}");
     assert!(
-        String::from_utf8_lossy(&refs.stdout).trim().is_empty(),
-        "the ref survived a discard"
+        ticket.contains("needs a decision first"),
+        "yield note lost: {ticket}"
     );
-    assert!(!dir.join(".plan/worktrees/task/doomed").exists());
+    assert!(ticket.contains("## Abandoned"), "{ticket}");
 
-    // The log has to say what was destroyed; the reflog is the only recovery.
-    let log = Command::new("git")
-        .args(["log", "-1", "--format=%B", "main"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    let log = String::from_utf8_lossy(&log.stdout);
-    // Note what the count includes: the claim and yield declarations as
-    // well as the worker's commit. Releasing a ref destroys the ticket's
-    // own event history along with the work.
-    assert!(log.contains("Discarded 3 unmerged commit(s)"), "{log}");
+    // 2. The work is NOT applied to trunk's tree.
+    assert!(
+        Command::new("git")
+            .args(["show", "main:partial.rs"])
+            .current_dir(dir)
+            .output()
+            .unwrap()
+            .status
+            .success()
+            .eq(&false),
+        "abandoned work was applied to trunk"
+    );
+
+    // 3. ...but it is reachable from trunk, so nothing can be collected.
+    let log = show_args(dir, &["log", "--oneline", "main"]);
+    assert!(log.contains("wip"), "work not reachable from trunk: {log}");
+
+    // 4. The ref is released, safely, because of 3.
+    let refs = show_args(dir, &["branch", "--list", "plan/task/held"]);
+    assert!(refs.trim().is_empty(), "ref survived: {refs}");
 }
 
 #[test]
-fn abandoning_an_unclaimed_ticket_needs_no_flag() {
+fn abandoning_an_unclaimed_ticket_has_nothing_to_absorb() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     setup(dir);
     ok(dir, &["next", "new", "task", "idle", "Never started"]);
 
-    // Nothing is at risk, so the safety gate must not get in the way.
-    ok(dir, &["next", "do", "abandon", "idle", "out of scope"]);
+    // No ref, so nothing to preserve -- an ordinary advance on trunk.
+    let out = ok(dir, &["next", "do", "abandon", "idle", "out of scope"]);
+    assert!(
+        !out.contains("absorbed"),
+        "nothing should be absorbed: {out}"
+    );
     assert!(ok(dir, &["next", "state", "idle"]).contains("abandoned"));
 }

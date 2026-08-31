@@ -223,7 +223,7 @@ fn apply_content(
     ctx: &Ctx,
     verb: &Verb,
     ticket: &Ticket,
-    base_ref: &str,
+    content_ref: &str,
     index: &git::ScratchIndex,
     message: &str,
 ) -> Result<bool, String> {
@@ -231,7 +231,7 @@ fn apply_content(
         return Ok(false);
     }
     let path = ctx.ticket_path(&ticket.slug);
-    let mut blob = git::show(base_ref, &path).unwrap_or_default();
+    let mut blob = git::show(content_ref, &path).unwrap_or_default();
     let mut removed = false;
 
     for step in &verb.content {
@@ -315,13 +315,7 @@ fn worktree_path(ctx: &Ctx, kind: &str, slug: &str) -> PathBuf {
 }
 
 /// Run one verb. Returns a human-readable report of what it did.
-pub fn run(
-    ctx: &Ctx,
-    verb_name: &str,
-    slug: &str,
-    message: &str,
-    discard_wip: bool,
-) -> Result<String, String> {
+pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<String, String> {
     let ticket = read_ticket(ctx, &ctx.trunk, slug)?;
     let kind = ticket.kind.clone();
     let own = ctx.own_ref(&kind, slug);
@@ -368,25 +362,29 @@ pub fn run(
     // loss -- a yielded ticket's partial work and the note explaining why it
     // was handed back both live there -- so it is opt-in rather than implied.
     // Checked before anything is built, so a refusal leaves nothing behind.
-    let mut discarding: Option<(String, usize)> = None;
-    if verb.effect == Effect::Delete && git::ref_exists(&own) {
+    // Releasing a ref never destroys anything: `absorb` records the branch as
+    // a second parent, so its commits stay reachable from home. There is no
+    // opt-out, deliberately -- see the note on Effect::Absorb.
+    let releases_ref = verb.effect == Effect::Absorb;
+    let mut absorbing: Option<(String, usize)> = None;
+    if releases_ref && git::ref_exists(&own) {
         let ahead = git::count_unreachable(&ctx.trunk, &own)?;
         if ahead > 0 {
-            if !discard_wip {
-                return Err(format!(
-                    "refuse {verb_name}: '{slug}' has {ahead} commit(s) on {own} that {} cannot reach.\n\
-                     Pass --discard-wip to release the ref and destroy them, or merge or move the work first.",
-                    ctx.trunk
-                ));
-            }
-            discarding = Some((git::rev_parse(&own)?, ahead));
+            absorbing = Some((git::rev_parse(&own)?, ahead));
         }
     }
 
     // ---- build the tree, then the commit; nothing is referenced yet ----
     let base_sha = git::rev_parse(&base_ref)?;
     let index = git::ScratchIndex::from_ref(&base_sha)?;
-    let touched = apply_content(ctx, &verb, &ticket, &base_ref, &index, message)?;
+    // Under Absorb the tree comes from home while the TICKET comes from the
+    // branch -- that is precisely how the worker's rationale reaches trunk
+    // without the work coming with it.
+    let content_ref = match (verb.effect, absorbing.is_some()) {
+        (Effect::Absorb, true) => own.clone(),
+        _ => base_ref.clone(),
+    };
+    let touched = apply_content(ctx, &verb, &ticket, &content_ref, &index, message)?;
     let tree = index.write_tree()?;
 
     let subject = format!("plan: {verb_name} {slug}");
@@ -394,12 +392,11 @@ pub fn run(
     if !message.is_empty() && verb.content.is_empty() {
         body.push_str(&format!("\n\n{message}"));
     }
-    if let Some((tip, ahead)) = &discarding {
-        // Prose, deliberately not a third trailer: the trailer vocabulary is
-        // closed, and this is a note for a human reading the log later. The
-        // sha stays recoverable from the reflog until gc.
+    if let Some((tip, ahead)) = &absorbing {
         body.push_str(&format!(
-            "\n\nDiscarded {ahead} unmerged commit(s) from {own} at {tip}."
+            "\n\nPreserved {ahead} unmerged commit(s) from {own} at {tip} in history; \
+             the work itself is not applied to {}.",
+            ctx.trunk
         ));
     }
     let commit_msg = format!("{subject}{body}\n\nPlanr-Verb: {verb_name}\nPlanr-Ticket: {slug}\n");
@@ -425,11 +422,19 @@ pub fn run(
             git::delete_ref(&own)?;
             report.push(format!("released {own}"));
         }
-        Effect::Delete => {
-            // The declaration has to land somewhere before the ref goes, or
-            // the verb's own commit is orphaned along with the work.
-            git::update_ref(&base_ref, &commit)?;
-            report.push(format!("{base_ref} -> {}", &commit[..7]));
+        Effect::Absorb => {
+            if let Some((_tip, ahead)) = &absorbing {
+                let absorbed = git::absorb(&ctx.trunk, &own, &tree, &commit_msg)?;
+                report.push(format!(
+                    "{} -> {} (absorbed {own}: {ahead} commit(s) preserved in history, not applied)",
+                    ctx.trunk,
+                    &absorbed[..7]
+                ));
+            } else {
+                // Nothing in flight -- an ordinary advance on home.
+                git::update_ref(&base_ref, &commit)?;
+                report.push(format!("{base_ref} -> {}", &commit[..7]));
+            }
             if git::ref_exists(&own) {
                 let path = worktree_path(ctx, &kind, slug);
                 if path.exists() {
@@ -437,13 +442,7 @@ pub fn run(
                     report.push(format!("removed worktree {}", path.display()));
                 }
                 git::delete_ref(&own)?;
-                match &discarding {
-                    Some((tip, ahead)) => report.push(format!(
-                        "DISCARDED {own} at {} -- {ahead} commit(s) destroyed",
-                        &tip[..7]
-                    )),
-                    None => report.push(format!("released {own} (nothing unmerged)")),
-                }
+                report.push(format!("released {own}"));
             }
         }
     }

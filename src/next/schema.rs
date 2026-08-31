@@ -33,8 +33,12 @@ pub enum Effect {
     Create,
     /// Integrate the new commit into `home`.
     Merge,
-    /// Drop the ticket's own ref without integrating it.
-    Delete,
+    /// Take the ticket, leave the work: the commit's tree is home's tree with
+    /// this ticket taken from its own ref, and its parents are home and that
+    /// ref. An `ours`-style merge, so the branch's commits become reachable
+    /// from home -- preserved in history, absent from the tree -- and the ref
+    /// can then be released without destroying anything.
+    Absorb,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

@@ -224,6 +224,22 @@ pub fn merge_into(target: &str, source: &str, message: &str) -> Result<String, S
     Ok(merge)
 }
 
+/// Record `source` as merged into `target` WITHOUT applying its changes,
+/// using a tree supplied by the caller. This is `merge -s ours` with one path
+/// taken from the other side: the source's commits become reachable from the
+/// target, so nothing is garbage-collected, while the target's tree is
+/// unchanged apart from that path.
+///
+/// Never fast-forwards -- a fast-forward would apply the work, which is the
+/// one thing this exists to avoid.
+pub fn absorb(target: &str, source: &str, tree: &str, message: &str) -> Result<String, String> {
+    let target_sha = rev_parse(target)?;
+    let source_sha = rev_parse(source)?;
+    let commit = commit_tree(tree, &[&target_sha, &source_sha], message)?;
+    update_ref(target, &commit)?;
+    Ok(commit)
+}
+
 /// `git worktree add <path> <branch>` -- checking out an EXISTING branch.
 ///
 /// Deliberately not `crate::git::worktree_add`: that helper omits the branch
