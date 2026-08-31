@@ -169,7 +169,8 @@ enum Command {
 #[cfg(feature = "next")]
 #[derive(Subcommand)]
 enum NextCommand {
-    /// Create a ticket (fixed tooling -- genesis is not a verb)
+    /// Create a ticket
+    //  (fixed tooling -- genesis is not a verb)
     New {
         kind: String,
         slug: String,
