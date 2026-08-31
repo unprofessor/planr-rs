@@ -103,24 +103,31 @@ pub fn render_lifecycle(schema: &Schema, kind: &str) -> Result<String, String> {
     ));
     out.push_str("  transitions:\n");
 
+    let mut transitions: Vec<(String, String, String, String)> = Vec::new();
+
+    let non_terminal: BTreeSet<String> = {
+        let mut all = BTreeSet::new();
+        for verb in schema.verbs_for(kind) {
+            if let Some(f) = &verb.from {
+                all.insert(f.clone());
+            }
+            if let Some(t) = &verb.to {
+                all.insert(t.clone());
+            }
+        }
+        all.difference(&terminal).cloned().collect()
+    };
+
     for verb in schema.verbs_for(kind) {
         let Some(to) = &verb.to else {
             continue;
         };
         let from = match &verb.from {
             Some(f) => f.clone(),
-            None => format!("(any non-terminal, {} states)", {
-                let mut all = BTreeSet::new();
-                for v in schema.verbs_for(kind) {
-                    if let Some(f) = &v.from {
-                        all.insert(f.clone());
-                    }
-                    if let Some(t) = &v.to {
-                        all.insert(t.clone());
-                    }
-                }
-                all.difference(&terminal).count()
-            }),
+            None => format!(
+                "{}",
+                non_terminal.iter().cloned().collect::<Vec<_>>().join("|")
+            ),
         };
         let gate = if verb.require.is_empty() {
             String::new()
@@ -137,9 +144,22 @@ pub fn render_lifecycle(schema: &Schema, kind: &str) -> Result<String, String> {
             }
             format!("   requires {}", parts.join(" AND "))
         };
+        transitions.push((from, verb.name.clone(), to.clone(), gate));
+    }
+
+    let mut max_widths = (0, 0, 0);
+
+    for (from, verb, to, _gate) in &transitions {
+        max_widths.0 = max_widths.0.max(from.len());
+        max_widths.1 = max_widths.1.max(verb.len());
+        max_widths.2 = max_widths.2.max(to.len());
+    }
+
+    for (from, verb, to, gate) in &transitions {
+        let (from_width, verb_width, to_width) = max_widths;
         out.push_str(&format!(
-            "    {from} --{}--> {to}{gate}\n",
-            verb.name.clone()
+            "    {:>from_width$} --[{:<verb_width$}]--> {:<to_width$}{}\n",
+            from, verb, to, gate,
         ));
     }
 

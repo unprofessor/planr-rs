@@ -212,7 +212,10 @@ fn lifecycle_is_derived_not_declared() {
     assert!(out.contains("initial:  todo"), "{out}");
     assert!(out.contains("abandoned"), "{out}");
     assert!(out.contains("done"), "{out}");
-    assert!(out.contains("in_progress --submit--> review"), "{out}");
+    assert!(
+        out.contains("in_progress --[submit         ]--> review"),
+        "{out}"
+    );
 
     // The unit is derived from `worktree: create`, never declared.
     let all = ok(dir, &["next", "lifecycle"]);
