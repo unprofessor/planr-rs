@@ -5,7 +5,7 @@
 
 use crate::git;
 use crate::lock::PlanrLock;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 /// The `findTask` predicate from TS: `f.replace(/^\d+-/, "").endsWith(slug + ".md")`.
 /// NOTE: on full paths (e.g. `tasks/03-http-proxy.md`), the `^\d+-` strip never
@@ -159,76 +159,6 @@ fn local_date_string() -> String {
     format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day(),)
 }
 
-/// Strip `.` and resolve `..` lexically -- the worktree does not exist yet,
-/// so `canonicalize` is not available to do it for us.
-fn normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
-
-/// Keep a worktree that lands inside the repository invisible to git.
-///
-/// A worktree inside the working tree is an embedded repo: `git add` stages
-/// it as a `160000` gitlink -- a bogus submodule that rides along through
-/// every close merge and that a fresh clone cannot resolve -- and trunk reads
-/// dirty until someone runs `git rm --cached`. Hiding an embedded repo takes
-/// a pattern in an ancestor's ignore rules naming its path; a `.gitignore`
-/// placed inside the worktree cannot do it, since git detects the gitlink
-/// from the `.git` file rather than from the directory contents.
-///
-/// The rule goes in `.git/info/exclude`, not a tracked `.gitignore`: a
-/// worktree exists only in this clone, so its ignore rule is local too, and
-/// writing it there leaves no new file for the leader to notice or commit.
-/// A path outside the repository needs no rule -- git never looks at it.
-fn ensure_worktree_ignored(target: &Path, cwd: &Path) -> Result<(), String> {
-    let Ok(root) = PathBuf::from(git::show_toplevel()?).canonicalize() else {
-        return Ok(());
-    };
-    let base = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    let abs = normalize(&if target.is_absolute() {
-        target.to_path_buf()
-    } else {
-        base.join(target)
-    });
-
-    let Ok(rel) = abs.strip_prefix(&root) else {
-        return Ok(());
-    };
-    let rel = rel.to_string_lossy().replace('\\', "/");
-    if rel.is_empty() {
-        return Ok(());
-    }
-    let pattern = format!("/{rel}/");
-
-    let info = PathBuf::from(git::git_common_dir(cwd)?).join("info");
-    std::fs::create_dir_all(&info).map_err(|e| format!("cannot create {}: {e}", info.display()))?;
-    let excl = info.join("exclude");
-    let existing = std::fs::read_to_string(&excl).unwrap_or_default();
-    if existing.lines().any(|l| l.trim() == pattern) {
-        return Ok(());
-    }
-
-    let mut out = existing;
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    if !out.contains("# planr worktrees") {
-        out.push_str("\n# planr worktrees -- checkouts, not backlog content\n");
-    }
-    out.push_str(&pattern);
-    out.push('\n');
-    std::fs::write(&excl, out).map_err(|e| format!("cannot write {}: {e}", excl.display()))
-}
-
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -319,6 +249,16 @@ pub fn claim_task(
         return Ok(format!("claimed: {slug}"));
     };
 
+    // A branch already checked out somewhere means the task is held: say so
+    // in planr's terms rather than letting git's "'<path>' already exists"
+    // reach an agent that has no idea what it means.
+    if let Some(held) = git::find_worktree_for_branch(&branch) {
+        return Err(format!(
+            "refuse claim: task '{slug}' is already claimed; its worktree is at {}",
+            held.display()
+        ));
+    }
+
     let wt_path = if worktree_path.is_empty() {
         // Default path: <plan-dir>/worktrees/wt-<slug>. planr owns that
         // directory, so ignore it wholesale -- one rule covers every task
@@ -326,7 +266,7 @@ pub fn claim_task(
         let mut p = cwd.to_path_buf();
         p.push(plan_dir);
         p.push("worktrees");
-        ensure_worktree_ignored(&p, cwd)?;
+        git::exclude_add(&p, cwd)?;
         p.push(format!("wt-{slug}"));
         p
     } else {
@@ -335,7 +275,7 @@ pub fn claim_task(
         // An explicit path is the caller's choice of location, but landing
         // inside the repo corrupts trunk exactly the same way, so it gets
         // the same guard.
-        ensure_worktree_ignored(&p, cwd)?;
+        git::exclude_add(&p, cwd)?;
         p
     };
 
@@ -351,12 +291,16 @@ pub fn claim_task(
     let date = local_date_string();
     let (_new_fm, new_content) = flip_status_in_fm(&sf.fm_lines, sf.rest, "in_progress", &date);
 
-    std::fs::write(&wf_path, &new_content)
-        .map_err(|e| format!("cannot write {}: {e}", wf_path.display()))?;
-
-    // 3c. git add + git commit in the worktree
-    git::add_file(&task_file, &wt_path)?;
-    git::commit_in(&format!("plan: claim {slug} (in_progress)"), &wt_path)?;
+    // 3c. Commit the flip -- but only if it changed something. Re-claiming a
+    // task whose worktree was removed rebuilds the worktree on a branch that
+    // already reads in_progress, and `git commit` with nothing staged fails.
+    // Resuming a claim you already hold is not an error.
+    if new_content != content {
+        std::fs::write(&wf_path, &new_content)
+            .map_err(|e| format!("cannot write {}: {e}", wf_path.display()))?;
+        git::add_file(&task_file, &wt_path)?;
+        git::commit_in(&format!("plan: claim {slug} (in_progress)"), &wt_path)?;
+    }
 
     // 3d. Output worktree path
     Ok(wt_display.to_string())

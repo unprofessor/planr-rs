@@ -192,6 +192,11 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
             // Cleanup: tolerant worktree remove + branch delete
             if let Some(ref wt) = wt_path {
                 let _ = git::worktree_remove(wt, false);
+                // The worktree is gone, so its local ignore rule should go
+                // too -- a stale rule silently hides whatever is created at
+                // that path later. The shared default rule covers a parent
+                // directory, so it does not match here and survives.
+                let _ = git::exclude_remove(wt, cwd);
             }
             let _ = git::branch_delete(&branch, false, &trunk_dir);
 

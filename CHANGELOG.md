@@ -57,7 +57,22 @@
   bogus submodule that a fresh clone cannot resolve) and trunk read dirty
   until someone ran `git rm --cached`. The rule is local because a worktree
   is local, so nothing new appears for the leader to commit; a worktree
-  outside the repository gets no rule.
+  outside the repository gets no rule. `planr close` drops the rule again
+  when it removes the worktree -- a stale rule would silently hide whatever
+  is created at that path later. The shared rule for the default location
+  covers a directory planr reuses for every claim, so it survives.
+
+- **`planr claim` on a task that is already claimed** now refuses with
+  `refuse claim: task '<slug>' is already claimed; its worktree is at
+  <path>` instead of surfacing git's `fatal: '<path>' already exists`,
+  which told an agent nothing about what went wrong.
+
+- **`planr claim` can resume a claim whose worktree was removed.**
+  `worktree_add` passed the trunk ref as the commit-ish even when the
+  branch already existed, so rebuilding the worktree died with
+  `fatal: '<trunk>' is already used by worktree at ...`. An existing branch
+  is now its own starting point, and the status flip -- a no-op on a branch
+  that already reads `in_progress` -- no longer tries to commit nothing.
 
 - **`planr new` quotes the `title:` it writes** ([#1]). A colon in the title
   (`"Sanitary history: boundary rev, rewriter"`) produced frontmatter that

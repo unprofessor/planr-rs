@@ -59,7 +59,14 @@ pub fn show_ref(ref_: &str, path: &str) -> Result<String, String> {
     git(&["show", &format!("{ref_}:{path}")])
 }
 
-/// `git worktree add <path> [-b] <branch> [<ref>]`.
+/// `git worktree add <path> [-b] <branch> <commit-ish>`.
+///
+/// `ref_` is the commit-ish to branch *from*, and applies only when the
+/// branch is being created. Once the branch exists it is its own starting
+/// point: passing `ref_` there would ask git to check out trunk in the new
+/// worktree, which fails with "'<trunk>' is already used by worktree at
+/// ..." because trunk is checked out already. Naming the branch explicitly
+/// also stops git from inferring one from the path basename.
 pub fn worktree_add(path: &Path, branch: &str, ref_: Option<&str>) -> Result<(), String> {
     let branch_exists = git(&["rev-parse", "--verify", &format!("refs/heads/{branch}")]).is_ok();
     let mut args: Vec<&str> = vec!["worktree", "add"];
@@ -68,11 +75,131 @@ pub fn worktree_add(path: &Path, branch: &str, ref_: Option<&str>) -> Result<(),
         args.push(branch);
     }
     args.push(path.to_str().unwrap_or_default());
-    if let Some(r) = ref_ {
+    if branch_exists {
+        args.push(branch);
+    } else if let Some(r) = ref_ {
         args.push(r);
     }
     git(&args).map(|_| ())
 }
+
+// ---------------------------------------------------------------------------
+// Local ignore rules (.git/info/exclude)
+// ---------------------------------------------------------------------------
+
+/// Strip `.` and resolve `..` lexically. The target may not exist yet, so
+/// `canonicalize` is not available to do it.
+fn normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// The anchored, directory-shaped exclude pattern for `target`, or `None`
+/// when it lies outside the repository -- git never looks there, so no rule
+/// is needed and none should be written.
+fn exclude_pattern(target: &Path, cwd: &Path) -> Option<String> {
+    let root = PathBuf::from(git_in(cwd, &["rev-parse", "--show-toplevel"]).ok()?.trim())
+        .canonicalize()
+        .ok()?;
+    let base = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let abs = normalize(&if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        base.join(target)
+    });
+    let rel = abs.strip_prefix(&root).ok()?.to_string_lossy().to_string();
+    (!rel.is_empty()).then(|| format!("/{}/", rel.replace('\\', "/")))
+}
+
+/// Path to this repository's `.git/info/exclude`, creating `info/` if needed.
+fn exclude_file(cwd: &Path) -> Result<PathBuf, String> {
+    let info = PathBuf::from(git_common_dir(cwd)?).join("info");
+    std::fs::create_dir_all(&info).map_err(|e| format!("cannot create {}: {e}", info.display()))?;
+    Ok(info.join("exclude"))
+}
+
+/// Ignore `target` in this clone only, via `.git/info/exclude`.
+///
+/// Used for worktrees that land inside the working tree. Such a worktree is
+/// an embedded repo, so without a rule `git add` stages it as a `160000`
+/// gitlink -- a bogus submodule that rides through every merge and that a
+/// fresh clone cannot resolve -- and the tree reads dirty until someone runs
+/// `git rm --cached`. Hiding an embedded repo takes a pattern in an
+/// ancestor's ignore rules; a `.gitignore` inside it cannot work, since git
+/// detects the gitlink from the `.git` file, not the directory contents.
+///
+/// The rule is local rather than a tracked `.gitignore` because a worktree
+/// is local: it exists in this clone alone. That also leaves nothing new in
+/// the working tree for anyone to notice or commit.
+pub fn exclude_add(target: &Path, cwd: &Path) -> Result<(), String> {
+    let Some(pattern) = exclude_pattern(target, cwd) else {
+        return Ok(());
+    };
+    let path = exclude_file(cwd)?;
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    if existing.lines().any(|l| l.trim() == pattern) {
+        return Ok(());
+    }
+
+    let mut out = existing;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !out.contains(EXCLUDE_HEADER) {
+        out.push_str(&format!("\n{EXCLUDE_HEADER}\n"));
+    }
+    out.push_str(&pattern);
+    out.push('\n');
+    std::fs::write(&path, out).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+/// Drop the local ignore rule for `target`, if one is present.
+///
+/// A rule outlives the worktree it was written for, and a stale rule is not
+/// harmless: it silently hides anything later created at that path. Only an
+/// exact match is removed, so a broader rule covering a parent directory
+/// (the default `<plan-dir>/worktrees/`, which planr owns and reuses for
+/// every claim) is left in place.
+pub fn exclude_remove(target: &Path, cwd: &Path) -> Result<(), String> {
+    let Some(pattern) = exclude_pattern(target, cwd) else {
+        return Ok(());
+    };
+    let path = exclude_file(cwd)?;
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    if !existing.lines().any(|l| l.trim() == pattern) {
+        return Ok(());
+    }
+
+    let mut kept: Vec<&str> = existing
+        .lines()
+        .filter(|l| l.trim() != pattern)
+        .collect::<Vec<_>>();
+    // Drop the header once it no longer introduces anything.
+    if !kept.iter().any(|l| l.starts_with('/')) {
+        kept.retain(|l| l.trim() != EXCLUDE_HEADER);
+        while kept.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+            kept.pop();
+        }
+    }
+    let mut out = kept.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    std::fs::write(&path, out).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+const EXCLUDE_HEADER: &str = "# planr worktrees -- checkouts, not backlog content";
 
 /// `git worktree remove <path> [--force]`.
 pub fn worktree_remove(path: &Path, force: bool) -> Result<(), String> {

@@ -970,6 +970,119 @@ fn assert_trunk_undisturbed(dir: &Path, case: &str) {
     );
 }
 
+/// Claiming a task someone already holds must fail in planr's terms. It used
+/// to reach the caller as `fatal: '<path>' already exists`, which tells an
+/// agent nothing about what went wrong.
+#[test]
+fn test_e2e_double_claim_refused_with_planr_error() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1"]);
+    let err = planr_err(td.path(), &["claim", "t1"]);
+    assert!(
+        err.contains("already claimed") && err.contains("wt-t1"),
+        "expected a planr-level refusal naming the worktree: {err}"
+    );
+    assert!(!err.contains("fatal:"), "raw git error leaked: {err}");
+}
+
+/// Re-claiming a task whose worktree was removed rebuilds it on the existing
+/// branch. `worktree_add` used to pass trunk as the commit-ish even when the
+/// branch existed, so this died with `fatal: '<trunk>' is already used by
+/// worktree at ...`; the status flip is then a no-op with nothing to commit.
+#[test]
+fn test_e2e_reclaim_after_worktree_removed_resumes() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1"]);
+    Command::new("git")
+        .args(["worktree", "remove", ".plan/worktrees/wt-t1", "--force"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    let out = planr_ok(td.path(), &["claim", "t1"]);
+    assert!(
+        out.contains("wt-t1"),
+        "resume should return the path: {out}"
+    );
+
+    let wt = td.path().join(".plan/worktrees/wt-t1");
+    let head = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&wt)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(head.stdout).unwrap().trim(),
+        "plan/t1",
+        "worktree should be on the task branch, not trunk"
+    );
+
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    assert!(content.contains("status: in_progress"), "{content}");
+}
+
+/// An ignore rule must not outlive the worktree it was written for: a stale
+/// rule silently hides whatever is created at that path later. The shared
+/// rule for the default location covers a parent directory planr reuses for
+/// every claim, so it survives.
+#[test]
+fn test_e2e_close_drops_the_stale_ignore_rule() {
+    for (flags, gone, kept) in [
+        (
+            vec!["claim", "t1", "--worktree", ".plan/wt"],
+            "/.plan/wt/",
+            None,
+        ),
+        (vec!["claim", "t1"], "", Some("/.plan/worktrees/")),
+    ] {
+        let td = tempfile::tempdir().unwrap();
+        seed_lint_repo(td.path());
+        // claim prints a repo-relative path (`./.plan/wt`).
+        let wt = td.path().join(planr_ok(td.path(), &flags));
+
+        // Drive the task to review so close will merge it.
+        let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+        let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+        std::fs::write(
+            wt.join(&task_file),
+            content.replace("status: in_progress", "status: review")
+                + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-01\n",
+        )
+        .unwrap();
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&wt)
+            .ok()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "review: t1"])
+            .current_dir(&wt)
+            .ok()
+            .unwrap();
+
+        planr_ok(td.path(), &["close", "task", "t1"]);
+
+        let excl = std::fs::read_to_string(td.path().join(".git/info/exclude")).unwrap_or_default();
+        if !gone.is_empty() {
+            assert!(
+                !excl.lines().any(|l| l.trim() == gone),
+                "stale rule {gone} survived close: {excl}"
+            );
+        }
+        if let Some(kept) = kept {
+            assert!(
+                excl.lines().any(|l| l.trim() == kept),
+                "shared rule {kept} should survive close: {excl}"
+            );
+        }
+    }
+}
+
 /// `--no-worktree` remains the one opt-out: the caller manages its own
 /// workspace, so planr reports the claim and changes nothing.
 #[test]
