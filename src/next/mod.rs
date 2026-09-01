@@ -96,9 +96,15 @@ pub fn cmd_lifecycle(ctx: &Ctx, kind: Option<&str>) -> Result<String, String> {
 }
 
 /// A minimal board: every live ticket with its folded state.
+///
+/// One history walk for the whole board, not one per ticket. See
+/// [`events::all_by_ticket`] for why that distinction is the difference
+/// between O(commits) and O(tickets x commits).
 pub fn cmd_board(ctx: &Ctx) -> Result<String, String> {
     let dir = format!("{}/tickets", ctx.plan_dir);
     let files = crate::git::ls_tree_md(&ctx.trunk, &dir)?;
+    let events = events::all_by_ticket(&ctx.trunk)?;
+
     let mut rows = Vec::new();
     for f in files {
         let Some(slug) = std::path::Path::new(&f)
@@ -107,11 +113,26 @@ pub fn cmd_board(ctx: &Ctx) -> Result<String, String> {
         else {
             continue;
         };
-        match verb::state_of(ctx, slug) {
-            Ok((state, _, n)) => rows.push(format!("  {slug:<24} {state:<14} {n} event(s)")),
-            Err(e) => rows.push(format!("  {slug:<24} !! {e}")),
-        }
+        // The ticket file still has to be read for its kind, which selects the
+        // sub-machine the fold runs against. That is a tree read, not a
+        // history walk.
+        let row = match verb::read_ticket(ctx, &ctx.trunk, slug) {
+            Ok(ticket) => {
+                let ticket_events = events.get(slug).map(Vec::as_slice).unwrap_or(&[]);
+                match fold::fold_state(&ctx.schema, &ticket.kind, ticket_events) {
+                    Ok(state) => format!(
+                        "  {slug:<24} {:<8} {state:<14} {} event(s)",
+                        ticket.kind,
+                        ticket_events.len()
+                    ),
+                    Err(e) => format!("  {slug:<24} !! {e}"),
+                }
+            }
+            Err(e) => format!("  {slug:<24} !! {e}"),
+        };
+        rows.push(row);
     }
+
     if rows.is_empty() {
         return Ok("no tickets".to_string());
     }

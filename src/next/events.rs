@@ -18,6 +18,8 @@
 //!   trailers, which is the only thing that still works once a ticket has been
 //!   archived and its file no longer exists in any tree.
 
+use std::collections::BTreeMap;
+
 use super::plumbing as git;
 
 /// One declaration: a commit, the verb it declared, and the ticket it targets.
@@ -113,4 +115,37 @@ pub fn for_ticket(
     }
 
     Ok((scan(trunk, Some(slug))?, "trunk trailer scan"))
+}
+
+/// Every event in the repository, bucketed by ticket, from a SINGLE walk.
+///
+/// This is what a board wants. Folding tickets one at a time costs a full
+/// history walk each -- O(tickets x commits) -- because an event carries no
+/// path to limit the walk by. Walking once and bucketing by `Planr-Ticket`
+/// costs O(commits + events), which is the same order as git's own log and
+/// the bound archival was supposed to buy.
+///
+/// The walk covers trunk plus every in-flight `plan/*` ref, so a claimed
+/// ticket's branch-lane declarations are included. Git deduplicates commits
+/// reachable from several refs, and `--date-order` keeps the ordering from the
+/// commit graph rather than from which ref reached a commit first.
+pub fn all_by_ticket(trunk: &str) -> Result<BTreeMap<String, Vec<Event>>, String> {
+    let mut refs: Vec<String> = vec![trunk.to_string()];
+    if let Ok(branches) = crate::git::branch_list(Some("plan/*")) {
+        refs.extend(branches);
+    }
+
+    let format = format!("--format={}", log_format());
+    let mut args: Vec<&str> = vec![&format, "--date-order"];
+    args.extend(refs.iter().map(|s| s.as_str()));
+
+    let out = git::log_raw(&args)?;
+    let mut buckets: BTreeMap<String, Vec<Event>> = BTreeMap::new();
+    for event in parse_log(&out) {
+        if event.ticket.is_empty() {
+            continue;
+        }
+        buckets.entry(event.ticket.clone()).or_default().push(event);
+    }
+    Ok(buckets)
 }
