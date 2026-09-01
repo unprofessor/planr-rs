@@ -20,6 +20,17 @@
 
 ### Fixed
 
+- **`planr board` no longer drops a task whose branch has no readable
+  ticket.** The summary skipped a task that had an in-flight branch on the
+  assumption the branch would supply its status, but a branch reporting
+  `(no task file)` was counted nowhere -- so the ticket disappeared from
+  every bucket and from `total`. Such a branch is a legitimate state (a
+  renumbered file, an uncommitted ticket, a branch made by hand), so the
+  count now falls back to the trunk status, and `planr board` writes a
+  warning naming the branch to stderr -- a rename that detaches a branch
+  from its ticket is otherwise invisible. Warnings go to stderr so the
+  board on stdout stays parseable.
+
 - **`planr board` marks a task whose status comes from an in-flight
   branch.** `claim` flips the status on the worktree branch and leaves
   trunk alone, so the tasks table reported a claimed task as `todo` for the

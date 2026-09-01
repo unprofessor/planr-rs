@@ -167,6 +167,11 @@ fn main() {
                 _ => board::read_working_tree_tickets(&cli.plan_dir),
             };
             let branches = board::read_in_flight_branches(&cli.plan_dir);
+            // Warnings go to stderr so the board on stdout stays a clean,
+            // parseable document.
+            for w in board::branch_warnings(&branches) {
+                eprintln!("{w}");
+            }
             let input = board::BoardInput {
                 trunk_tickets: tickets,
                 branch_statuses: branches,

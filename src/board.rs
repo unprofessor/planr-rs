@@ -189,13 +189,42 @@ fn render_in_flight(branches: &[BranchStatus]) -> String {
     out
 }
 
+/// Warnings about `plan/*` branches whose task file the scan could not read.
+///
+/// Not an error: a branch without a readable ticket is a legitimate state --
+/// the file was renumbered, the ticket is not committed yet, or someone made
+/// the branch by hand. The board falls back to the trunk status and carries
+/// on. It is still worth saying out loud, because the usual cause is a
+/// rename that quietly detached the branch from its ticket, and nothing else
+/// in the output would tell you that happened.
+pub fn branch_warnings(branches: &[BranchStatus]) -> Vec<String> {
+    branches
+        .iter()
+        .filter(|b| !KNOWN_STATUSES.contains(&b.status.as_str()))
+        .map(|b| {
+            format!(
+                "warning: {}: no readable task file for '{}' -- renamed, removed, or not yet committed",
+                b.branch, b.slug
+            )
+        })
+        .collect()
+}
+
 fn render_summary(
     trunk_tickets: &[ParsedTicket],
     branches: &[BranchStatus],
     status_map: &std::collections::HashMap<String, String>,
 ) -> String {
-    let in_flight_slugs: std::collections::HashSet<&str> =
-        branches.iter().map(|b| b.slug.as_str()).collect();
+    // Only a branch that reports a real ticket status takes over the count
+    // for its task. A placeholder means the scan learned nothing about the
+    // task, so trunk stays the authority -- otherwise the trunk loop skips
+    // the ticket, the branch loop declines to count the placeholder, and the
+    // task drops out of the totals entirely.
+    let in_flight_slugs: std::collections::HashSet<&str> = branches
+        .iter()
+        .filter(|b| KNOWN_STATUSES.contains(&b.status.as_str()))
+        .map(|b| b.slug.as_str())
+        .collect();
 
     let mut t_todo = 0usize;
     let mut t_ip = 0;
@@ -707,6 +736,83 @@ mod tests {
         assert!(
             out.contains("review *"),
             "task row should still be marked: {out}"
+        );
+    }
+
+    #[test]
+    fn test_unreadable_branch_falls_back_to_trunk_status() {
+        // A branch that cannot report a status must not consume the task's
+        // count: the trunk loop skips such a task and the branch loop will
+        // not count a placeholder, so the ticket used to vanish from totals.
+        let tickets = vec![
+            t("e", "epic", None, "todo", vec![]),
+            t("proxy", "task", Some("net"), "in_progress", vec![]),
+            t("cache", "task", Some("net"), "todo", vec![]),
+        ];
+        let branches = vec![BranchStatus {
+            branch: "plan/cache".to_string(),
+            status: "(no task file)".to_string(),
+            slug: "cache".to_string(),
+        }];
+        let input = BoardInput {
+            trunk_tickets: tickets,
+            branch_statuses: branches,
+        };
+        let out = render_board(&input);
+
+        let count = |label: &str| -> Option<String> {
+            out.lines()
+                .find(|l| l.starts_with(label))
+                .and_then(|l| l.split_whitespace().last().map(String::from))
+        };
+        assert_eq!(
+            count("total"),
+            Some("3".to_string()),
+            "no ticket may be dropped: {out}"
+        );
+        // cache falls back to its trunk status of todo; proxy keeps in_progress.
+        assert_eq!(count("todo"), Some("2".to_string()), "epic + cache: {out}");
+        assert_eq!(count("in_progress"), Some("1".to_string()), "proxy: {out}");
+    }
+
+    #[test]
+    fn test_branch_warnings_flag_unreadable_branches_only() {
+        let branches = vec![
+            BranchStatus {
+                branch: "plan/proxy".to_string(),
+                status: "in_progress".to_string(),
+                slug: "proxy".to_string(),
+            },
+            BranchStatus {
+                branch: "plan/cache".to_string(),
+                status: "(no task file)".to_string(),
+                slug: "cache".to_string(),
+            },
+            BranchStatus {
+                branch: "plan/ghost".to_string(),
+                status: "(unreadable)".to_string(),
+                slug: "ghost".to_string(),
+            },
+        ];
+        let warnings = branch_warnings(&branches);
+        assert_eq!(
+            warnings.len(),
+            2,
+            "only unreadable branches warn: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("plan/cache") && w.contains("cache")),
+            "cache warning missing: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("plan/ghost")),
+            "ghost warning missing: {warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("plan/proxy")),
+            "a healthy branch must not warn: {warnings:?}"
         );
     }
 
