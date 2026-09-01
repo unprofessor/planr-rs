@@ -34,6 +34,14 @@ jiff = { version = "0.2", default-features = false, features = ["std"] }
 # semvertag-shell -- derive a SemVer version from git describe at build time
 semvertag-shell = "0.2"
 
+[[bench]]
+# harness = false rather than criterion: the setup builds a git repo with
+# hundreds of commits, so the workload is expensive-setup / few-iterations,
+# which criterion's sampling model is the wrong shape for. This also keeps
+# the dev-dependency tree unchanged.
+name = "board_scaling"
+harness = false
+
 [dev-dependencies]
 # assert_cmd & tempfile -- end-to-end CLI tests in throwaway git repos
 assert_cmd = "2"
