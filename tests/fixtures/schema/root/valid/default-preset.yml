@@ -6,8 +6,13 @@ groups:
 edges:
   depends_on: { cardinality: many, semantics: gate }
 templates:
+  # `initial` is required here because `yield` returns a task to `todo`, so
+  # `todo` is both a 'from' and a 'to' and can no longer be derived. Note the
+  # body does NOT scaffold `## Validation`: `submit` gates on that section
+  # existing, and a template that pre-creates it satisfies the gate at birth.
   task:
-    sections: [Acceptance Criteria, Validation]
+    initial: todo
+    body: "## Goal\n\n## Acceptance\n"
 worktrees: .plan/worktrees/$kind/$slug
 verbs:
   - name: claim
@@ -69,6 +74,7 @@ verbs:
   - name: abandon
     applies-to: [task, story, epic, milestone]
     to: abandoned
+    effect: ticket-only
 
   - name: archive
     applies-to: [task, story, epic, milestone]

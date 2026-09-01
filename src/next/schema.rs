@@ -260,6 +260,12 @@ impl Schema {
                     verb.name
                 ));
             }
+            if verb.effect == Effect::TicketOnly && verb.base != Base::Home {
+                return Err(format!(
+                    "verb '{}': effect 'ticket-only' requires base 'home'",
+                    verb.name
+                ));
+            }
             if verb.worktree == Some(WorktreeAction::Create) && verb.effect != Effect::Create {
                 return Err(format!(
                     "verb '{}': worktree 'create' requires effect 'create'",

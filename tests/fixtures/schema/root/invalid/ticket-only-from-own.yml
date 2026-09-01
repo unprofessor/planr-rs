@@ -1,0 +1,9 @@
+# A ticket-only merge builds its tree from home and takes the ticket from the
+# branch, so declaring base `own` describes something the engine cannot do.
+kinds: [task]
+verbs:
+  - name: abandon
+    applies-to: [task]
+    to: abandoned
+    base: own
+    effect: ticket-only

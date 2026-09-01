@@ -125,18 +125,17 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "sections": {
-            "type": "array",
-            "items": { "type": "string" },
-            "description": "Section headings scaffolded into a new ticket of this kind, e.g. Acceptance Criteria, Validation."
-          },
           "body": {
             "type": "string",
-            "description": "Literal body text scaffolded after the sections."
+            "description": "Literal body scaffolded into a new ticket of this kind. Take care not to scaffold a section that a verb gates on: `submit` requiring `sections: [Validation]` checks existence only, so a template that pre-creates that heading satisfies the gate at birth and it then checks nothing, forever."
+          },
+          "initial": {
+            "$ref": "#/$defs/identifier",
+            "description": "The kind's initial state. Omit it while the state graph is acyclic -- it is derived then, as the state that appears as some verb's 'from' but never as any verb's 'to'. It becomes REQUIRED once a rework cycle reaches back to the entry state (a `yield` returning a task to `todo` makes `todo` both a 'from' and a 'to'), because creation is fixed tooling rather than a verb, so the entry state is not an edge in the verb graph at all."
           }
         }
       },
-      "description": "Per-kind scaffolding for 'new'. Note there is no initial-status key: with no events recorded, a ticket's state is the schema's initial state, derived as the state that appears as a verb's 'from' but never as any verb's 'to'."
+      "description": "Per-kind scaffolding for 'new', plus the initial state where it cannot be derived."
     },
 
     "require": {
@@ -264,9 +263,9 @@
         },
 
         "effect": {
-          "enum": ["advance", "create", "merge", "delete"],
+          "enum": ["advance", "create", "merge", "ticket-only"],
           "default": "advance",
-          "description": "What happens to refs, exactly one per verb. 'advance' moves the base ref to the new commit. 'create' cuts plan/<kind>/<slug> at the new commit, so the ref springs into existence already carrying the claim -- an atomic create-or-fail that makes concurrent claims of one ticket resolve by ref CAS with no lock. 'merge' integrates the new commit into home, so a terminal state rides in with the work as one ref move, revertible in one operation. 'delete' drops the ticket's own ref without integrating it."
+          "description": "What happens to refs, exactly one per verb. 'advance' moves the base ref to the new commit. 'create' cuts plan/<kind>/<slug> at the new commit, so the ref springs into existence already carrying the claim -- an atomic create-or-fail that makes concurrent claims of one ticket resolve by ref CAS with no lock. 'merge' integrates the new commit into home, so a terminal state rides in with the work as one ref move, revertible in one operation. 'ticket-only' integrates the TICKET and not the work: the tree is home's with this ticket taken from its own ref, and the parents are home and that ref -- an ours-style merge, so the branch's commits stay reachable from home while never entering its tree, and the ref can then be released without destroying anything. There is deliberately no destructive effect: releasing a ref and destroying work are separable, and only the first belongs to planr."
         },
 
         "retain-ref": {
@@ -302,6 +301,11 @@
           "$comment": "Only a ticket's own ref can be integrated into its home, so base must be stated explicitly.",
           "if": { "properties": { "effect": { "const": "merge" } }, "required": ["effect"] },
           "then": { "properties": { "base": { "const": "own" } }, "required": ["base"] }
+        },
+        {
+          "$comment": "A ticket-only merge builds its tree from home and takes the ticket from the branch, so home is the base.",
+          "if": { "properties": { "effect": { "const": "ticket-only" } }, "required": ["effect"] },
+          "then": { "properties": { "base": { "const": "home" } } }
         },
         {
           "$comment": "A worktree belongs to a ticket's own ref, so a verb that creates one must also cut that ref.",
