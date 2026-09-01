@@ -1,0 +1,7 @@
+# `require` admits exactly three reserved operators: self, neighbors, sections.
+# No exists, no counts, no negation.
+kinds: [task]
+verbs:
+  - name: gate
+    applies-to: [task]
+    require: { exists: { children: done } }

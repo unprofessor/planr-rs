@@ -1,0 +1,4 @@
+# The slug is the identity; there is no separate id.
+kind: task
+title: Wire the verb runner
+id: "0042"

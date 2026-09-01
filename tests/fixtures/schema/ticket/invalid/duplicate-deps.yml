@@ -1,0 +1,6 @@
+# A repeated gate target is a lint error, not a stronger gate.
+kind: task
+title: Wire the verb runner
+depends_on:
+  - schema-loader
+  - schema-loader

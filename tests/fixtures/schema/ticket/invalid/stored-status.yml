@@ -1,0 +1,4 @@
+# State is folded from the ticket's events, never stored beside them.
+kind: task
+title: Wire the verb runner
+status: in_progress

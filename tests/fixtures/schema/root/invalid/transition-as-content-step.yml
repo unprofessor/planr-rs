@@ -1,0 +1,7 @@
+# `transition` is not a primitive any more -- from/to are attributes of the verb.
+kinds: [task]
+verbs:
+  - name: submit
+    applies-to: [task]
+    content:
+      - transition: { from: in_progress, to: review }

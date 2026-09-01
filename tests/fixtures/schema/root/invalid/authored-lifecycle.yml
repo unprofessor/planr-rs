@@ -1,0 +1,7 @@
+# The lifecycle is derived from the verbs, never authored.
+kinds: [task]
+lifecycle:
+  states: [todo, in_progress, done]
+verbs:
+  - name: claim
+    applies-to: [task]
