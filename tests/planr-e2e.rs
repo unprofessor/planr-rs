@@ -825,6 +825,61 @@ fn test_e2e_claim_without_worktree_flag_does_the_work() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Scenario: board sees in-flight branches from trunk
+// ---------------------------------------------------------------------------
+
+/// The whole point of the in-flight section is that the leader, sitting on
+/// trunk, can see what the workers are doing. `git branch --list` marks a
+/// branch checked out in a linked worktree with `+ `, not `* ` or two
+/// spaces, and every claimed task is exactly that -- so the decorated-output
+/// parser mangled every branch name into `+ plan/<slug>`, the ref lookup
+/// failed, and the row was silently dropped. The section only appeared from
+/// inside the worktree itself, where the branch is `* `-marked.
+#[test]
+fn test_e2e_board_reports_in_flight_branches_from_trunk() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1"]);
+
+    // Trunk still records t1 as todo -- the flip lives on the branch.
+    let trunk_task = td
+        .path()
+        .join(format!(".plan/tasks/{}", find_task_slug(td.path(), "t1")));
+    let trunk_content = std::fs::read_to_string(&trunk_task).unwrap();
+    assert!(
+        trunk_content.contains("status: todo"),
+        "trunk should be untouched by claim: {trunk_content}"
+    );
+
+    // git decorates the worktree branch with `+ `, which is what broke this.
+    let decorated = git_stdout(td.path(), &["branch", "--list", "plan/*"]);
+    assert!(
+        decorated.contains("plan/t1"),
+        "branch not created: {decorated}"
+    );
+
+    let board = planr_ok(td.path(), &["board"]);
+    assert!(
+        board.contains("## in flight (worktree branches)"),
+        "in-flight section missing from trunk board: {board}"
+    );
+    assert!(
+        board
+            .lines()
+            .any(|l| l.starts_with("plan/t1") && l.contains("in_progress") && l.contains("t1")),
+        "in-flight row for plan/t1 missing: {board}"
+    );
+    // The summary must count the branch status, not the stale trunk status.
+    assert!(
+        board
+            .lines()
+            .any(|l| l.starts_with("in_progress") && l.split_whitespace().last() == Some("1")),
+        "summary should count t1 as in_progress: {board}"
+    );
+}
+
 /// A worktree inside the repo is an embedded repo, so git stages it as a
 /// gitlink -- a bogus submodule that a fresh clone cannot resolve -- and
 /// trunk reads dirty until someone runs `git rm --cached`. Claim must add an

@@ -137,25 +137,23 @@ pub fn diff_refs(ref1: &str, ref2: &str) -> Result<String, String> {
     git(&["diff", &format!("{ref1}..{ref2}")])
 }
 
-/// `git branch --list [pattern]`. Strips the leading `* ` / `  ` from each
-/// line, matching the TS `branchList`.
+/// `git branch --list [pattern]`, one plain branch name per line.
+///
+/// Uses `--format` rather than parsing the decorated output. `git branch`
+/// prefixes each line with a marker -- `* ` for HEAD, `+ ` for a branch
+/// checked out in a linked worktree, two spaces otherwise -- and every
+/// branch planr creates is a worktree branch, so the `+ ` case is the
+/// common one, not the exotic one. Asking git for `%(refname:short)`
+/// sidesteps the decoration entirely.
 pub fn branch_list(pattern: Option<&str>) -> Result<Vec<String>, String> {
-    let mut args = vec!["branch", "--list"];
+    let mut args = vec!["branch", "--list", "--format=%(refname:short)"];
     if let Some(p) = pattern {
         args.push(p);
     }
     let out = git(&args)?;
     Ok(out
         .lines()
-        .map(|l| {
-            // Match TS: replace(/^\*\s/, '').replace(/^\s{2}/, '').trim()
-            // Strip "* " or "  " prefix exactly, then trim the rest.
-            if l.len() >= 2 && (&l[..2] == "* " || &l[..2] == "  ") {
-                l[2..].trim().to_string()
-            } else {
-                l.trim().to_string()
-            }
-        })
+        .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect())
 }

@@ -20,6 +20,17 @@
 
 ### Fixed
 
+- **`planr board` now shows the in-flight section from trunk.** The
+  branch scan parsed the decorated output of `git branch --list`, stripping
+  only the `* ` (current branch) and two-space markers. Git marks a branch
+  that is checked out in a linked worktree with `+ ` instead, which is what
+  every `planr claim` produces, so each name came back as `+ plan/<slug>`,
+  the ref lookup failed, and the row was dropped without a word. The leader
+  on trunk saw no `## in flight` section and a summary counting every
+  claimed task as `todo`; the section appeared only when the board was run
+  from inside the worktree itself. The scan now asks git for
+  `%(refname:short)` rather than parsing decoration.
+
 - **`planr claim <slug>` without `--worktree` now does the full claim**
   ([#4]). Since 0.3.0 an omitted `--worktree` was treated as
   `--no-worktree`, so a bare `claim` printed `claimed: <slug>` and exited 0
