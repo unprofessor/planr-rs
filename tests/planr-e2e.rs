@@ -878,6 +878,20 @@ fn test_e2e_board_reports_in_flight_branches_from_trunk() {
             .any(|l| l.starts_with("in_progress") && l.split_whitespace().last() == Some("1")),
         "summary should count t1 as in_progress: {board}"
     );
+    // The tasks table shows the live status, marked as branch-sourced, so it
+    // agrees with the summary instead of reporting the stale trunk `todo`.
+    let task_row = board
+        .lines()
+        .find(|l| l.starts_with("t1 "))
+        .unwrap_or_else(|| panic!("t1 row missing: {board}"));
+    assert!(
+        task_row.contains("in_progress *"),
+        "tasks row should carry the in-flight marker: {task_row}"
+    );
+    assert!(
+        board.contains("* status from an in-flight branch"),
+        "marker legend missing: {board}"
+    );
 }
 
 /// A worktree inside the repo is an embedded repo, so git stages it as a

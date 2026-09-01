@@ -20,6 +20,16 @@
 
 ### Fixed
 
+- **`planr board` marks a task whose status comes from an in-flight
+  branch.** `claim` flips the status on the worktree branch and leaves
+  trunk alone, so the tasks table reported a claimed task as `todo` for the
+  whole life of the work while the summary counted it as `in_progress` --
+  the two halves of the board disagreed. The STATUS column now shows the
+  branch value with a trailing `*`, and a legend under the table says where
+  it came from. A branch that has no readable task file keeps its
+  placeholder in the in-flight section only, rather than inventing a ticket
+  status.
+
 - **`planr board` now shows the in-flight section from trunk.** The
   branch scan parsed the decorated output of `git branch --list`, stripping
   only the `* ` (current branch) and two-space markers. Git marks a branch

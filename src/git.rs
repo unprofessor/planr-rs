@@ -277,17 +277,4 @@ mod tests {
             assert!(p.is_absolute(), "git-common-dir should be absolute: {gd}");
         });
     }
-
-    #[test]
-    fn test_branch_list_format() {
-        // Pure parsing test -- branch_list output format
-        // The `branch_list` fn can't be tested in isolation because it calls
-        // git. Instead, use git_in to create a branch and verify the format.
-        with_temp_repo(|_tmp, repo| {
-            // Create a branch
-            git_in(repo, &["branch", "feature-a"]).unwrap();
-            // branch_list uses the global cwd -- can't easily test here.
-            // Integration testing covers this. Just verify git_common_dir.
-        });
-    }
 }
