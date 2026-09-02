@@ -152,11 +152,15 @@ fn canonicalize_existing(p: &Path) -> PathBuf {
 /// sibling worktree is hidden too. A shared exclude file cannot express
 /// "this worktree only", and over-hiding a planr worktree path is the safe
 /// direction -- the alternative is a gitlink committed onto trunk.
-fn containing_worktree_root(target: &Path, cwd: &Path) -> Option<PathBuf> {
-    let out = git_in(cwd, &["worktree", "list", "--porcelain"]).ok()?;
-    out.lines()
-        .filter_map(|l| l.strip_prefix("worktree "))
-        .filter_map(|p| PathBuf::from(p.trim()).canonicalize().ok())
+///
+/// `Err` when git could not be asked. That is deliberately distinct from
+/// `Ok(None)`: "the target is outside every working tree, so no rule is
+/// needed" and "we do not know where the target is" call for opposite
+/// behaviour, and collapsing them turned a failed lookup into a claim that
+/// reported success while leaving an in-repo worktree unhidden.
+fn containing_worktree_root(target: &Path, cwd: &Path) -> Result<Option<PathBuf>, String> {
+    Ok(worktree_roots(cwd)?
+        .into_iter()
         // Strictly above the target. The rule is written after the worktree
         // exists, so the target is itself a registered worktree by then --
         // matching it against itself would yield an empty relative path and
@@ -164,22 +168,43 @@ fn containing_worktree_root(target: &Path, cwd: &Path) -> Option<PathBuf> {
         .filter(|root| target.starts_with(root) && target != root.as_path())
         // Worktrees nest (planr's default location puts one inside the tree
         // that claimed it), so the deepest match is the containing one.
-        .max_by_key(|root| root.components().count())
+        .max_by_key(|root| root.components().count()))
 }
 
-/// The anchored, directory-shaped exclude pattern for `target`, or `None`
-/// when it lies outside every working tree -- git never looks there, so no
-/// rule is needed and none should be written.
-fn exclude_pattern(target: &Path, cwd: &Path) -> Option<String> {
+/// The canonical root of every registered worktree.
+///
+/// One helper so that every question asked of the worktree list resolves
+/// paths the same way; the callers disagreed before, one dropping records
+/// whose directory no longer exists and the other keeping them.
+fn worktree_roots(cwd: &Path) -> Result<Vec<PathBuf>, String> {
+    let out = git_in(cwd, &["worktree", "list", "--porcelain"])?;
+    Ok(out
+        .lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .map(|p| canonicalize_existing(Path::new(p.trim())))
+        .collect())
+}
+
+/// The anchored, directory-shaped exclude pattern for `target`.
+///
+/// `Ok(None)` means the target lies outside every working tree -- git never
+/// looks there, so no rule is needed and none should be written. `Err` means
+/// the question could not be answered, which is not the same thing.
+fn exclude_pattern(target: &Path, cwd: &Path) -> Result<Option<String>, String> {
     let base = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     let abs = canonicalize_existing(&normalize(&if target.is_absolute() {
         target.to_path_buf()
     } else {
         base.join(target)
     }));
-    let root = containing_worktree_root(&abs, cwd)?;
-    let rel = abs.strip_prefix(&root).ok()?.to_string_lossy().to_string();
-    (!rel.is_empty()).then(|| format!("/{}/", glob_escape(&rel.replace('\\', "/"))))
+    let Some(root) = containing_worktree_root(&abs, cwd)? else {
+        return Ok(None);
+    };
+    let Ok(rel) = abs.strip_prefix(&root) else {
+        return Ok(None);
+    };
+    let rel = rel.to_string_lossy().to_string();
+    Ok((!rel.is_empty()).then(|| format!("/{}/", glob_escape(&rel.replace('\\', "/")))))
 }
 
 /// Escape the glob metacharacters gitignore gives meaning to.
@@ -225,13 +250,13 @@ fn exclude_file(cwd: &Path) -> Result<PathBuf, String> {
 /// reused by every later claim, so removing it on behalf of a claim that
 /// merely found it would unhide every other worktree under it.
 pub fn exclude_add(target: &Path, cwd: &Path) -> Result<bool, String> {
-    let Some(pattern) = exclude_pattern(target, cwd) else {
-        return Ok(false);
-    };
     // Rewriting the file is a read-modify-write, and claims run concurrently
     // by design. Without this, two claims can both read the pre-rule file and
     // both write it, dropping one rule and leaving that worktree visible.
     let _lock = crate::lock::PlanrLock::exclude(cwd).map_err(|e| format!("lock error: {e}"))?;
+    let Some(pattern) = exclude_pattern(target, cwd)? else {
+        return Ok(false);
+    };
     let path = exclude_file(cwd)?;
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let (before, block, after) = split_planr_block(&existing);
@@ -302,7 +327,15 @@ fn split_planr_block(existing: &str) -> (Vec<&str>, Vec<&str>, Vec<&str>) {
 /// (the default `<plan-dir>/worktrees/`, which planr owns and reuses for
 /// every claim) is left in place.
 pub fn exclude_remove(target: &Path, cwd: &Path) -> Result<(), String> {
-    let Some(pattern) = exclude_pattern(target, cwd) else {
+    // The lock covers the check as well as the write, not just the write.
+    // `worktree_add` always precedes `exclude_add`, so holding it here means a
+    // concurrent claim is either already registered when we look, or it takes
+    // the lock after us and re-adds the rule it finds missing. Checking first
+    // and locking second leaves the window between them: the other claim
+    // registers its worktree and finds the rule still present -- so it will
+    // never rewrite it -- and then we delete it out from under them.
+    let _lock = crate::lock::PlanrLock::exclude(cwd).map_err(|e| format!("lock error: {e}"))?;
+    let Some(pattern) = exclude_pattern(target, cwd)? else {
         return Ok(());
     };
     // Patterns are anchored per containing worktree, so two worktrees in
@@ -311,8 +344,6 @@ pub fn exclude_remove(target: &Path, cwd: &Path) -> Result<(), String> {
     if another_worktree_needs(&pattern, target, cwd) {
         return Ok(());
     }
-    // Same read-modify-write hazard as `exclude_add`.
-    let _lock = crate::lock::PlanrLock::exclude(cwd).map_err(|e| format!("lock error: {e}"))?;
     let path = exclude_file(cwd)?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(());
@@ -353,16 +384,20 @@ pub fn exclude_remove(target: &Path, cwd: &Path) -> Result<(), String> {
 /// it. Missing the second case drops the shared rule while other claims are
 /// still relying on it, leaving their worktrees visible.
 fn another_worktree_needs(pattern: &str, target: &Path, cwd: &Path) -> bool {
-    let Ok(out) = git_in(cwd, &["worktree", "list", "--porcelain"]) else {
-        return false;
+    let Ok(roots) = worktree_roots(cwd) else {
+        // Fail closed. Not knowing the answer must not read as "nobody needs
+        // this": a rule kept too long is a tidiness problem the next close
+        // clears, while a rule dropped too early unhides a live worktree and
+        // puts a gitlink on trunk.
+        return true;
     };
     let target = canonicalize_existing(target);
-    out.lines()
-        .filter_map(|l| l.strip_prefix("worktree "))
-        .map(|p| canonicalize_existing(Path::new(p.trim())))
+    roots
+        .into_iter()
         .filter(|root| *root != target)
         .any(|root| {
-            root.starts_with(&target) || exclude_pattern(&root, cwd).as_deref() == Some(pattern)
+            root.starts_with(&target)
+                || matches!(exclude_pattern(&root, cwd), Ok(Some(ref p)) if p == pattern)
         })
 }
 
@@ -574,6 +609,56 @@ mod tests {
         git_in(&repo, &["add", "."]).unwrap();
         git_in(&repo, &["commit", "-m", "init"]).unwrap();
         f(&tmp, &repo);
+    }
+
+    #[test]
+    fn test_exclude_pattern_distinguishes_outside_from_unknown() {
+        with_temp_repo(|tmp, repo| {
+            // Inside the working tree: a rule is needed, anchored to it.
+            assert_eq!(
+                exclude_pattern(&repo.join("wt"), repo).unwrap(),
+                Some("/wt/".to_string())
+            );
+            // Outside every working tree: no rule is needed. This must stay
+            // distinct from an error -- collapsing the two turned a failed
+            // lookup into a claim that reported success having hidden nothing.
+            assert_eq!(
+                exclude_pattern(&tmp.path().join("elsewhere"), repo).unwrap(),
+                None
+            );
+        });
+    }
+
+    #[test]
+    fn test_exclude_pattern_escapes_glob_metacharacters() {
+        with_temp_repo(|_tmp, repo| {
+            // `/wt[1]/` would be a character class matching `wt1`, leaving the
+            // real directory visible and staged as a gitlink.
+            assert_eq!(
+                exclude_pattern(&repo.join("wt[1]"), repo).unwrap(),
+                Some("/wt\\[1\\]/".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn test_exclude_add_then_remove_round_trips() {
+        with_temp_repo(|_tmp, repo| {
+            let before = fs::read_to_string(repo.join(".git/info/exclude")).unwrap_or_default();
+            let target = repo.join("wt");
+            assert!(exclude_add(&target, repo).unwrap(), "first add writes");
+            assert!(
+                !exclude_add(&target, repo).unwrap(),
+                "second add is a no-op, so a rollback cannot claim ownership"
+            );
+            exclude_remove(&target, repo).unwrap();
+            let after = fs::read_to_string(repo.join(".git/info/exclude")).unwrap_or_default();
+            assert_eq!(
+                after.trim_end(),
+                before.trim_end(),
+                "the file must come back exactly as it was"
+            );
+        });
     }
 
     #[test]
