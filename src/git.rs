@@ -204,7 +204,15 @@ fn exclude_pattern(target: &Path, cwd: &Path) -> Result<Option<String>, String> 
         return Ok(None);
     };
     let rel = rel.to_string_lossy().to_string();
-    Ok((!rel.is_empty()).then(|| format!("/{}/", glob_escape(&rel.replace('\\', "/")))))
+    // Separator normalization is Windows-only. On Unix a backslash is an
+    // ordinary filename character, so rewriting it split `wt\1` into `wt/1`:
+    // git then looked for a `1` inside a `wt` directory, the real worktree
+    // stayed visible, and `git add` staged it as a gitlink -- the same failure
+    // the glob escaping below exists to prevent. `glob_escape` handles the
+    // backslash itself.
+    #[cfg(windows)]
+    let rel = rel.replace('\\', "/");
+    Ok((!rel.is_empty()).then(|| format!("/{}/", glob_escape(&rel))))
 }
 
 /// Escape the glob metacharacters gitignore gives meaning to.

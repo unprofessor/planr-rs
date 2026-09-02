@@ -17,9 +17,16 @@ fn find_task_file<'a>(files: &'a [String], slug: &str) -> Option<&'a str> {
     files.iter().find(|f| f.ends_with(&pat)).map(|s| s.as_str())
 }
 
-/// Statuses that mean work on the branch has already begun. A claim never
-/// rewrites one of these -- see the flip in `claim_task`.
-const STARTED_STATUSES: [&str; 4] = ["in_progress", "review", "done", "abandoned"];
+/// The only status a claim may act on.
+///
+/// Stated as "what may be claimed" rather than a list of what may not: an
+/// enumeration of the excluded statuses has to be kept in step with
+/// [`crate::ticket::VALID_STATUSES`], and the first version of it already
+/// fell a status short -- `blocked` was missing, so a worker who set it on
+/// their branch had it silently rewritten to `in_progress` on the next
+/// claim. A claim flips `todo` to `in_progress` and leaves every other
+/// status alone; adding a status to the vocabulary cannot break that.
+const CLAIMABLE_STATUS: &str = "todo";
 
 // ---- frontmatter helpers (simplified; assumes valid YAML frontmatter) ----
 
@@ -219,15 +226,14 @@ fn flip_to_in_progress(wt_path: &Path, task_file: &str, slug: &str) -> Result<()
         .map_err(|e| format!("cannot read {}: {e}", wf_path.display()))?;
     let sf = split_frontmatter(&content).ok_or_else(|| format!("no frontmatter in {task_file}"))?;
 
-    // Flip the status, but never backwards. A resumed claim finds the branch
-    // already at in_progress, or further along -- a worker can reach review
-    // before the worktree is removed. Rewriting that to in_progress would
-    // discard a finished review and then make `close` refuse the task for
-    // having the wrong status. Only a branch that has not started work gets
-    // flipped, which also keeps `git commit` from running with nothing staged
-    // when the claim is merely being resumed.
-    let current = read_status_from_fm(&sf.fm_lines);
-    if STARTED_STATUSES.contains(&current) {
+    // Flip the status, but never over one that is already set. A resumed
+    // claim finds the branch at in_progress, or further along -- a worker can
+    // reach review, or mark the task blocked, before the worktree is removed.
+    // Rewriting any of those to in_progress discards that work and then makes
+    // `close` refuse the task for having the wrong status. Leaving them alone
+    // also keeps `git commit` from running with nothing staged when the claim
+    // is merely being resumed.
+    if read_status_from_fm(&sf.fm_lines) != CLAIMABLE_STATUS {
         return Ok(());
     }
 
@@ -345,11 +351,16 @@ pub fn claim_task(
             "refuse claim: task '{slug}' is abandoned; update the ticket or create a new one"
         ));
     }
-    if STARTED_STATUSES.contains(&info.status.as_str()) {
+    if info.status != CLAIMABLE_STATUS {
+        let shown = if info.status.is_empty() {
+            "<missing>"
+        } else {
+            &info.status
+        };
         return Err(format!(
-            "refuse claim: trunk records task '{slug}' as {}; \
-             reopen the ticket or create a new one",
-            info.status
+            "refuse claim: trunk records task '{slug}' as {shown}; \
+             only a {CLAIMABLE_STATUS} task can be claimed -- \
+             reopen the ticket or create a new one"
         ));
     }
 
@@ -401,7 +412,13 @@ pub fn claim_task(
     // second agent could `claim --no-worktree` a task another agent was
     // actively working and be told it succeeded.
     if let Some(held) = git::find_worktree_for_branch(&branch) {
-        if held.exists() {
+        // `try_exists`, not `exists`: the latter reports `false` for any I/O
+        // error -- a permission denied on an ancestor, an unmounted volume, an
+        // unreachable network path -- and reading that as "the worktree is
+        // gone" would destroy a live holder's record and hand their task to a
+        // second agent. Not knowing counts as held, the same fail-closed
+        // choice `another_worktree_needs` makes.
+        if held.try_exists().unwrap_or(true) {
             return Err(format!(
                 "refuse claim: task '{slug}' is already claimed; its worktree is at {}",
                 held.display()

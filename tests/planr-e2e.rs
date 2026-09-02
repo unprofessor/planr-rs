@@ -2106,3 +2106,99 @@ fn test_e2e_claim_refuses_a_quoted_terminal_status() {
         "the ticket must not be rewritten: {after}"
     );
 }
+
+/// A resumed claim must not rewrite `blocked` either. The guard listed the
+/// statuses it would not touch, and fell one short of the vocabulary, so a
+/// worker who marked their branch blocked had it silently reopened.
+#[test]
+fn test_e2e_claim_resume_does_not_revert_blocked() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1"]);
+    let wt = td.path().join(".plan/worktrees/wt-t1");
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+
+    let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    std::fs::write(
+        wt.join(&task_file),
+        content.replace("status: in_progress", "status: blocked"),
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "blocked on branch"])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    planr_ok(td.path(), &["claim", "t1"]);
+
+    let after = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    assert!(
+        after.contains("status: blocked"),
+        "resume must not reopen a blocked branch: {after}"
+    );
+}
+
+/// Only a `todo` task is claimable. `blocked` on trunk means the leader has
+/// said so; a claim used to create a worktree, skip the flip and exit 0.
+#[test]
+fn test_e2e_claim_refuses_a_blocked_task_on_trunk() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let path = td.path().join(&task_file);
+    let content = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, content.replace("status: todo", "status: blocked")).unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "block t1"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    let err = planr_err(td.path(), &["claim", "t1"]);
+    assert!(err.contains("blocked"), "expected the reason: {err}");
+    assert!(
+        !td.path().join(".plan/worktrees/wt-t1").exists(),
+        "a refused claim must create nothing"
+    );
+}
+
+/// A backslash is an ordinary filename character on Unix. Rewriting it as a
+/// separator split `wt\1` into `wt/1`, so git looked for a `1` inside a `wt`
+/// directory and the real worktree stayed visible.
+#[test]
+#[cfg(unix)]
+fn test_e2e_worktree_path_with_backslash_is_hidden() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1", "--worktree", "wt\\1"]);
+
+    let status = git_stdout(td.path(), &["status", "--porcelain"]);
+    assert!(
+        !status.contains("wt"),
+        "a path holding a backslash must still be hidden: {status:?}"
+    );
+    assert!(
+        git_ignored(td.path(), "wt\\1"),
+        "wt\\1 must be ignored: exclude={:?}",
+        read_exclude(td.path())
+    );
+}

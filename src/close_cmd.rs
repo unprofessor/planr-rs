@@ -209,7 +209,13 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
                         // so it does not match here and survives.
                         let _ = git::exclude_remove(wt, cwd);
                     }
-                    Err(e) if !wt.exists() => {
+                    // `try_exists().unwrap_or(true)`: an I/O error must not
+                    // read as "the directory is gone". A worktree that is
+                    // present but unreadable would otherwise have its rule
+                    // dropped while it is still registered and on disk --
+                    // unhiding a live worktree, which is the corruption the
+                    // rule exists to prevent.
+                    Err(e) if !wt.try_exists().unwrap_or(true) => {
                         // A stale record: the directory was deleted by hand,
                         // so removal fails but there is nothing left to hide,
                         // and keeping the rule would hide whatever is created

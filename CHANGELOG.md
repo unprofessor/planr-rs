@@ -84,6 +84,26 @@
   class matching `wt1` -- leaving the real directory visible and staged as
   a gitlink.
 
+- **Only a `todo` task can be claimed, and a claim rewrites nothing else.**
+  The guard listed the statuses a claim would not touch and fell one short
+  of the vocabulary: `blocked` was missing, so a worker who marked their
+  branch blocked had it silently reopened as `in_progress` on the next
+  claim, and a task blocked on trunk could still be "claimed" to no effect.
+  Stated the other way round -- `todo` is claimable, everything else is
+  left alone -- adding a status can no longer break it.
+
+- **An unreadable worktree path counts as held, not as gone.** The holder
+  check and `close`'s cleanup used `Path::exists`, which reports `false` for
+  any I/O error, so a live worktree on a momentarily unreachable path -- an
+  unmounted volume, a permission error on an ancestor -- read as a stale
+  record: its admin record was destroyed and a second agent took over a
+  task someone was working. Both now fail closed.
+
+- **A backslash in a worktree path is a filename character on Unix.** The
+  path was normalized as if `\` were a separator, so `wt\1` became the
+  pattern `/wt/1/`, the real worktree stayed visible, and `git add` staged
+  it as a gitlink -- the same failure the glob escaping prevents for `[`.
+
 - **A failed `planr claim` no longer leaves its branch behind.**
   `git worktree add -b <branch> <path>` creates the branch *before* it
   validates the path, so a refused path left `plan/<slug>` in place:
@@ -181,7 +201,7 @@
   on trunk saw no `## in flight` section and a summary counting every
   claimed task as `todo`; the section appeared only when the board was run
   from inside the worktree itself. The scan now asks git for
-  `%(refname:short)` rather than parsing decoration.
+  the ref name rather than parsing decoration.
 
 - **`planr claim <slug>` without `--worktree` now does the full claim**
   ([#4]). Since 0.3.0 an omitted `--worktree` was treated as
