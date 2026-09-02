@@ -297,7 +297,14 @@ pub fn claim_task(
     // permanently hide a real directory from git.
     let wt_display = wt_path.display();
     git::worktree_add(&wt_path, &branch, Some(trunk))?;
-    git::exclude_add(&ignore_target, cwd)?;
+    if let Err(e) = git::exclude_add(&ignore_target, cwd) {
+        // Reversing the order left the opposite gap: the worktree now exists
+        // but nothing hides it, so trunk would read dirty with a gitlink for
+        // a claim that reported failure. Undo the worktree before returning.
+        // It was just created and holds nothing, so forcing is safe.
+        let _ = git::worktree_remove(&wt_path, true);
+        return Err(e);
+    }
 
     // 3b. Read the task file in the worktree
     let wf_path = wt_path.join(&task_file);

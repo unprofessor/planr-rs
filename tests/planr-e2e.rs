@@ -1379,19 +1379,22 @@ fn test_e2e_close_keeps_ignore_rule_when_worktree_removal_fails() {
 
     planr_ok(td.path(), &["close", "task", "t1"]);
 
-    // The worktree survived, so its rule must survive with it.
-    if wt.exists() {
-        let exclude = read_exclude(td.path());
-        assert!(
-            exclude.contains("/wt-explicit/"),
-            "a surviving worktree must stay hidden: {exclude:?}"
-        );
-        let status = git_stdout(td.path(), &["status", "--porcelain"]);
-        assert!(
-            !status.contains("wt-explicit"),
-            "worktree must not show up as a gitlink: {status:?}"
-        );
-    }
+    // The invariant holds either way, so assert it unconditionally rather
+    // than only when the removal happened to fail: a worktree that is still
+    // on disk must still be hidden. Guarding the whole check on
+    // `wt.exists()` would make this test quietly vacuous on any git whose
+    // `worktree remove` tolerates untracked files.
+    let exclude = read_exclude(td.path());
+    assert!(
+        !wt.exists() || exclude.contains("/wt-explicit/"),
+        "a surviving worktree must stay hidden: exists={}, exclude={exclude:?}",
+        wt.exists()
+    );
+    let status = git_stdout(td.path(), &["status", "--porcelain"]);
+    assert!(
+        !status.contains("wt-explicit"),
+        "worktree must never show up as a gitlink: {status:?}"
+    );
 }
 
 /// Deleting a worktree with `rm -rf` leaves git still listing it until someone
@@ -1532,6 +1535,7 @@ fn test_e2e_exclude_rule_anchors_to_main_worktree() {
 /// made it look like it lay outside the repository and skipped the rule --
 /// on macOS every `$TMPDIR` path takes this route.
 #[test]
+#[cfg(unix)]
 fn test_e2e_symlinked_worktree_path_is_ignored() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
