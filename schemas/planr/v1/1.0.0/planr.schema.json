@@ -308,9 +308,14 @@
           "then": { "properties": { "base": { "const": "home" } } }
         },
         {
-          "$comment": "A worktree belongs to a ticket's own ref, so a verb that creates one must also cut that ref.",
+          "$comment": "A worktree needs a ref to attach to, but need not have cut it: `effect: create` cuts one, `base: own` requires an existing one. The second shape is how a yielded ticket is re-dispatched.",
           "if": { "properties": { "worktree": { "const": "create" } }, "required": ["worktree"] },
-          "then": { "properties": { "effect": { "const": "create" } }, "required": ["effect"] }
+          "then": {
+            "anyOf": [
+              { "properties": { "effect": { "const": "create" } }, "required": ["effect"] },
+              { "properties": { "base": { "const": "own" } }, "required": ["base"] }
+            ]
+          }
         }
       ]
     },

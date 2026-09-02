@@ -60,7 +60,7 @@ pub fn new_ticket(
         &[&base],
         &format!("plan: new {slug}\n\nPlanr-Verb: new\nPlanr-Ticket: {slug}\n"),
     )?;
-    plumbing::update_ref(&ctx.trunk, &commit)?;
+    plumbing::update_ref(&ctx.trunk, &commit, &base)?;
 
     let state = fold::initial_state(&ctx.schema, kind)?;
     Ok(format!(

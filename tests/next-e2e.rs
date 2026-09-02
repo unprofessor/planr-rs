@@ -364,3 +364,45 @@ fn abandoning_an_unclaimed_ticket_has_nothing_to_preserve() {
     );
     assert!(ok(dir, &["next", "state", "idle"]).contains("abandoned"));
 }
+
+#[test]
+fn a_yielded_ticket_can_be_resumed() {
+    // The supervisor's likelier option. `yield` keeps the ref so the work and
+    // the handback note survive the decision; `resume` re-dispatches it.
+    // Without this verb only abandonment worked, because `claim` is
+    // create-or-fail and the ref is still standing.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    yield_with_work(dir, "cache");
+    assert!(ok(dir, &["next", "state", "cache"]).contains("todo"));
+
+    ok(dir, &["next", "do", "resume", "cache"]);
+    assert!(ok(dir, &["next", "state", "cache"]).contains("in_progress"));
+
+    // The partial work survives -- resuming is not re-claiming.
+    let wt = dir.join(".plan/worktrees/task/cache");
+    assert!(wt.join("partial.rs").exists(), "work lost on resume");
+
+    // And the loop closes: a resumed ticket goes on through the normal path.
+    let ticket = wt.join(".plan/tickets/cache.md");
+    let body = std::fs::read_to_string(&ticket).unwrap();
+    std::fs::write(&ticket, format!("{body}\n## Validation\n\nchecked\n")).unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["commit", "-m", "work"]);
+    ok(dir, &["next", "do", "submit", "cache"]);
+    assert!(ok(dir, &["next", "state", "cache"]).contains("review"));
+}
+
+#[test]
+fn resume_is_refused_without_a_branch_to_work_from() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    ok(dir, &["next", "new", "task", "fresh", "Fresh"]);
+
+    // A ticket that was never claimed has no ref, so there is nothing to
+    // resume -- which is exactly what `base: own` checks, with no new operator.
+    let err = refused(dir, &["next", "do", "resume", "fresh"]);
+    assert!(err.contains("no branch"), "unexpected refusal: {err}");
+}

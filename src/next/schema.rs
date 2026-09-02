@@ -266,9 +266,16 @@ impl Schema {
                     verb.name
                 ));
             }
-            if verb.worktree == Some(WorktreeAction::Create) && verb.effect != Effect::Create {
+            // A worktree needs a ref to attach to -- it does not need the verb
+            // to have CUT that ref. `effect: create` cuts one; `base: own`
+            // requires an existing one. Re-dispatching a yielded ticket is the
+            // second shape, and the stricter rule made it inexpressible.
+            if verb.worktree == Some(WorktreeAction::Create)
+                && verb.effect != Effect::Create
+                && verb.base != Base::Own
+            {
                 return Err(format!(
-                    "verb '{}': worktree 'create' requires effect 'create'",
+                    "verb '{}': worktree 'create' needs a ref to attach to -- either effect 'create' to cut one, or base 'own' to require an existing one",
                     verb.name
                 ));
             }

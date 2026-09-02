@@ -73,6 +73,17 @@ verbs:
     content:
       - annotate: { section: Blocked, body: $message }
 
+  # The other half of `yield`. A supervisor who decides the ticket is still
+  # worth doing re-dispatches it here. Note the precondition needs no new
+  # operator: `base: own` on a `todo` ticket IS the definition of "yielded",
+  # since a fresh ticket has no ref and a claimed one is not `todo`.
+  - name: resume
+    applies-to: [task]
+    from: todo
+    to: in_progress
+    base: own
+    worktree: create
+
   - name: close
     applies-to: [task]
     from: approved

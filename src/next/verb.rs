@@ -331,7 +331,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
         Base::Own => {
             if !git::ref_exists(&own) {
                 return Err(format!(
-                    "refuse {verb_name}: '{slug}' has no branch {own} -- it is not claimed"
+                    "refuse {verb_name}: '{slug}' has no branch {own} -- there is nothing on a branch to work from"
                 ));
             }
             own.clone()
@@ -403,7 +403,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
     let mut report = Vec::new();
     match verb.effect {
         Effect::Advance => {
-            git::update_ref(&base_ref, &commit)?;
+            git::update_ref(&base_ref, &commit, &base_sha)?;
             report.push(format!("{base_ref} -> {}", &commit[..7]));
         }
         Effect::Create => {
@@ -429,7 +429,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
                 ));
             } else {
                 // Nothing in flight -- an ordinary advance on home.
-                git::update_ref(&base_ref, &commit)?;
+                git::update_ref(&base_ref, &commit, &base_sha)?;
                 report.push(format!("{base_ref} -> {}", &commit[..7]));
             }
             if git::ref_exists(&own) {
@@ -448,11 +448,19 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
     match verb.worktree {
         Some(WorktreeAction::Create) => {
             let path = worktree_path(ctx, &kind, slug);
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
+            // Idempotent, as the design says worktree actions are in both
+            // directions. It matters for re-dispatch: `yield` leaves the
+            // worktree standing, so a `resume` run where the worker never left
+            // finds it already there, while one run elsewhere has to make it.
+            if path.exists() {
+                report.push(format!("worktree {} (already present)", path.display()));
+            } else {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                git::worktree_add(&path.to_string_lossy(), &own)?;
+                report.push(format!("worktree {}", path.display()));
             }
-            git::worktree_add(&path.to_string_lossy(), &own)?;
-            report.push(format!("worktree {}", path.display()));
         }
         Some(WorktreeAction::Remove) => {
             let path = worktree_path(ctx, &kind, slug);

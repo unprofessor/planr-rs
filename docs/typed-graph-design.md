@@ -1240,13 +1240,12 @@ known boundary.
    enough to replace `ls`-by-kind for humans? Slightly sharper under the fold: a
    ticket file no longer states its own state, so `board` carries more of the
    legibility burden than it did.
-10. **`yield` and re-claim** — **half-settled by round 4** (§9c). `yield` keeps
-    the ref, so the partial work and the handback note survive for the
-    supervisor, and `abandon` is what releases it. Re-attachment is *unbuilt*:
-    `claim` is create-or-fail, so a yielded ticket cannot currently be
-    re-claimed at all, which forecloses the supervisor's more likely option.
-    `claim` needs to reattach when the ticket is in its initial state and the
-    ref already exists.
+10. ~~**`yield` and re-claim**~~ — **resolved** in round 4
+    ([§9c](#9c-round-4--what-the-spike-found-2026-09-01)). `yield` keeps the
+    ref so the work and the handback note survive the supervisor's decision;
+    `resume` re-dispatches it and `abandon` releases it. `claim` was left
+    create-or-fail rather than made reattaching, so its compare-and-swap
+    survives — and every other ref move became a CAS too.
 11. **Container integration branches** — deferred, see §9b. The contract change
     that keeps it cheap is already in (`base: home` resolves by walking the
     parent chain), but the workflow is not adopted.
@@ -1625,7 +1624,7 @@ it, but it now dominates.
   **has work in flight**, which is a different and more useful thing: it is
   exactly what a supervisor weighs when deciding whether to replan or abandon.
 
-### A gap the spike opened and did not close
+### A gap the spike opened, and how it closed
 
 `yield` keeps the ticket's ref, so the partial work and the note explaining the
 handback both survive for the supervisor to weigh. But `claim` declares
@@ -1637,13 +1636,41 @@ $ planr next do claim t1
 cannot create branch 'plan/task/t1': ... reference already exists
 ```
 
-That forecloses the *more likely* of the supervisor's two options. The
-supervisor "*may have an idea how to proceed whereas the worker may only see
-what is right in front of them*" — replanning and re-dispatching is the normal
-outcome, and abandoning the exception. Right now only the exception works, and
-the failure surfaces as a raw git error rather than a planr-level explanation.
-Open question 10 is therefore half-settled: the ref is kept, and re-attachment
-is unbuilt.
+That foreclosed the *more likely* of the supervisor's two options — replanning
+and re-dispatching is the normal outcome, and abandoning the exception — so
+only the exception worked, and the failure surfaced as a raw git error rather
+than a planr-level explanation.
+
+**Resolved by a `resume` verb, not by extending `claim`.** Making `claim`
+create-or-reattach would destroy its atomicity: the empty old-value in
+`update-ref <ref> <sha> ""` is what makes two concurrent claims resolve in the
+kernel, and reattachment removes that guard, leaving only a folded `from: todo`
+check that two claimants can both read as true. A distinct verb is also what
+the model forces, since one name with one kind is ambiguous dispatch — and
+that is arguably correct, because re-dispatching after a replan is a different
+act by a different actor than claiming for the first time.
+
+The precondition needed no new operator: **`base: own` on a ticket in its
+initial state is the definition of "yielded"**, because a fresh ticket has no
+ref and a claimed one is not `todo`.
+
+Two mechanism changes fell out of building it:
+
+- **The worktree rule was too strict.** It required `worktree: create` to imply
+  `effect: create`, on the reasoning that a worktree belongs to a ref the verb
+  cut. A worktree needs a ref to *exist*, not to be *created*, and `base: own`
+  guarantees that too. The rule is now `effect: create` **or** `base: own`, in
+  both the engine and the published schema.
+- **Every ref move is now a compare-and-swap.** `git update-ref` takes an
+  expected-old-value for any move, not only creation, so passing the sha the
+  verb read costs one argument and makes `submit` and `approve` as safe as
+  `claim`. The atomicity had looked like a property of claiming; it is a
+  property of moving a ref.
+
+Worktree creation also became idempotent, which the design already claimed of
+it in both directions but the engine only did for removal. It matters here:
+`yield` leaves the worktree standing, so a `resume` by the same worker finds it
+present while a `resume` elsewhere has to make one.
 
 ### Method findings
 

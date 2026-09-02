@@ -185,8 +185,17 @@ pub fn create_ref(name: &str, new: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn update_ref(name: &str, new: &str) -> Result<(), String> {
-    run(&["update-ref", &format!("refs/heads/{name}"), new])?;
+/// Move a ref, asserting what it currently points at.
+///
+/// `git update-ref` takes an expected-old-value for ANY ref move, not just
+/// creation, so every effect can be a compare-and-swap for the price of one
+/// argument. Without it `claim` was atomic while `submit` and `approve` were
+/// not, which made the safety look like a property of claiming rather than of
+/// moving a ref.
+pub fn update_ref(name: &str, new: &str, old: &str) -> Result<(), String> {
+    run(&["update-ref", &format!("refs/heads/{name}"), new, old]).map_err(|e| {
+        format!("cannot move '{name}': {e}\nit moved since this verb read it -- re-run to work from the new tip")
+    })?;
     Ok(())
 }
 
@@ -206,7 +215,7 @@ pub fn merge_into(target: &str, source: &str, message: &str) -> Result<String, S
     let source_sha = rev_parse(source)?;
 
     if is_ancestor(&target_sha, &source_sha) {
-        update_ref(target, &source_sha)?;
+        update_ref(target, &source_sha, &target_sha)?;
         return Ok(source_sha);
     }
 
@@ -220,7 +229,7 @@ pub fn merge_into(target: &str, source: &str, message: &str) -> Result<String, S
         .trim()
         .to_string();
     let merge = commit_tree(&tree, &[&target_sha, &source_sha], message)?;
-    update_ref(target, &merge)?;
+    update_ref(target, &merge, &target_sha)?;
     Ok(merge)
 }
 
@@ -241,7 +250,7 @@ pub fn merge_ticket_only(
     let target_sha = rev_parse(target)?;
     let source_sha = rev_parse(source)?;
     let commit = commit_tree(tree, &[&target_sha, &source_sha], message)?;
-    update_ref(target, &commit)?;
+    update_ref(target, &commit, &target_sha)?;
     Ok(commit)
 }
 
