@@ -406,3 +406,93 @@ fn resume_is_refused_without_a_branch_to_work_from() {
     let err = refused(dir, &["next", "do", "resume", "fresh"]);
     assert!(err.contains("no branch"), "unexpected refusal: {err}");
 }
+
+#[test]
+fn board_reports_every_ticket_in_its_own_state() {
+    // Board had no coverage at all while being rewritten twice -- once to
+    // share the history walk, once to batch the blob reads. Both changes
+    // could have silently mixed tickets up.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+
+    ok(dir, &["next", "new", "task", "untouched", "Untouched"]);
+    ok(dir, &["next", "new", "task", "working", "Working"]);
+    ok(dir, &["next", "new", "task", "finished", "Finished"]);
+
+    ok(dir, &["next", "do", "claim", "working"]);
+
+    ok(dir, &["next", "do", "claim", "finished"]);
+    let wt = dir.join(".plan/worktrees/task/finished");
+    let ticket = wt.join(".plan/tickets/finished.md");
+    let body = std::fs::read_to_string(&ticket).unwrap();
+    std::fs::write(&ticket, format!("{body}\n## Validation\n\nchecked\n")).unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["commit", "-m", "work"]);
+    ok(dir, &["next", "do", "submit", "finished"]);
+    ok(
+        dir,
+        &[
+            "next",
+            "do",
+            "approve",
+            "finished",
+            "several\nlines\nof review",
+        ],
+    );
+    ok(dir, &["next", "do", "close", "finished"]);
+
+    let board = ok(dir, &["next", "board"]);
+    assert!(board.contains("3 ticket(s)"), "{board}");
+    for (slug, state) in [
+        ("untouched", "todo"),
+        ("working", "in_progress"),
+        ("finished", "done"),
+    ] {
+        let row = board
+            .lines()
+            .find(|l| l.trim_start().starts_with(slug))
+            .unwrap_or_else(|| panic!("no row for {slug}:\n{board}"));
+        assert!(
+            row.contains(state),
+            "{slug} should be {state}, row was: {row}"
+        );
+        assert!(row.contains("task"), "{slug} lost its kind: {row}");
+    }
+}
+
+#[test]
+fn board_frames_blobs_by_length_not_by_scanning() {
+    // `git cat-file --batch` frames each record as `<oid> <type> <size>` then
+    // that many BYTES. A parser that instead scanned for something
+    // header-shaped would desynchronise on a ticket body containing a line
+    // that looks like one -- and then report every later ticket wrongly.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+
+    ok(dir, &["next", "new", "task", "adversarial", "Adversarial"]);
+    let path = dir.join(".plan/tickets/adversarial.md");
+    let body = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        format!("{body}\n## Notes\n\ndeadbeefcafe blob 1234\nmissing\n\nmore text\n"),
+    )
+    .unwrap();
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-m", "adversarial body"]);
+
+    ok(dir, &["next", "new", "task", "after", "After"]);
+    ok(dir, &["next", "do", "claim", "after"]);
+
+    let board = ok(dir, &["next", "board"]);
+    assert!(board.contains("2 ticket(s)"), "{board}");
+    let after = board
+        .lines()
+        .find(|l| l.trim_start().starts_with("after"))
+        .unwrap_or_else(|| panic!("no row for 'after':\n{board}"));
+    assert!(
+        after.contains("in_progress"),
+        "the ticket after the adversarial body was misread: {after}"
+    );
+}

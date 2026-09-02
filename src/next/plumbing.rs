@@ -70,6 +70,139 @@ fn run_stdin(args: &[&str], stdin_data: &str) -> Result<String, String> {
     }
 }
 
+/// Like [`run_stdin`] but keeps the output as bytes, because `cat-file
+/// --batch` frames its records by byte length and a lossy UTF-8 conversion
+/// would move the frame boundaries.
+fn run_stdin_bytes(args: &[&str], stdin_data: &str) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new("git")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("git command failed: {e}"))?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or("cannot write to git stdin")?
+        .write_all(stdin_data.as_bytes())
+        .map_err(|e| format!("cannot write to git stdin: {e}"))?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("git command failed: {e}"))?;
+    if out.status.success() {
+        Ok(out.stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        Err(stderr
+            .lines()
+            .rfind(|l| !l.trim().is_empty())
+            .unwrap_or("git failed")
+            .to_string())
+    }
+}
+
+/// Read many blobs in ONE `git cat-file --batch` process.
+///
+/// Reading them one at a time costs a subprocess each, which is what dominates
+/// a board once the per-ticket history walk is gone: the walk is O(commits)
+/// but the spawns are O(tickets), and a spawn is far more expensive than the
+/// read it performs.
+///
+/// Each spec is an object name such as `main:.plan/tickets/foo.md`. The result
+/// is positional, with `None` where git reported the object missing, so a
+/// caller can pair results back to specs without a second lookup.
+pub fn cat_file_batch(specs: &[String]) -> Result<Vec<Option<String>>, String> {
+    if specs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let input = format!("{}\n", specs.join("\n"));
+    let out = run_stdin_bytes(&["cat-file", "--batch"], &input)?;
+
+    // Records are `<oid> SP <type> SP <size> LF <contents> LF`, or
+    // `<name> SP missing LF`. Framing is by the declared byte length, never by
+    // scanning for a delimiter -- ticket bodies contain newlines.
+    let mut results = Vec::with_capacity(specs.len());
+    let mut pos = 0usize;
+    while pos < out.len() && results.len() < specs.len() {
+        let Some(nl) = out[pos..].iter().position(|b| *b == b'\n') else {
+            break;
+        };
+        let header = String::from_utf8_lossy(&out[pos..pos + nl]).to_string();
+        pos += nl + 1;
+
+        if header.ends_with(" missing") {
+            results.push(None);
+            continue;
+        }
+        let Some(size) = header
+            .rsplit(' ')
+            .next()
+            .and_then(|s| s.parse::<usize>().ok())
+        else {
+            return Err(format!("cannot parse cat-file header: {header}"));
+        };
+        if pos + size > out.len() {
+            return Err("cat-file output ended mid-record".to_string());
+        }
+        results.push(Some(
+            String::from_utf8_lossy(&out[pos..pos + size]).to_string(),
+        ));
+        pos += size + 1; // skip the trailing LF git appends
+    }
+
+    while results.len() < specs.len() {
+        results.push(None);
+    }
+    Ok(results)
+}
+
+/// Ref names under a prefix, in plumbing form -- no decoration, no current
+/// branch marker, no "checked out elsewhere" marker.
+pub fn for_each_ref(prefix: &str) -> Result<Vec<String>, String> {
+    let out = run(&["for-each-ref", "--format=%(refname:short)", prefix])?;
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect())
+}
+
+/// Bring the invoking worktree in line for the one path a verb authored.
+///
+/// Verbs build commits with plumbing and move a ref, which never touches a
+/// working tree. That is what lets them commit to a branch another worktree
+/// holds -- but when the verb writes to the ref THIS worktree has checked out,
+/// the result is a tree that disagrees with its own HEAD: `git status` shows
+/// the new ticket as staged for deletion.
+///
+/// Only the authored path is touched, so a user's unrelated edits are safe.
+pub fn sync_path(ref_: &str, commit: &str, path: &str) -> Result<(), String> {
+    let head = run(&["symbolic-ref", "--quiet", "--short", "HEAD"]).unwrap_or_default();
+    if head.trim() != ref_ {
+        return Ok(()); // this worktree is elsewhere; nothing to reconcile
+    }
+    if show(commit, path).is_ok() {
+        run(&[
+            "restore",
+            &format!("--source={commit}"),
+            "--staged",
+            "--worktree",
+            "--",
+            path,
+        ])?;
+    } else {
+        // The verb removed it -- archival. Drop it from index and disk alike.
+        let _ = run(&["rm", "-q", "--cached", "--ignore-unmatch", "--", path]);
+        let _ = std::fs::remove_file(path);
+    }
+    Ok(())
+}
+
 pub fn log_raw(args: &[&str]) -> Result<String, String> {
     let mut full = vec!["log"];
     full.extend_from_slice(args);

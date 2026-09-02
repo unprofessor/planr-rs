@@ -404,6 +404,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
     match verb.effect {
         Effect::Advance => {
             git::update_ref(&base_ref, &commit, &base_sha)?;
+            git::sync_path(&base_ref, &commit, &ctx.ticket_path(slug))?;
             report.push(format!("{base_ref} -> {}", &commit[..7]));
         }
         Effect::Create => {
@@ -415,6 +416,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
                 "plan: {verb_name} {slug}\n\nPlanr-Verb: {verb_name}\nPlanr-Ticket: {slug}\n"
             );
             let merged = git::merge_into(&ctx.trunk, &commit, &merge_msg)?;
+            git::sync_path(&ctx.trunk, &merged, &ctx.ticket_path(slug))?;
             report.push(format!("merged into {} at {}", ctx.trunk, &merged[..7]));
             git::delete_ref(&own)?;
             report.push(format!("released {own}"));
@@ -422,6 +424,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
         Effect::TicketOnly => {
             if let Some((_tip, ahead)) = &preserving {
                 let merged = git::merge_ticket_only(&ctx.trunk, &own, &tree, &commit_msg)?;
+                git::sync_path(&ctx.trunk, &merged, &ctx.ticket_path(slug))?;
                 report.push(format!(
                     "{} -> {} (ticket only: {ahead} commit(s) from {own} preserved in history, not applied)",
                     ctx.trunk,
@@ -430,6 +433,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
             } else {
                 // Nothing in flight -- an ordinary advance on home.
                 git::update_ref(&base_ref, &commit, &base_sha)?;
+                git::sync_path(&base_ref, &commit, &ctx.ticket_path(slug))?;
                 report.push(format!("{base_ref} -> {}", &commit[..7]));
             }
             if git::ref_exists(&own) {

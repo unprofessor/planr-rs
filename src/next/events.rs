@@ -130,9 +130,13 @@ pub fn for_ticket(
 /// reachable from several refs, and `--date-order` keeps the ordering from the
 /// commit graph rather than from which ref reached a commit first.
 pub fn all_by_ticket(trunk: &str) -> Result<BTreeMap<String, Vec<Event>>, String> {
+    // `for-each-ref`, not `git branch --list`: branch porcelain prefixes a
+    // ref checked out in ANOTHER worktree with "+ ", which is every claimed
+    // ticket, and the marker travelled into the revision list as part of the
+    // name. Board then failed outright whenever any ticket was claimed.
     let mut refs: Vec<String> = vec![trunk.to_string()];
-    if let Ok(branches) = crate::git::branch_list(Some("plan/*")) {
-        refs.extend(branches);
+    if let Ok(listed) = git::for_each_ref("refs/heads/plan/") {
+        refs.extend(listed);
     }
 
     let format = format!("--format={}", log_format());

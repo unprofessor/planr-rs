@@ -61,6 +61,7 @@ pub fn new_ticket(
         &format!("plan: new {slug}\n\nPlanr-Verb: new\nPlanr-Ticket: {slug}\n"),
     )?;
     plumbing::update_ref(&ctx.trunk, &commit, &base)?;
+    plumbing::sync_path(&ctx.trunk, &commit, &path)?;
 
     let state = fold::initial_state(&ctx.schema, kind)?;
     Ok(format!(
@@ -97,26 +98,36 @@ pub fn cmd_lifecycle(ctx: &Ctx, kind: Option<&str>) -> Result<String, String> {
 
 /// A minimal board: every live ticket with its folded state.
 ///
-/// One history walk for the whole board, not one per ticket. See
-/// [`events::all_by_ticket`] for why that distinction is the difference
-/// between O(commits) and O(tickets x commits).
+/// Two git processes for the whole board, regardless of ticket count: one
+/// history walk ([`events::all_by_ticket`]) and one `cat-file --batch` for the
+/// ticket blobs. Folding per ticket cost a walk each; reading per ticket cost
+/// a spawn each, and once the walk was shared the spawns were what remained.
 pub fn cmd_board(ctx: &Ctx) -> Result<String, String> {
     let dir = format!("{}/tickets", ctx.plan_dir);
     let files = crate::git::ls_tree_md(&ctx.trunk, &dir)?;
     let events = events::all_by_ticket(&ctx.trunk)?;
 
+    let slugs: Vec<String> = files
+        .iter()
+        .filter_map(|f| {
+            std::path::Path::new(f)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
+    let specs: Vec<String> = files.iter().map(|f| format!("{}:{f}", ctx.trunk)).collect();
+    let blobs = plumbing::cat_file_batch(&specs)?;
+
     let mut rows = Vec::new();
-    for f in files {
-        let Some(slug) = std::path::Path::new(&f)
-            .file_stem()
-            .and_then(|s| s.to_str())
-        else {
-            continue;
-        };
-        // The ticket file still has to be read for its kind, which selects the
-        // sub-machine the fold runs against. That is a tree read, not a
-        // history walk.
-        let row = match verb::read_ticket(ctx, &ctx.trunk, slug) {
+    for (slug, blob) in slugs.iter().zip(blobs) {
+        // The kind still has to be read, because it selects the sub-machine
+        // the fold runs against -- but it is a tree read, not a history walk,
+        // and now not a process either.
+        let row = match blob
+            .ok_or_else(|| format!("no blob for '{slug}'"))
+            .and_then(|b| verb::parse_ticket(slug, &b))
+        {
             Ok(ticket) => {
                 let ticket_events = events.get(slug).map(Vec::as_slice).unwrap_or(&[]);
                 match fold::fold_state(&ctx.schema, &ticket.kind, ticket_events) {

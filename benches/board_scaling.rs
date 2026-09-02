@@ -19,21 +19,33 @@
 //! rises as history grows, and under the single walk it stays flat. That is
 //! the column to read.
 //!
-//! Recorded on this machine at the time the single walk landed. Note these
-//! came from DEBUG binaries run by a scratch script, because comparing against
-//! the old implementation meant building it; `cargo bench` uses the release
-//! profile and is roughly 4x faster in absolute terms. Compare shapes across
-//! rows, never absolute numbers across profiles:
+//! Two costs have been removed from board, and each shows a different shape.
+//! Debug-profile numbers, from a scratch script that could build the older
+//! implementations; `cargo bench` runs release and is several times faster in
+//! absolute terms, so compare shapes across rows and never absolutes across
+//! profiles.
 //!
 //! ```text
 //!   tickets  commits   board   per-ticket
-//!        25      151   314ms      12.6ms     <- per-ticket walk
-//!        50      301   669ms      13.4ms
-//!       100      601  1767ms      17.7ms
+//!        25      151   314ms      12.6ms   <- a history walk per ticket:
+//!        50      301   669ms      13.4ms      per-ticket cost RISES with
+//!       100      601  1767ms      17.7ms      history
 //!
-//!        25      151    79ms       3.2ms     <- single walk
-//!        50      301   132ms       2.6ms
+//!        25      151    79ms       3.2ms   <- one shared walk: per-ticket
+//!        50      301   132ms       2.6ms      cost goes FLAT
 //!       100      601   283ms       2.8ms
+//! ```
+//!
+//! Then the bottleneck moved from walking to *spawning*: one `git show` per
+//! ticket to read its kind. Batching those into a single `cat-file --batch`
+//! leaves two git processes for the whole board (release profile):
+//!
+//! ```text
+//!        40      241   110ms       2.75ms  <- a process per ticket
+//!        80      481   203ms       2.54ms
+//!
+//!        40      241    31ms       0.78ms  <- two processes total: per-ticket
+//!        80      481    41ms       0.51ms     cost FALLS as it amortises
 //! ```
 //!
 //! Absolute numbers are machine-specific and will drift; the *shape* is the
@@ -77,8 +89,17 @@ fn capture(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-/// A backlog of `n` tickets, each taken through the whole loop, so history
-/// grows with the ticket count -- the regime where a per-ticket walk diverges.
+/// A backlog of `n` tickets, so history grows with the ticket count -- the
+/// regime where a per-ticket walk diverges.
+///
+/// Every fourth ticket is left **in flight**: claimed, with a live branch and
+/// worktree. That is not decoration. An earlier version of this bench closed
+/// every ticket, so board always ran with zero `plan/*` refs -- and therefore
+/// never enumerated branches at all. It consequently could not see that board
+/// failed outright whenever any ticket was claimed, because `git branch
+/// --list` prefixes a ref checked out in another worktree with "+ " and the
+/// marker travelled into the revision list. A benchmark that only exercises
+/// the empty case measures the one state where the bug is invisible.
 fn build_backlog(dir: &Path, n: usize) {
     git(dir, &["init", "-q", "-b", "main", "."]);
     git(dir, &["config", "user.email", "bench@test"]);
@@ -102,6 +123,12 @@ fn build_backlog(dir: &Path, n: usize) {
         std::fs::write(&ticket, format!("{body}\n## Validation\n\nchecked\n")).unwrap();
         git(&wt, &["add", "-A"]);
         git(&wt, &["commit", "-qm", "work"]);
+
+        // Leave a quarter of the backlog in flight, so the branch-enumeration
+        // path is exercised rather than assumed away.
+        if i % 4 == 0 {
+            continue;
+        }
 
         planr(dir, &["next", "do", "submit", &slug]);
         planr(dir, &["next", "do", "approve", &slug, "ok"]);
