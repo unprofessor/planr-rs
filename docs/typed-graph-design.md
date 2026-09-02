@@ -1240,11 +1240,13 @@ known boundary.
    enough to replace `ls`-by-kind for humans? Slightly sharper under the fold: a
    ticket file no longer states its own state, so `board` carries more of the
    legibility burden than it did.
-10. **`yield` and re-claim** — does `yield` release the ticket's ref, or keep it?
-    Keeping it preserves the partial work and the record of what was discovered,
-    but then re-`claim` hits `create`'s create-or-fail. Either `yield` deletes
-    the ref, or `claim` reattaches when the ticket is `todo` and the ref exists.
-    Leaning keep-and-reattach; not decided.
+10. **`yield` and re-claim** — **half-settled by round 4** (§9c). `yield` keeps
+    the ref, so the partial work and the handback note survive for the
+    supervisor, and `abandon` is what releases it. Re-attachment is *unbuilt*:
+    `claim` is create-or-fail, so a yielded ticket cannot currently be
+    re-claimed at all, which forecloses the supervisor's more likely option.
+    `claim` needs to reattach when the ticket is in its initial state and the
+    ref already exists.
 11. **Container integration branches** — deferred, see §9b. The contract change
     that keeps it cheap is already in (`base: home` resolves by walking the
     parent chain), but the workflow is not adopted.
@@ -1494,3 +1496,178 @@ in the process, which is the argument for pinning a contract in something
 executable rather than in prose alone.
 
 Still open: everything in §8, with 10 through 12 new this round.
+
+
+## 9c. Round 4 — what the spike found (2026-09-01)
+
+Round 4 was a throwaway vertical slice: `planr next`, behind the `next` cargo
+feature, implementing schema loading, event enumeration, the fold, and a verb
+runner over the five-verb loop for a single `task` kind. 0.3 was untouched
+throughout. The point was to find out which parts of round 3 survive contact
+with git, and the answer is that four of them did not.
+
+Everything below was demonstrated, not reasoned about. Where a claim is about
+cost, it was measured; `benches/board_scaling.rs` reproduces the measurement.
+
+### Four findings that change the design
+
+**1. Enumeration must go through trailers, never paths.** §3.4 makes empty
+declarations first-class — "*Several verbs have no content at all. `claim` cuts
+a ref; `submit` and unit `close` change no bytes. Their commit message is the
+entire payload.*" An empty commit touches no path, so the obvious cheap read,
+`git log -- .plan/tickets/<slug>.md`, **silently skips exactly those
+declarations** and the fold reports a submitted ticket as still `in_progress`.
+Demonstrated in a scratch repo before any engine code was written. §3.5 gives
+every event a `Planr-Ticket` trailer so it is *attributable*; attributable is
+not the same as *findable*, and the design never said how events are
+enumerated.
+
+**2. Ordering must come from the commit graph, never from which ref read the
+event.** The first implementation walked trunk and the ticket's branch
+separately and concatenated, reasoning that a branch's events are newer than
+the trunk events it descends from. That is false as soon as trunk moves after
+the branch is cut — which is precisely what §4.1 already permits: "*An
+integration-lane structural edit to a claimed ticket (`reparent`) commits on
+`home` and reconciles via the optimistic field-level merge (§4) — a different
+line (`parent:`) than the branch's events, so it auto-merges.*" That reasoning
+is about reconciling *files*, and it quietly stops applying once state is a
+fold: there
+is no field to merge, there is an ordering to establish. The observable
+failure: a worker `yield`s, the supervisor then `abandon`s on trunk, and the
+concatenation ordered the later abandon *before* the earlier yield — so an
+abandoned ticket read back as `todo`, and therefore as reclaimable.
+
+**3. The initial state cannot always be derived.** §3.8 states the rule — "*the
+initial state is **the state that appears as some verb's `from` but is never
+any verb's `to`*** *— `todo` for a task, `planned` for a milestone*" — which
+assumes an acyclic state graph. §3.3 asserts the opposite four sections
+earlier: "*The lifecycle has a rework cycle … so it is a **state machine**, not
+a DAG.*" The contradiction was invisible until `yield` closed a loop back to
+the entry state, making `todo` both a `from` and a `to`. The deeper cause is
+that **creation is not a verb** — §3.8 keeps `new` as fixed tooling precisely
+because "*it has no prior node and no from-transition*", so the entry state is
+not an edge in the verb graph at all. An acyclic graph lets you recover it by
+accident from the source node; a cycle removes the accident. Resolved as
+derive-or-declare: derived when unambiguous, `templates.<kind>.initial`
+required otherwise, with the fix stated in the error.
+
+**4. `delete` is superseded by `ticket-only`.** Releasing a ref and destroying
+work looked like one act because `git branch -D` does both. They separate: a
+`merge -s ours` recording the branch as a second parent, with the ticket file
+taken from the branch, puts the worker's `## Blocked` rationale on trunk beside
+the `## Abandoned` note, leaves the work reachable in history but absent from
+the tree, and lets the ref be released destroying nothing. Once separated, only
+the first half belongs to planr — destroying history is git's job, and an
+operator who truly needs a branch gone deletes the ref first, leaving nothing to
+preserve. So the effect vocabulary is **`advance | create | merge |
+ticket-only`**, and there is deliberately no destructive effect: a destructive
+flag in `--help` is an attractive nuisance when the callers are agents.
+
+### Scaling, analysed and then measured
+
+Terms: **C** total commits, unbounded; **T** live tickets, bounded by archival;
+**E** events per ticket, small.
+
+| operation | as first written | now |
+|---|---|---|
+| `state <slug>` | O(C) | O(C) |
+| `board` | **O(T · C)** | **O(C + ΣE)** |
+
+Archival bounds **T**, the live tree — not **C**. That is enough: with `board`
+doing one walk and bucketing by `Planr-Ticket`, planr is O(C), the same order as
+git's own log. Measured on synthetic backlogs, per-ticket cost was 12.6 → 17.7 ms
+rising with history under the per-ticket walk, and a flat ~2.8 ms under the
+single walk. Per-ticket cost is the diagnostic; total time cannot distinguish
+removing a factor from shaving a constant.
+
+Two conclusions worth carrying forward:
+
+- **Empty declarations and the index are the same decision.** Trailer scanning
+  must load and parse every commit object. Path-limited scanning gets git's
+  changed-path Bloom filters and skips most object loads entirely — same
+  asymptotics, a large constant. planr cannot use them *only* because empty
+  declarations touch no path. So the question is not whether an empty `submit`
+  is elegant; it is whether planr owns an index or borrows git's.
+- **The archive commit is a natural memoization point.** `archive` requires
+  `self: {status: terminal}`, so an archived ticket's state can never need
+  recomputing. Recording it there lets a gate on an archived dependency resolve
+  in O(1) without re-folding a ticket whose file no longer exists — which makes
+  enforcing no-dangling-pointers unnecessary, and that is worth avoiding, since
+  enforcement would make archival a closure operation over unrelated tickets.
+
+Still unmeasured, and the reason `board` is not yet done: with the T multiplier
+gone, **the bottleneck moves from history walking to process spawning** — one
+`git show` per ticket to read its kind. That is a tree read, so archival bounds
+it, but it now dominates.
+
+### Implementation cautions
+
+- **A template must not scaffold a section a verb gates on.** `submit` requires
+  `## Validation`; the task template created it; the gate was therefore
+  satisfied at birth and checked nothing, forever. §3.6 is right that `sections`
+  checks "*existence, not content*" — that is only a gate if something other
+  than the tool writes the section.
+- **`claim` needs no lock.** `git update-ref <ref> <sha> ""` is a
+  compare-and-swap: the empty old-value means "must not exist", so two
+  concurrent claims resolve by ref CAS and the loser gets a clear failure.
+- **A latent 0.3 bug the new ordering exposes.** `git.rs`'s `worktree_add`
+  omits the branch argument when the branch already exists, so
+  `git worktree add <path>` invents a branch named after the path. 0.3 never
+  reaches that path because it creates branch and worktree together; the 0.4
+  `claim` creates the ref first *by design*, and hits it every time.
+- **A ref-releasing effect must land its own declaration first.** The original
+  `delete` deleted the ref without advancing the base, orphaning the verb's own
+  commit along with the work it was recording — abandoning destroyed the
+  evidence that it happened.
+- **The structural spine's "in-progress" fact is wrong.** §3.3 lists
+  "*in-progress (a `plan/<kind>/<slug>` ref exists)*" as schema-free. After a
+  `yield` the ref exists and the state is `todo`. The correct structural fact is
+  **has work in flight**, which is a different and more useful thing: it is
+  exactly what a supervisor weighs when deciding whether to replan or abandon.
+
+### A gap the spike opened and did not close
+
+`yield` keeps the ticket's ref, so the partial work and the note explaining the
+handback both survive for the supervisor to weigh. But `claim` declares
+`effect: create`, which is create-or-fail, so **a yielded ticket cannot be
+re-claimed**:
+
+```
+$ planr next do claim t1
+cannot create branch 'plan/task/t1': ... reference already exists
+```
+
+That forecloses the *more likely* of the supervisor's two options. The
+supervisor "*may have an idea how to proceed whereas the worker may only see
+what is right in front of them*" — replanning and re-dispatching is the normal
+outcome, and abandoning the exception. Right now only the exception works, and
+the failure surfaces as a raw git error rather than a planr-level explanation.
+Open question 10 is therefore half-settled: the ref is kept, and re-attachment
+is unbuilt.
+
+### Method findings
+
+- **A contract suite that validates only its own fixtures is self-consistent,
+  not correct.** `tests/schema.rs` validated fixtures, which are authored to
+  match the published schema and so can never disagree with it. Nothing
+  validated `.plan/schema.yml`, the file the tool actually loads — and three
+  keys drifted across two renames with every test green. Fixed by validating the
+  reference schema itself; mutation-tested by restoring the old effect enum.
+- **A benchmark reporting only total time cannot detect the regression it
+  exists to catch.** Hence `benches/board_scaling.rs` prints per-ticket cost and
+  states in its own output what shape to expect.
+
+### Status (round 4)
+
+The model survives, with four corrections. Nothing found here challenges the
+round-3 pivot itself: state folded from events held up under every scenario
+tried, including the one that broke the enumeration. What broke was consistently
+the *mechanism* around it — how events are found, how they are ordered, where
+the initial state comes from, and what happens to a ref when a ticket ends.
+
+The spike is `src/next/**` on `planr-next`, behind the `next` feature, with
+nine end-to-end tests. It is reference material, not a foundation: the valuable
+residue is `plumbing.rs` — build-tree-then-move-ref, the ref CAS, the
+ticket-only merge — and the throwaway parts are the shortcuts, chiefly a
+`children_of` that reads every ticket in the repo and a `state_at` that re-walks
+history inside a loop.
