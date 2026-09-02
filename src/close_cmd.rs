@@ -203,10 +203,36 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
                 // deleted by hand, so `worktree remove` fails but there is
                 // nothing left to hide, and keeping the rule would hide
                 // whatever is created at that path next.
-                if git::worktree_remove(wt, false).is_ok() || !wt.exists() {
-                    // The shared default rule covers a parent directory, so it
-                    // does not match here and survives.
-                    let _ = git::exclude_remove(wt, cwd);
+                match git::worktree_remove(wt, false) {
+                    Ok(()) => {
+                        // The shared default rule covers a parent directory,
+                        // so it does not match here and survives.
+                        let _ = git::exclude_remove(wt, cwd);
+                    }
+                    Err(e) if !wt.exists() => {
+                        // A stale record: the directory was deleted by hand,
+                        // so removal fails but there is nothing left to hide,
+                        // and keeping the rule would hide whatever is created
+                        // at that path next.
+                        let _ = e;
+                        let _ = git::exclude_remove(wt, cwd);
+                    }
+                    Err(e) => {
+                        // The merge succeeded, so this is not a failure of the
+                        // close -- but it is not nothing either. The worktree
+                        // survives, `git branch -d` below will refuse to
+                        // delete a branch checked out in it, and `planr board`
+                        // will keep listing the task as in flight. Silence
+                        // here made `close` report unqualified success while
+                        // the board contradicted it.
+                        eprintln!(
+                            "warning: merged, but the worktree at {} could not be removed ({e}); \
+                             it and branch {branch} remain -- `git worktree remove --force {}` \
+                             to finish cleaning up",
+                            wt.display(),
+                            wt.display()
+                        );
+                    }
                 }
             }
             let _ = git::branch_delete(&branch, false, &trunk_dir);

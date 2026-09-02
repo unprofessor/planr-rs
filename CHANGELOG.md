@@ -84,6 +84,35 @@
   class matching `wt1` -- leaving the real directory visible and staged as
   a gitlink.
 
+- **A failed `planr claim` no longer leaves its branch behind.**
+  `git worktree add -b <branch> <path>` creates the branch *before* it
+  validates the path, so a refused path left `plan/<slug>` in place:
+  `planr board` listed an in-flight branch for a task nobody claimed, and
+  `planr abandon` refused the task for having an active branch.
+
+- **Quoted statuses are read like every other command reads them.** The
+  claim guards used a frontmatter reader that did not strip YAML quotes, so
+  `status: "done"` -- lint-clean, and shown as `done` on the board -- got
+  past the terminal checks and was rewritten to `in_progress` and
+  committed, reopening a finished task.
+
+- **Claims of the same task serialize.** The holder check and the
+  `worktree_add` it guards could interleave with a second claim of the same
+  slug, so the loser got git's raw `'<path>' already exists` -- the message
+  the check exists to replace. The lock is per slug, so claims of different
+  tasks still run in parallel.
+
+- **A stale worktree record is dropped one at a time.** Resuming a claim
+  ran `git worktree prune`, which is repo-global and would also forget any
+  worktree merely unreachable at that moment -- an unmounted volume, a
+  network path -- orphaning it as a side effect of an unrelated claim.
+
+- **`planr close` reports a cleanup it could not finish.** When
+  `worktree remove` refuses (untracked files in the worktree), the branch
+  delete that follows fails too; both errors were discarded and `close`
+  printed unqualified success while `board` kept showing the task in
+  flight. It now warns on stderr and names the command to finish the job.
+
 - **`planr claim --no-worktree` refuses a task held by a worktree.** The
   holder check sat below the opt-out's early return, so an agent could
   `--no-worktree` claim a task another agent had checked out and be told it

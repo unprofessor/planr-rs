@@ -413,15 +413,6 @@ pub fn worktree_remove(path: &Path, force: bool) -> Result<(), String> {
     git(&args).map(|_| ())
 }
 
-/// `git worktree prune` run in `cwd`.
-///
-/// git keeps listing a worktree whose directory was deleted by hand until
-/// something prunes the record, and a stale record is indistinguishable from
-/// a live one when asking which worktree holds a branch.
-pub fn worktree_prune(cwd: &Path) -> Result<(), String> {
-    git_in(cwd, &["worktree", "prune"]).map(|_| ())
-}
-
 /// `git branch -d|-D <branch>` run in `cwd`.
 ///
 /// The cwd matters: `-d` (safe delete) refuses unless the branch is merged

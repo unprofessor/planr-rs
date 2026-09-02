@@ -43,10 +43,21 @@ fn split_frontmatter(blob: &str) -> Option<FmSplit<'_>> {
 }
 
 /// Read the `status:` line from frontmatter lines.
+///
+/// Quotes are stripped, because every other command reads frontmatter through
+/// serde_yaml and so sees `status: "done"` as `done`. A reader here that kept
+/// the quote characters disagreed with `lint` and `board` about what the same
+/// file said, and -- since the terminal-status guards compare against bare
+/// words -- let a quoted `"done"` past them to be reopened and committed.
 fn read_status_from_fm<'a>(fm: &'a [&str]) -> &'a str {
     for l in fm {
         if let Some(val) = l.strip_prefix("status:") {
-            return val.trim();
+            let val = val.trim();
+            return val
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .or_else(|| val.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                .unwrap_or(val);
         }
     }
     ""
@@ -371,6 +382,14 @@ pub fn claim_task(
     }
 
     // ---- 3. Holder check ----
+    // Serialize claims of *this* task, so the check below and the
+    // `worktree_add` it guards cannot be interleaved by a second claim of the
+    // same slug -- both would see no holder and the loser would get git's raw
+    // error, which is the message this check exists to replace. The lock is
+    // per slug: `planr.lock` is held shared here because claims of different
+    // tasks running at once are the point of the workflow.
+    let _claim_lock = PlanrLock::claim_slug(cwd, slug).map_err(|e| format!("lock error: {e}"))?;
+
     // A branch already checked out somewhere means the task is held: say so
     // in planr's terms rather than letting git's "'<path>' already exists"
     // reach an agent that has no idea what it means.
@@ -390,10 +409,15 @@ pub fn claim_task(
         }
         // The record outlived the directory -- someone deleted the worktree
         // with `rm -rf` rather than `git worktree remove`, and git keeps
-        // listing it until it is pruned. Refusing on that would name a path
-        // that is not there and lock the task out for good, so drop the
-        // stale record and let the claim resume.
-        git::worktree_prune(cwd)?;
+        // listing it until the record is dropped. Refusing on that would name
+        // a path that is not there and lock the task out for good.
+        //
+        // Drop that one record, not every unreachable one. `git worktree
+        // prune` is repo-global, so claiming this task would also forget any
+        // worktree that merely happens to be unreachable right now -- an
+        // unmounted volume, a network path, a home directory not yet
+        // decrypted -- orphaning it as a side effect of an unrelated claim.
+        git::worktree_remove(&held, true)?;
     }
 
     // A terminal branch is not something to resume. Step 2b refuses an
@@ -452,7 +476,18 @@ pub fn claim_task(
     // permanently hide a real directory from git.
     let wt_display = wt_path.display().to_string();
     let branch_existed = git::branch_exists(&branch);
-    git::worktree_add(&wt_path, &branch, Some(trunk))?;
+    if let Err(e) = git::worktree_add(&wt_path, &branch, Some(trunk)) {
+        // `git worktree add -b <branch> <path>` creates the branch *before* it
+        // validates the path, so a refused path (already occupied, typo'd)
+        // leaves the branch behind. `planr board` would then list an in-flight
+        // branch for a task nobody claimed and mark its status from it, and
+        // `planr abandon` would refuse the task for having an active branch,
+        // until someone deleted it by hand.
+        if !branch_existed {
+            let _ = git::branch_delete(&branch, true, cwd);
+        }
+        return Err(e);
+    }
 
     // Everything from here on can fail after the worktree exists, so every
     // one of those failures unwinds it. A claim that reports an error must

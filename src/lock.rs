@@ -59,6 +59,27 @@ impl PlanrLock {
         file.lock_exclusive()?;
         Ok(PlanrLock { _file: file })
     }
+
+    /// Acquire an exclusive lock for claiming one particular task.
+    ///
+    /// Per slug, not repo-wide: claims of *different* tasks running at once
+    /// are the workflow, so `planr.lock` is held shared and cannot serialize
+    /// this. But two claims of the *same* task racing between "is anyone
+    /// holding it?" and `git worktree add` both saw no holder and both
+    /// proceeded, so the loser got git's raw `'<path>' already exists` --
+    /// the untranslated message the holder check exists to replace.
+    pub fn claim_slug(cwd: &Path, slug: &str) -> io::Result<Self> {
+        // A slug reaches this from the command line, so it cannot be trusted
+        // to be a single safe path component.
+        let safe: String = slug
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let path = lock_path(cwd, &format!("planr-claim-{safe}.lock"))?;
+        let file = open_lock_file(&path)?;
+        file.lock_exclusive()?;
+        Ok(PlanrLock { _file: file })
+    }
 }
 
 /// Resolve a lock file path under `<git-common-dir>`.

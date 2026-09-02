@@ -2035,3 +2035,74 @@ fn test_e2e_failed_claim_keeps_the_shared_rule_other_claims_rely_on() {
         "trunk must not see t2's worktree as a gitlink: {status:?}"
     );
 }
+
+/// `git worktree add -b <branch> <path>` creates the branch *before* it
+/// validates the path, so a refused path left the branch behind. `board` then
+/// listed an in-flight branch for a task nobody claimed, and `abandon` refused
+/// the task for having an active branch.
+#[test]
+fn test_e2e_failed_worktree_add_leaves_no_branch() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    // A non-empty directory that `worktree add` will refuse.
+    std::fs::create_dir_all(td.path().join("occupied")).unwrap();
+    std::fs::write(td.path().join("occupied/keep.txt"), "mine").unwrap();
+
+    planr_err(td.path(), &["claim", "t1", "--worktree", "occupied"]);
+
+    let branches = git_stdout(td.path(), &["branch", "--list"]);
+    assert!(
+        !branches.contains("plan/t1"),
+        "a failed claim must not leave its branch: {branches:?}"
+    );
+    let board = planr_ok(td.path(), &["board"]);
+    assert!(
+        !board.contains("## in flight"),
+        "no in-flight branch for a task nobody claimed: {board}"
+    );
+}
+
+/// The terminal guards compared bare words against a frontmatter reader that
+/// did not strip YAML quotes, so `status: "done"` -- which lint accepts and
+/// board renders as `done` -- slipped past and was reopened and committed.
+#[test]
+fn test_e2e_claim_refuses_a_quoted_terminal_status() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let path = td.path().join(&task_file);
+    let content = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, content.replace("status: todo", "status: \"done\"")).unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "quoted done"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    // Precondition: the rest of the tool reads this as `done`.
+    let board = planr_ok(td.path(), &["board"]);
+    assert!(
+        board
+            .lines()
+            .any(|l| l.starts_with("t1 ") && l.contains("done")),
+        "board should read the quoted status as done: {board}"
+    );
+
+    let err = planr_err(td.path(), &["claim", "t1"]);
+    assert!(
+        err.contains("done"),
+        "a quoted terminal status must refuse too: {err}"
+    );
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        after.contains("\"done\""),
+        "the ticket must not be rewritten: {after}"
+    );
+}
