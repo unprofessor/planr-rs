@@ -204,15 +204,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
         }
 
         // Validate status
-        let valid_statuses = [
-            "todo",
-            "in_progress",
-            "review",
-            "done",
-            "blocked",
-            "abandoned",
-        ];
-        if !valid_statuses.contains(&ticket.status.as_str()) {
+        if !crate::ticket::VALID_STATUSES.contains(&ticket.status.as_str()) {
             let display = if ticket.status.is_empty() {
                 "<missing>".to_string()
             } else {

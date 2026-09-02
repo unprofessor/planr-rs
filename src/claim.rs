@@ -17,6 +17,10 @@ fn find_task_file<'a>(files: &'a [String], slug: &str) -> Option<&'a str> {
     files.iter().find(|f| f.ends_with(&pat)).map(|s| s.as_str())
 }
 
+/// Statuses that mean work on the branch has already begun. A claim never
+/// rewrites one of these -- see the flip in `claim_task`.
+const STARTED_STATUSES: [&str; 4] = ["in_progress", "review", "done", "abandoned"];
+
 // ---- frontmatter helpers (simplified; assumes valid YAML frontmatter) ----
 
 /// Helper type for the simplified frontmatter parse used in claim.
@@ -253,49 +257,65 @@ pub fn claim_task(
     // in planr's terms rather than letting git's "'<path>' already exists"
     // reach an agent that has no idea what it means.
     if let Some(held) = git::find_worktree_for_branch(&branch) {
-        return Err(format!(
-            "refuse claim: task '{slug}' is already claimed; its worktree is at {}",
-            held.display()
-        ));
+        if held.exists() {
+            return Err(format!(
+                "refuse claim: task '{slug}' is already claimed; its worktree is at {}",
+                held.display()
+            ));
+        }
+        // The record outlived the directory -- someone deleted the worktree
+        // with `rm -rf` rather than `git worktree remove`, and git keeps
+        // listing it until it is pruned. Refusing on that would name a path
+        // that is not there and lock the task out for good, so drop the
+        // stale record and let the claim resume.
+        git::worktree_prune(cwd)?;
     }
 
-    let wt_path = if worktree_path.is_empty() {
-        // Default path: <plan-dir>/worktrees/wt-<slug>. planr owns that
-        // directory, so ignore it wholesale -- one rule covers every task
-        // ever claimed at the default location.
+    // The path to create, and the path to hide from git. For the default
+    // location they differ: planr owns `<plan-dir>/worktrees/` and reuses it
+    // for every claim, so one rule on the parent covers every task ever
+    // claimed there. An explicit path is the caller's choice of location, but
+    // landing inside the repo corrupts trunk the same way, so it is hidden
+    // itself.
+    let (wt_path, ignore_target) = if worktree_path.is_empty() {
         let mut p = cwd.to_path_buf();
         p.push(plan_dir);
         p.push("worktrees");
-        git::exclude_add(&p, cwd)?;
+        let parent = p.clone();
         p.push(format!("wt-{slug}"));
-        p
+        (p, parent)
     } else {
         let p = PathBuf::from(&worktree_path);
         let p = if p.is_absolute() { p } else { cwd.join(&p) };
-        // An explicit path is the caller's choice of location, but landing
-        // inside the repo corrupts trunk exactly the same way, so it gets
-        // the same guard.
-        git::exclude_add(&p, cwd)?;
-        p
+        (p.clone(), p)
     };
 
-    // 3a. Create worktree branch
+    // 3a. Create the worktree, then hide it. Order matters: a rule written
+    // for a worktree that was never created is never cleaned up, and an
+    // exclude rule is invisible in `git status`. Writing it first means a
+    // failed claim -- a typo'd path, a directory that already exists -- can
+    // permanently hide a real directory from git.
     let wt_display = wt_path.display();
     git::worktree_add(&wt_path, &branch, Some(trunk))?;
+    git::exclude_add(&ignore_target, cwd)?;
 
-    // 3b. Read the task file in the worktree, flip status, write back
+    // 3b. Read the task file in the worktree
     let wf_path = wt_path.join(&task_file);
     let content = std::fs::read_to_string(&wf_path)
         .map_err(|e| format!("cannot read {}: {e}", wf_path.display()))?;
     let sf = split_frontmatter(&content).ok_or_else(|| format!("no frontmatter in {task_file}"))?;
-    let date = local_date_string();
-    let (_new_fm, new_content) = flip_status_in_fm(&sf.fm_lines, sf.rest, "in_progress", &date);
 
-    // 3c. Commit the flip -- but only if it changed something. Re-claiming a
-    // task whose worktree was removed rebuilds the worktree on a branch that
-    // already reads in_progress, and `git commit` with nothing staged fails.
-    // Resuming a claim you already hold is not an error.
-    if new_content != content {
+    // 3c. Flip the status, but never backwards. A resumed claim finds the
+    // branch already at in_progress, or further along -- a worker can reach
+    // review before the worktree is removed. Rewriting that to in_progress
+    // would discard a finished review and then make `close` refuse the task
+    // for having the wrong status. Only a branch that has not started work
+    // gets flipped, which also keeps `git commit` from running with nothing
+    // staged when the claim is merely being resumed.
+    let current = read_status_from_fm(&sf.fm_lines).to_string();
+    if !STARTED_STATUSES.contains(&current.as_str()) {
+        let date = local_date_string();
+        let (_new_fm, new_content) = flip_status_in_fm(&sf.fm_lines, sf.rest, "in_progress", &date);
         std::fs::write(&wf_path, &new_content)
             .map_err(|e| format!("cannot write {}: {e}", wf_path.display()))?;
         git::add_file(&task_file, &wt_path)?;

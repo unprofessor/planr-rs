@@ -191,12 +191,19 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
             // Flip is already on the merged branch commit; the merge brings it to trunk.
             // Cleanup: tolerant worktree remove + branch delete
             if let Some(ref wt) = wt_path {
-                let _ = git::worktree_remove(wt, false);
-                // The worktree is gone, so its local ignore rule should go
-                // too -- a stale rule silently hides whatever is created at
-                // that path later. The shared default rule covers a parent
-                // directory, so it does not match here and survives.
-                let _ = git::exclude_remove(wt, cwd);
+                // The ignore rule may only go once the worktree it hides is
+                // actually gone. `worktree remove` without --force refuses
+                // whenever the worktree holds untracked or modified files --
+                // a stray build artifact or log is enough -- and dropping the
+                // rule anyway would leave the worktree in place and unhidden,
+                // which is the gitlink corruption the rule exists to prevent.
+                // A stale rule is the lesser harm, and the next close of that
+                // path clears it.
+                if git::worktree_remove(wt, false).is_ok() {
+                    // The shared default rule covers a parent directory, so it
+                    // does not match here and survives.
+                    let _ = git::exclude_remove(wt, cwd);
+                }
             }
             let _ = git::branch_delete(&branch, false, &trunk_dir);
 

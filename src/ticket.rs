@@ -6,6 +6,22 @@ use serde_yaml::Value;
 
 use crate::parse::{extract_wiki_links, parse_frontmatter, split_frontmatter};
 
+/// Every status a ticket's frontmatter may carry.
+///
+/// One list, because the commands disagree destructively otherwise: `lint`
+/// rejects what is not here, and `board` decides from it whether a branch
+/// reported something it can display and count. A status added to only one
+/// copy would be flagged as invalid by `lint`, or silently miscounted by
+/// `board`, depending on which copy was missed.
+pub const VALID_STATUSES: [&str; 6] = [
+    "todo",
+    "in_progress",
+    "review",
+    "done",
+    "blocked",
+    "abandoned",
+];
+
 /// Ticket kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {

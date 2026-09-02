@@ -1289,3 +1289,277 @@ fn test_e2e_lint_cycle_real() {
     // Self-dep should NOT be reported as a cycle
     // (self-dep is reported separately)
 }
+
+// ---------------------------------------------------------------------------
+// Scenario: review findings on the claim/close ignore-rule path
+// ---------------------------------------------------------------------------
+
+/// Read `.git/info/exclude`, or "" when it does not exist.
+fn read_exclude(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join(".git/info/exclude")).unwrap_or_default()
+}
+
+/// A claim that fails must leave no ignore rule behind. The rule used to be
+/// written before `git worktree add` ran, so a failed claim permanently hid a
+/// real directory from git -- and an exclude rule is invisible in
+/// `git status`, so nothing would ever point at the cause.
+#[test]
+fn test_e2e_failed_claim_writes_no_ignore_rule() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    // A tracked directory that already exists: worktree add must refuse it.
+    std::fs::create_dir_all(td.path().join("realsrc")).unwrap();
+    std::fs::write(td.path().join("realsrc/keep.txt"), "tracked\n").unwrap();
+    Command::new("git")
+        .args(["add", "realsrc"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "add realsrc"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    let err = planr_err(td.path(), &["claim", "t1", "--worktree", "realsrc"]);
+    assert!(!err.is_empty(), "claim should have failed");
+
+    let exclude = read_exclude(td.path());
+    assert!(
+        !exclude.contains("/realsrc/"),
+        "a failed claim must not leave an ignore rule: {exclude:?}"
+    );
+
+    // The directory is still visible to git: a new file under it shows up.
+    std::fs::write(td.path().join("realsrc/new.txt"), "new\n").unwrap();
+    let status = git_stdout(td.path(), &["status", "--porcelain"]);
+    assert!(
+        status.contains("realsrc/new.txt"),
+        "realsrc must remain visible to git: {status:?}"
+    );
+}
+
+/// `close` may only drop the ignore rule once the worktree it hides is really
+/// gone. `git worktree remove` without `--force` refuses whenever the worktree
+/// holds untracked files -- a stray build artifact is enough -- and dropping
+/// the rule anyway leaves the worktree in place and unhidden, which is exactly
+/// the gitlink corruption the rule exists to prevent.
+#[test]
+fn test_e2e_close_keeps_ignore_rule_when_worktree_removal_fails() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1", "--worktree", "wt-explicit"]);
+    let wt = td.path().join("wt-explicit");
+    assert!(
+        read_exclude(td.path()).contains("/wt-explicit/"),
+        "claim should have written the rule"
+    );
+
+    // Move the task to review so close will merge it.
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    let reviewed = content.replace("status: in_progress", "status: review")
+        + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
+    std::fs::write(wt.join(&task_file), reviewed).unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "review: t1"])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+
+    // An untracked file makes a non-forced worktree removal refuse.
+    std::fs::write(wt.join("build.log"), "noise\n").unwrap();
+
+    planr_ok(td.path(), &["close", "task", "t1"]);
+
+    // The worktree survived, so its rule must survive with it.
+    if wt.exists() {
+        let exclude = read_exclude(td.path());
+        assert!(
+            exclude.contains("/wt-explicit/"),
+            "a surviving worktree must stay hidden: {exclude:?}"
+        );
+        let status = git_stdout(td.path(), &["status", "--porcelain"]);
+        assert!(
+            !status.contains("wt-explicit"),
+            "worktree must not show up as a gitlink: {status:?}"
+        );
+    }
+}
+
+/// Deleting a worktree with `rm -rf` leaves git still listing it until someone
+/// prunes. Refusing a claim on that stale record named a path that was not
+/// there and locked the task out for good.
+#[test]
+fn test_e2e_claim_resumes_after_worktree_deleted_by_hand() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let first = planr_ok(td.path(), &["claim", "t1"]);
+    let wt = td.path().join(".plan/worktrees/wt-t1");
+    assert!(wt.is_dir(), "claim should have made a worktree: {first}");
+
+    std::fs::remove_dir_all(&wt).unwrap();
+
+    let second = planr_ok(td.path(), &["claim", "t1"]);
+    assert!(
+        second.contains("wt-t1"),
+        "re-claim should rebuild the worktree: {second}"
+    );
+    assert!(wt.is_dir(), "worktree not rebuilt: {second}");
+}
+
+/// A held task must still be refused -- the stale-record fix must not turn the
+/// refusal off for a worktree that really is there.
+#[test]
+fn test_e2e_claim_still_refuses_a_live_holder() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1"]);
+    let err = planr_err(td.path(), &["claim", "t1", "--worktree", "second-wt"]);
+    assert!(
+        err.contains("already claimed"),
+        "expected a refusal naming the holder: {err}"
+    );
+    assert!(
+        !td.path().join("second-wt").exists(),
+        "a refused claim must leave nothing behind"
+    );
+}
+
+/// Resuming a claim must not roll the branch back to `in_progress`. A worker
+/// can reach `review` before the worktree is removed; rewriting that discards
+/// a finished review and then makes `close` refuse the task.
+#[test]
+fn test_e2e_claim_resume_does_not_revert_review() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1"]);
+    let wt = td.path().join(".plan/worktrees/wt-t1");
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+
+    let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    let reviewed = content.replace("status: in_progress", "status: review")
+        + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
+    std::fs::write(wt.join(&task_file), reviewed).unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "review: t1"])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+
+    // Drop the worktree the supported way, then re-claim it.
+    Command::new("git")
+        .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    planr_ok(td.path(), &["claim", "t1"]);
+
+    let after = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    assert!(
+        after.contains("status: review"),
+        "resume must not roll the branch back: {after}"
+    );
+    // And close still works, which it would not if the status had reverted.
+    let close_out = planr_ok(td.path(), &["close", "task", "t1"]);
+    assert!(close_out.contains("t1 done"), "close output: {close_out}");
+}
+
+/// An exclude pattern is anchored to the *main* working tree, because
+/// `.git/info/exclude` is shared by every worktree of the clone. Anchoring to
+/// the invoking worktree wrote a rule that matched a different directory of
+/// the same name in the main tree, and made `close` from a secondary worktree
+/// silently fail to clean up.
+#[test]
+fn test_e2e_exclude_rule_anchors_to_main_worktree() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
+    Command::new("git")
+        .args(["add", ".plan"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "add t2"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    // Claim t1 from the main tree, then claim t2 from inside t1's worktree.
+    planr_ok(td.path(), &["claim", "t1"]);
+    let wt1 = td.path().join(".plan/worktrees/wt-t1");
+    let nested = planr_ok(&wt1, &["claim", "t2", "--worktree", "wt2"]);
+    assert!(nested.contains("wt2"), "nested claim output: {nested}");
+
+    // The rule must describe where the worktree really is, relative to the
+    // main tree -- not a bare `/wt2/` that would shadow a top-level `wt2`.
+    let exclude = read_exclude(td.path());
+    assert!(
+        !exclude.lines().any(|l| l.trim() == "/wt2/"),
+        "rule must not be anchored to the linked worktree: {exclude:?}"
+    );
+    assert!(
+        exclude.contains("wt-t1/wt2/"),
+        "rule should name the real location: {exclude:?}"
+    );
+
+    // The main tree stays clean: the nested worktree is hidden.
+    let status = git_stdout(td.path(), &["status", "--porcelain"]);
+    assert!(
+        !status.contains("wt2"),
+        "nested worktree must be hidden from the main tree: {status:?}"
+    );
+}
+
+/// A worktree path that reaches the repository through a symlink still lands
+/// inside it, so it still needs a rule. Resolving the path only lexically
+/// made it look like it lay outside the repository and skipped the rule --
+/// on macOS every `$TMPDIR` path takes this route.
+#[test]
+fn test_e2e_symlinked_worktree_path_is_ignored() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let link = td.path().parent().unwrap().join(format!(
+        "planr-link-{}",
+        td.path().file_name().unwrap().to_string_lossy()
+    ));
+    if std::os::unix::fs::symlink(td.path(), &link).is_err() {
+        return; // no symlink support; nothing to assert
+    }
+
+    let target = link.join("wt-sym");
+    planr_ok(
+        td.path(),
+        &["claim", "t1", "--worktree", target.to_str().unwrap()],
+    );
+
+    let exclude = read_exclude(td.path());
+    assert!(
+        exclude.contains("/wt-sym/"),
+        "a symlinked path inside the repo still needs a rule: {exclude:?}"
+    );
+    let status = git_stdout(td.path(), &["status", "--porcelain"]);
+    assert!(
+        !status.contains("wt-sym"),
+        "worktree must not appear as a gitlink: {status:?}"
+    );
+
+    std::fs::remove_file(&link).ok();
+}

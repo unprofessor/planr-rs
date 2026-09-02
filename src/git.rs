@@ -103,19 +103,60 @@ fn normalize(p: &Path) -> PathBuf {
     out
 }
 
+/// Canonicalize as much of `p` as already exists, keeping the rest verbatim.
+///
+/// A worktree path does not exist when its rule is written, so plain
+/// `canonicalize` fails on it. Resolving only lexically is not enough either:
+/// a path that reaches the repository through a symlink would not share a
+/// prefix with the canonical root and would look like it lay outside the
+/// repository. That is not exotic -- on macOS `/tmp` and `$TMPDIR` are
+/// symlinks into `/private`, so every tempdir hits it.
+fn canonicalize_existing(p: &Path) -> PathBuf {
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = p.to_path_buf();
+    loop {
+        if let Ok(mut resolved) = cur.canonicalize() {
+            for part in tail.iter().rev() {
+                resolved.push(part);
+            }
+            return resolved;
+        }
+        let Some(name) = cur.file_name().map(|n| n.to_os_string()) else {
+            return p.to_path_buf();
+        };
+        tail.push(name);
+        if !cur.pop() {
+            return p.to_path_buf();
+        }
+    }
+}
+
+/// The main working tree's root: the directory every pattern in
+/// `.git/info/exclude` is anchored to.
+///
+/// Not `rev-parse --show-toplevel`, which answers for the *invoking* worktree.
+/// The exclude file is shared by every worktree of the clone, so a pattern
+/// anchored to a linked worktree's root would silently apply to a different
+/// directory of the same relative name in the main tree. `git worktree list
+/// --porcelain` reports the main worktree first, which is the anchor git
+/// itself uses.
+fn main_worktree_root(cwd: &Path) -> Option<PathBuf> {
+    let out = git_in(cwd, &["worktree", "list", "--porcelain"]).ok()?;
+    let first = out.lines().find_map(|l| l.strip_prefix("worktree "))?;
+    PathBuf::from(first.trim()).canonicalize().ok()
+}
+
 /// The anchored, directory-shaped exclude pattern for `target`, or `None`
 /// when it lies outside the repository -- git never looks there, so no rule
 /// is needed and none should be written.
 fn exclude_pattern(target: &Path, cwd: &Path) -> Option<String> {
-    let root = PathBuf::from(git_in(cwd, &["rev-parse", "--show-toplevel"]).ok()?.trim())
-        .canonicalize()
-        .ok()?;
+    let root = main_worktree_root(cwd)?;
     let base = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    let abs = normalize(&if target.is_absolute() {
+    let abs = canonicalize_existing(&normalize(&if target.is_absolute() {
         target.to_path_buf()
     } else {
         base.join(target)
-    });
+    }));
     let rel = abs.strip_prefix(&root).ok()?.to_string_lossy().to_string();
     (!rel.is_empty()).then(|| format!("/{}/", rel.replace('\\', "/")))
 }
@@ -209,6 +250,15 @@ pub fn worktree_remove(path: &Path, force: bool) -> Result<(), String> {
     }
     args.push(path.to_str().unwrap_or_default());
     git(&args).map(|_| ())
+}
+
+/// `git worktree prune` run in `cwd`.
+///
+/// git keeps listing a worktree whose directory was deleted by hand until
+/// something prunes the record, and a stale record is indistinguishable from
+/// a live one when asking which worktree holds a branch.
+pub fn worktree_prune(cwd: &Path) -> Result<(), String> {
+    git_in(cwd, &["worktree", "prune"]).map(|_| ())
 }
 
 /// `git branch -d|-D <branch>` run in `cwd`.

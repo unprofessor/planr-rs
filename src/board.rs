@@ -71,17 +71,16 @@ fn blocked_by(
 // Section rendering
 // ---------------------------------------------------------------------------
 
-/// The statuses a ticket file can legitimately carry. A branch scan can also
-/// yield a placeholder like `(no task file)`, which describes the branch
-/// rather than the task and so must not stand in for a ticket status.
-const KNOWN_STATUSES: [&str; 6] = [
-    "todo",
-    "in_progress",
-    "review",
-    "done",
-    "blocked",
-    "abandoned",
-];
+/// Stand-ins the branch scan reports when it could not read a ticket at all.
+/// They describe the *branch*, not the task, so they must never be displayed
+/// or counted as a ticket status. Every other value the scan produces is a
+/// status string read verbatim out of a real file -- valid or not.
+pub const NO_TASK_FILE: &str = "(no task file)";
+pub const UNREADABLE: &str = "(unreadable)";
+
+fn is_placeholder(status: &str) -> bool {
+    status == NO_TASK_FILE || status == UNREADABLE
+}
 
 /// Marker appended to a status that was read from an in-flight branch rather
 /// than from the trunk file the rest of the row describes.
@@ -99,7 +98,7 @@ fn task_status_display(
     in_flight: &std::collections::HashMap<&str, &str>,
 ) -> (String, bool) {
     match in_flight.get(task.id.as_str()) {
-        Some(branch_status) if KNOWN_STATUSES.contains(branch_status) => {
+        Some(branch_status) if crate::ticket::VALID_STATUSES.contains(branch_status) => {
             (format!("{branch_status}{IN_FLIGHT_MARKER}"), true)
         }
         _ => (task.status.clone(), false),
@@ -189,23 +188,32 @@ fn render_in_flight(branches: &[BranchStatus]) -> String {
     out
 }
 
-/// Warnings about `plan/*` branches whose task file the scan could not read.
+/// Warnings about `plan/*` branches the board could not take a status from.
 ///
-/// Not an error: a branch without a readable ticket is a legitimate state --
-/// the file was renumbered, the ticket is not committed yet, or someone made
-/// the branch by hand. The board falls back to the trunk status and carries
-/// on. It is still worth saying out loud, because the usual cause is a
-/// rename that quietly detached the branch from its ticket, and nothing else
-/// in the output would tell you that happened.
+/// Neither case is an error, and both fall back to the trunk status, but they
+/// have different causes and different fixes, so they say different things.
+/// A missing ticket usually means a rename quietly detached the branch from
+/// its file; an unrecognized status means the ticket is there and its
+/// frontmatter is wrong. Reporting the second as the first sends the reader
+/// looking for a file that is sitting right where they left it.
 pub fn branch_warnings(branches: &[BranchStatus]) -> Vec<String> {
     branches
         .iter()
-        .filter(|b| !KNOWN_STATUSES.contains(&b.status.as_str()))
-        .map(|b| {
-            format!(
-                "warning: {}: no readable task file for '{}' -- renamed, removed, or not yet committed",
-                b.branch, b.slug
-            )
+        .filter_map(|b| {
+            let status = b.status.as_str();
+            if is_placeholder(status) {
+                Some(format!(
+                    "warning: {}: no readable task file for '{}' -- renamed, removed, or not yet committed",
+                    b.branch, b.slug
+                ))
+            } else if !crate::ticket::VALID_STATUSES.contains(&status) {
+                Some(format!(
+                    "warning: {}: task '{}' has an invalid status '{}' -- counting the trunk status; run `planr lint`",
+                    b.branch, b.slug, status
+                ))
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -222,7 +230,7 @@ fn render_summary(
     // task drops out of the totals entirely.
     let in_flight_slugs: std::collections::HashSet<&str> = branches
         .iter()
-        .filter(|b| KNOWN_STATUSES.contains(&b.status.as_str()))
+        .filter(|b| crate::ticket::VALID_STATUSES.contains(&b.status.as_str()))
         .map(|b| b.slug.as_str())
         .collect();
 
@@ -469,7 +477,7 @@ pub fn read_in_flight_branches(plan_dir: &str) -> Vec<BranchStatus> {
             Err(_) => {
                 results.push(BranchStatus {
                     branch: b.clone(),
-                    status: "(no task file)".to_string(),
+                    status: NO_TASK_FILE.to_string(),
                     slug: slug.to_string(),
                 });
                 continue;
@@ -483,7 +491,7 @@ pub fn read_in_flight_branches(plan_dir: &str) -> Vec<BranchStatus> {
                     Err(_) => {
                         results.push(BranchStatus {
                             branch: b.clone(),
-                            status: "(unreadable)".to_string(),
+                            status: UNREADABLE.to_string(),
                             slug: slug.to_string(),
                         });
                         continue;
@@ -499,7 +507,7 @@ pub fn read_in_flight_branches(plan_dir: &str) -> Vec<BranchStatus> {
             None => {
                 results.push(BranchStatus {
                     branch: b.clone(),
-                    status: "(no task file)".to_string(),
+                    status: NO_TASK_FILE.to_string(),
                     slug: slug.to_string(),
                 });
             }
@@ -773,6 +781,33 @@ mod tests {
         // cache falls back to its trunk status of todo; proxy keeps in_progress.
         assert_eq!(count("todo"), Some("2".to_string()), "epic + cache: {out}");
         assert_eq!(count("in_progress"), Some("1".to_string()), "proxy: {out}");
+    }
+
+    #[test]
+    fn test_branch_warning_distinguishes_invalid_status_from_missing_file() {
+        // A typo'd status means the ticket is right where the reader left it,
+        // with bad frontmatter. Reporting that as "no readable task file"
+        // sends them hunting for a file that is not missing.
+        let branches = vec![BranchStatus {
+            branch: "plan/proxy".to_string(),
+            status: "in-progress".to_string(), // hyphen: lint rejects this
+            slug: "proxy".to_string(),
+        }];
+        let warnings = branch_warnings(&branches);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "invalid status should warn: {warnings:?}"
+        );
+        let w = &warnings[0];
+        assert!(
+            w.contains("invalid status") && w.contains("in-progress"),
+            "warning should name the bad status: {w}"
+        );
+        assert!(
+            !w.contains("no readable task file"),
+            "warning must not blame a missing file: {w}"
+        );
     }
 
     #[test]

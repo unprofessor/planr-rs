@@ -20,6 +20,48 @@
 
 ### Fixed
 
+- **A failed `planr claim` no longer hides a real directory from git.**
+  The local ignore rule was written before `git worktree add` ran and
+  nothing removed it when the worktree creation failed, so a typo'd
+  `--worktree` path left that path permanently excluded -- invisible in
+  `git status`, so nothing pointed at the cause. The rule is now written
+  only after the worktree exists.
+
+- **`planr close` keeps the ignore rule when it cannot remove the
+  worktree.** The removal's error was discarded and the rule dropped
+  regardless. `git worktree remove` without `--force` refuses whenever the
+  worktree holds untracked or modified files -- a stray build artifact is
+  enough -- which left the worktree in place and no longer hidden, exactly
+  the gitlink corruption the rule exists to prevent.
+
+- **Local ignore rules are anchored to the main working tree.** The
+  pattern was resolved against the *invoking* worktree's root but written
+  to the shared `.git/info/exclude`, so a rule added from a linked worktree
+  matched a same-named directory in the main tree, and `close` run from a
+  secondary worktree silently removed nothing. Paths are also resolved
+  through symlinks now: a worktree reaching the repository via a symlinked
+  path used to look like it lay outside the repository and got no rule at
+  all (every `$TMPDIR` path on macOS takes that route).
+
+- **`planr claim` resumes instead of refusing on a stale worktree
+  record.** git keeps listing a worktree whose directory was deleted with
+  `rm -rf` until something prunes it, so the refusal named a path that was
+  not there and locked the task out permanently. A claim now refuses only
+  when the worktree is really present, and prunes the stale record
+  otherwise. A live holder is still refused.
+
+- **Resuming a claim no longer rolls the branch back to `in_progress`.**
+  Any status differing from the flip was rewritten, so re-claiming a task
+  whose branch had reached `review` discarded the finished review and then
+  made `close` refuse the task for having the wrong status. A claim now
+  flips only a branch that has not started work.
+
+- **`planr board` tells an invalid status apart from a missing ticket.**
+  Both took the "no readable task file" warning, which sent the reader
+  hunting for a file that was sitting where they left it; a typo'd status
+  now says so and points at `planr lint`. The status list is shared with
+  `lint` rather than duplicated, so the two cannot drift.
+
 - **`planr board` no longer drops a task whose branch has no readable
   ticket.** The summary skipped a task that had an in-flight branch on the
   assumption the branch would supply its status, but a branch reporting
