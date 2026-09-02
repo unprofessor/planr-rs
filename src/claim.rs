@@ -357,10 +357,16 @@ pub fn claim_task(
         } else {
             &info.status
         };
+        // Name a remedy planr actually offers. No command sets a ticket back
+        // to `todo` -- `close` writes done, `abandon` writes abandoned, `new`
+        // only scaffolds -- so for a blocked or hand-edited ticket the fix is
+        // to edit the frontmatter on trunk, and saying "reopen the ticket"
+        // pointed at an operation that does not exist.
         return Err(format!(
             "refuse claim: trunk records task '{slug}' as {shown}; \
              only a {CLAIMABLE_STATUS} task can be claimed -- \
-             reopen the ticket or create a new one"
+             set `status: {CLAIMABLE_STATUS}` on trunk and commit, \
+             or create a new ticket"
         ));
     }
 

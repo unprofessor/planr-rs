@@ -2202,3 +2202,94 @@ fn test_e2e_worktree_path_with_backslash_is_hidden() {
         read_exclude(td.path())
     );
 }
+
+/// planr writes its block last, so the ordinary way to add a rule by hand --
+/// appending to the file -- used to land *inside* that block. planr then read
+/// the line as its own, declined to write a duplicate, and `close` deleted it.
+///
+/// The existing user-rule test adds the rule before the first claim, so it
+/// lands above planr's header and never exercises this.
+#[test]
+fn test_e2e_close_keeps_a_rule_appended_after_planrs_block() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
+    Command::new("git")
+        .args(["add", ".plan"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "add t2"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    // planr establishes its block first...
+    planr_ok(td.path(), &["claim", "t1", "--worktree", "build"]);
+
+    // ...then the user appends their own rule the obvious way.
+    let excl = td.path().join(".git/info/exclude");
+    let mut content = std::fs::read_to_string(&excl).unwrap();
+    content.push_str("/mydir/\n");
+    std::fs::write(&excl, content).unwrap();
+
+    // A claim at that same path must not adopt the user's line.
+    planr_ok(td.path(), &["claim", "t2", "--worktree", "mydir"]);
+
+    // Take t2 to review and close it, which removes planr's own rule.
+    let wt = td.path().join("mydir");
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t2"));
+    let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    let reviewed = content.replace("status: in_progress", "status: review")
+        + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
+    std::fs::write(wt.join(&task_file), reviewed).unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "review: t2"])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    planr_ok(td.path(), &["close", "task", "t2"]);
+
+    std::fs::create_dir_all(td.path().join("mydir")).unwrap();
+    std::fs::write(td.path().join("mydir/out.o"), "obj").unwrap();
+    assert!(
+        git_ignored(td.path(), "mydir"),
+        "the user's appended rule must survive close: exclude={:?}",
+        read_exclude(td.path())
+    );
+}
+
+/// The refusal must name an operation planr offers. No command sets a ticket
+/// back to `todo`, so "reopen the ticket" pointed at nothing.
+#[test]
+fn test_e2e_blocked_refusal_names_a_real_remedy() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let path = td.path().join(&task_file);
+    let content = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, content.replace("status: todo", "status: blocked")).unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "block t1"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    let err = planr_err(td.path(), &["claim", "t1"]);
+    assert!(
+        err.contains("status: todo") && err.contains("commit"),
+        "the refusal should say how to unblock: {err}"
+    );
+}

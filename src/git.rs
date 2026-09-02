@@ -185,18 +185,37 @@ fn worktree_roots(cwd: &Path) -> Result<Vec<PathBuf>, String> {
         .collect())
 }
 
+/// Resolve `target` to a canonical absolute path, relative to `cwd`.
+///
+/// One helper so that every question asked about a target resolves it the
+/// same way: `another_worktree_needs` used to skip the `cwd` join, so a
+/// relative target -- which `claim` does build for the default location --
+/// would have been resolved against the process directory instead and the
+/// "is any live worktree under this?" check compared the wrong paths.
+///
+/// A `cwd` that cannot be canonicalized is an error, not a fallback. Leaving
+/// `base` relative made `abs` relative too, so it matched no canonical
+/// worktree root and the pattern came back as `Ok(None)` -- "no rule needed"
+/// -- which is the fail-open the `Err`/`Ok(None)` split exists to prevent.
+fn resolve_against(target: &Path, cwd: &Path) -> Result<PathBuf, String> {
+    let abs = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        let base = cwd
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve {}: {e}", cwd.display()))?;
+        base.join(target)
+    };
+    Ok(canonicalize_existing(&normalize(&abs)))
+}
+
 /// The anchored, directory-shaped exclude pattern for `target`.
 ///
 /// `Ok(None)` means the target lies outside every working tree -- git never
 /// looks there, so no rule is needed and none should be written. `Err` means
 /// the question could not be answered, which is not the same thing.
 fn exclude_pattern(target: &Path, cwd: &Path) -> Result<Option<String>, String> {
-    let base = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    let abs = canonicalize_existing(&normalize(&if target.is_absolute() {
-        target.to_path_buf()
-    } else {
-        base.join(target)
-    }));
+    let abs = resolve_against(target, cwd)?;
     let Some(root) = containing_worktree_root(&abs, cwd)? else {
         return Ok(None);
     };
@@ -287,6 +306,15 @@ pub fn exclude_add(target: &Path, cwd: &Path) -> Result<bool, String> {
     out.push(EXCLUDE_HEADER);
     out.extend_from_slice(&block);
     out.push(&pattern);
+    // Close the block with a blank line, always -- including when planr's
+    // rules are the last thing in the file, which is the usual case. Without
+    // it, the ordinary way to add a rule by hand (`echo '/mydir/' >>
+    // .git/info/exclude`) appends *into* planr's block, and planr then
+    // treats that line as its own: it declines to write a duplicate and a
+    // later `close` deletes the user's rule.
+    if !after.first().is_some_and(|l| l.trim().is_empty()) {
+        out.push("");
+    }
     out.extend_from_slice(&after);
     write_lines(&path, &out)?;
     Ok(true)
@@ -399,7 +427,12 @@ fn another_worktree_needs(pattern: &str, target: &Path, cwd: &Path) -> bool {
         // puts a gitlink on trunk.
         return true;
     };
-    let target = canonicalize_existing(target);
+    // Resolved the same way `exclude_pattern` resolves it -- comparing a
+    // relative target against canonical worktree roots would match nothing
+    // and drop a rule other worktrees still sit under.
+    let Ok(target) = resolve_against(target, cwd) else {
+        return true;
+    };
     roots
         .into_iter()
         .filter(|root| *root != target)

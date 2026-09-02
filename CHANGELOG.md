@@ -71,6 +71,12 @@
   symlinked path used to look like it lay outside the repository and got
   no rule at all (every `$TMPDIR` path on macOS takes that route).
 
+- **planr's ignore rules end with a blank line, so a rule appended by hand
+  stays the user's.** planr writes its block last, so `echo '/mydir/' >>
+  .git/info/exclude` -- the obvious way to add one -- landed *inside* that
+  block; planr then read the line as its own, declined to write a duplicate
+  for the same path, and `close` deleted it.
+
 - **`planr close` no longer deletes an ignore rule planr did not write.**
   Rules were deduplicated against the whole exclude file, so a claim whose
   path matched a line the user had written adopted it silently and `close`
@@ -88,9 +94,11 @@
   The guard listed the statuses a claim would not touch and fell one short
   of the vocabulary: `blocked` was missing, so a worker who marked their
   branch blocked had it silently reopened as `in_progress` on the next
-  claim, and a task blocked on trunk could still be "claimed" to no effect.
-  Stated the other way round -- `todo` is claimable, everything else is
-  left alone -- adding a status can no longer break it.
+  claim. Stated the other way round -- `todo` is claimable, everything else
+  is left alone -- adding a status can no longer break it. A task blocked on
+  trunk is now refused rather than claimed, and the refusal says how to
+  unblock it (`status: todo` on trunk, committed), since no planr command
+  moves a ticket back to `todo`.
 
 - **An unreadable worktree path counts as held, not as gone.** The holder
   check and `close`'s cleanup used `Path::exists`, which reports `false` for
