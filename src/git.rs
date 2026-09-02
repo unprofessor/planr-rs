@@ -343,7 +343,15 @@ pub fn exclude_remove(target: &Path, cwd: &Path) -> Result<(), String> {
     write_lines(&path, &out)
 }
 
-/// Whether some *other* live worktree still resolves to `pattern`.
+/// Whether some *other* live worktree still depends on `pattern`.
+///
+/// Two ways it can. A worktree elsewhere may resolve to the same pattern,
+/// since patterns are anchored per containing worktree. And a worktree may
+/// live *under* the directory the rule hides: planr's default location is a
+/// shared parent that one rule covers for every task ever claimed there, so
+/// the rule is load-bearing for worktrees whose own pattern is nothing like
+/// it. Missing the second case drops the shared rule while other claims are
+/// still relying on it, leaving their worktrees visible.
 fn another_worktree_needs(pattern: &str, target: &Path, cwd: &Path) -> bool {
     let Ok(out) = git_in(cwd, &["worktree", "list", "--porcelain"]) else {
         return false;
@@ -353,7 +361,9 @@ fn another_worktree_needs(pattern: &str, target: &Path, cwd: &Path) -> bool {
         .filter_map(|l| l.strip_prefix("worktree "))
         .map(|p| canonicalize_existing(Path::new(p.trim())))
         .filter(|root| *root != target)
-        .any(|root| exclude_pattern(&root, cwd).as_deref() == Some(pattern))
+        .any(|root| {
+            root.starts_with(&target) || exclude_pattern(&root, cwd).as_deref() == Some(pattern)
+        })
 }
 
 const EXCLUDE_HEADER: &str = "# planr worktrees -- checkouts, not backlog content";

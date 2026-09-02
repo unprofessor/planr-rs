@@ -1966,3 +1966,72 @@ fn test_e2e_failed_claim_keeps_the_shared_default_rule() {
         "trunk must stay clean: {status:?}"
     );
 }
+
+/// The shared default rule is load-bearing for every worktree beneath it, so
+/// the claim that *wrote* it must not take it away when it fails later --
+/// another claim may have started under it in the meantime.
+///
+/// This is the ordering the earlier guard missed: it only kept a rule some
+/// other worktree resolved to *identically*, never one that other worktrees
+/// merely lived under.
+#[test]
+fn test_e2e_failed_claim_keeps_the_shared_rule_other_claims_rely_on() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
+    Command::new("git")
+        .args(["add", ".plan"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "add t2"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    // t2 claims first and lives under the shared rule.
+    planr_ok(td.path(), &["claim", "t2"]);
+    let wt2 = td.path().join(".plan/worktrees/wt-t2");
+    assert!(wt2.is_dir(), "t2's worktree should exist");
+
+    // Drop planr's block, so the *next* claim is the one that writes the
+    // shared rule -- the interleaving that matters, since a rollback only
+    // removes a rule its own call wrote. This stands in for the concurrent
+    // ordering: claim A writes the rule, claim B starts under it, A fails.
+    let excl = td.path().join(".git/info/exclude");
+    let stripped: Vec<String> = read_exclude(td.path())
+        .lines()
+        .filter(|l| !l.contains("planr worktrees") && !l.trim().starts_with("/.plan/"))
+        .map(String::from)
+        .collect();
+    std::fs::write(&excl, stripped.join("\n") + "\n").unwrap();
+    assert!(
+        !git_ignored(td.path(), ".plan/worktrees"),
+        "precondition: the shared rule is gone"
+    );
+
+    let hooks = td.path().join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let _ = planr(td.path(), &["claim", "t1"]);
+
+    // t2 is still there, so it must still be hidden.
+    assert!(wt2.is_dir(), "t2's worktree must survive t1's rollback");
+    assert!(
+        git_ignored(td.path(), ".plan/worktrees"),
+        "the shared rule must survive while t2 relies on it: exclude={:?}",
+        read_exclude(td.path())
+    );
+    let status = git_stdout(td.path(), &["status", "--porcelain"]);
+    assert!(
+        !status.contains(".plan/worktrees"),
+        "trunk must not see t2's worktree as a gitlink: {status:?}"
+    );
+}

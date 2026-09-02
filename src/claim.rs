@@ -127,31 +127,78 @@ fn flip_status_in_fm(fm: &[&str], rest: &str, new_status: &str, date: &str) -> (
     (fm_str, full)
 }
 
+/// What a partially-completed claim left behind, for the rollback to undo.
+#[derive(Default)]
+struct Placed {
+    /// The exclude rule covering the worktree is in place.
+    hidden: bool,
+    /// *This* call wrote that rule, so this call may remove it.
+    rule_added: bool,
+}
+
 /// Hide the new worktree and flip the task to `in_progress` on its branch.
 ///
 /// Split out so the caller has a single fallible unit to unwind: every step
 /// here runs after the worktree exists, and a failure in any of them must
-/// leave nothing behind.
+/// leave nothing behind. It reports what it managed to place rather than
+/// unwinding itself, because the rule can only be judged once the worktree
+/// is gone -- see `rollback_claim`.
 fn hide_and_flip(
     wt_path: &Path,
     ignore_target: &Path,
     task_file: &str,
     slug: &str,
     cwd: &Path,
+    placed: &mut Placed,
 ) -> Result<(), String> {
-    let added = git::exclude_add(ignore_target, cwd)?;
-    if let Err(e) = flip_to_in_progress(wt_path, task_file, slug) {
-        // The rule outlives the failed claim otherwise, hiding whatever the
-        // user later creates at that path -- invisible in `git status`, which
-        // is the hazard the write-after-create ordering was meant to close.
-        // Only a rule this call wrote comes back out: the shared default rule
-        // is reused by every claim under it.
-        if added {
-            let _ = git::exclude_remove(ignore_target, cwd);
-        }
-        return Err(e);
+    placed.rule_added = git::exclude_add(ignore_target, cwd)?;
+    placed.hidden = true;
+    flip_to_in_progress(wt_path, task_file, slug)
+}
+
+/// Undo a claim that failed after its worktree was created, and describe
+/// anything that could not be undone.
+fn rollback_claim(
+    err: String,
+    wt_path: &Path,
+    ignore_target: &Path,
+    placed: &Placed,
+    branch: &str,
+    branch_existed: bool,
+    cwd: &Path,
+) -> String {
+    // It was just created and holds nothing, so forcing is safe.
+    if let Err(cleanup) = git::worktree_remove(wt_path, true) {
+        // The worktree is still there, so its rule stays with it: removing the
+        // rule now would leave a live worktree visible, which is worse than
+        // the claim having failed. Say which state the operator is in --
+        // claiming it is unhidden when the rule still covers it would send
+        // them deleting a directory on a false premise.
+        let exposure = if placed.hidden {
+            "it is still hidden from git, so trunk is clean; remove it by hand"
+        } else {
+            "it is not hidden from git -- remove it before committing on trunk"
+        };
+        return format!(
+            "{err}\nand the worktree at {} could not be removed ({cleanup}); {exposure}",
+            wt_path.display()
+        );
     }
-    Ok(())
+
+    // A branch this call created goes too -- otherwise `planr board` lists an
+    // in-flight branch for a task nobody successfully claimed.
+    if !branch_existed {
+        let _ = git::branch_delete(branch, true, cwd);
+    }
+
+    // The rule comes out last, and only if this call wrote it. Order matters:
+    // `exclude_remove` keeps a rule that any live worktree still needs, and
+    // ours was one of those until the line above. Removing it first would ask
+    // that question while our own worktree still counted as a dependant.
+    if placed.rule_added {
+        let _ = git::exclude_remove(ignore_target, cwd);
+    }
+    err
 }
 
 /// Move the task on the branch to `in_progress` and commit it.
@@ -412,23 +459,17 @@ pub fn claim_task(
     // leave nothing behind: a worktree left by a failed claim is unhidden
     // (so it dirties trunk as a gitlink), and it makes the *next* attempt
     // report "already claimed", masking the real reason for good.
-    if let Err(e) = hide_and_flip(&wt_path, &ignore_target, &task_file, slug, cwd) {
-        let removed = git::worktree_remove(&wt_path, true);
-        // A branch this call created goes too -- otherwise `planr board`
-        // lists an in-flight branch for a task nobody successfully claimed.
-        if removed.is_ok() && !branch_existed {
-            let _ = git::branch_delete(&branch, true, cwd);
-        }
-        // Never report only the original error when the rollback also failed:
-        // the worktree is then still there and still unhidden, which is the
-        // state the rollback exists to prevent.
-        return Err(match removed {
-            Ok(()) => e,
-            Err(cleanup) => format!(
-                "{e}\nand the worktree at {wt_display} could not be removed ({cleanup}); \
-                 it is not hidden from git -- remove it before committing on trunk"
-            ),
-        });
+    let mut placed = Placed::default();
+    if let Err(e) = hide_and_flip(&wt_path, &ignore_target, &task_file, slug, cwd, &mut placed) {
+        return Err(rollback_claim(
+            e,
+            &wt_path,
+            &ignore_target,
+            &placed,
+            &branch,
+            branch_existed,
+            cwd,
+        ));
     }
 
     // 3d. Output worktree path

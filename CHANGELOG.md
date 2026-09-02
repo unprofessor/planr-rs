@@ -29,8 +29,11 @@
 
 - **A failed `planr claim` takes its own ignore rule back out.** The
   rollback removed the worktree but left the rule behind, so the path
-  stayed hidden from git for good. Only a rule that call wrote is removed:
-  the shared default rule is reused by every claim under it and stays.
+  stayed hidden from git for good. Only a rule that call wrote is removed,
+  it is removed after the worktree is gone rather than before, and a rule
+  any live worktree still sits under stays -- planr's default location is
+  one rule covering a shared parent, so removing it on behalf of one failed
+  claim would unhide every other worktree beneath it.
 
 - **Concurrent claims no longer lose each other's ignore rules.** Rewriting
   `.git/info/exclude` is a read-modify-write and claims run in parallel by
