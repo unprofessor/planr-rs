@@ -67,8 +67,13 @@ pub fn show_ref(ref_: &str, path: &str) -> Result<String, String> {
 /// worktree, which fails with "'<trunk>' is already used by worktree at
 /// ..." because trunk is checked out already. Naming the branch explicitly
 /// also stops git from inferring one from the path basename.
+/// Whether `refs/heads/<branch>` already exists.
+pub fn branch_exists(branch: &str) -> bool {
+    git(&["rev-parse", "--verify", &format!("refs/heads/{branch}")]).is_ok()
+}
+
 pub fn worktree_add(path: &Path, branch: &str, ref_: Option<&str>) -> Result<(), String> {
-    let branch_exists = git(&["rev-parse", "--verify", &format!("refs/heads/{branch}")]).is_ok();
+    let branch_exists = branch_exists(branch);
     let mut args: Vec<&str> = vec!["worktree", "add"];
     if !branch_exists {
         args.push("-b");
@@ -131,34 +136,67 @@ fn canonicalize_existing(p: &Path) -> PathBuf {
     }
 }
 
-/// The main working tree's root: the directory every pattern in
-/// `.git/info/exclude` is anchored to.
+/// The root of the working tree that contains `target`.
 ///
-/// Not `rev-parse --show-toplevel`, which answers for the *invoking* worktree.
-/// The exclude file is shared by every worktree of the clone, so a pattern
-/// anchored to a linked worktree's root would silently apply to a different
-/// directory of the same relative name in the main tree. `git worktree list
-/// --porcelain` reports the main worktree first, which is the anchor git
-/// itself uses.
-fn main_worktree_root(cwd: &Path) -> Option<PathBuf> {
+/// `.git/info/exclude` is shared by every worktree of the clone, but git
+/// anchors a leading-slash pattern to *whichever working tree it is currently
+/// evaluating* -- one shared `/target/` rule hides `target` at the top of the
+/// main tree and at the top of every linked worktree alike. So the anchor that
+/// makes a rule fire is the tree the directory actually sits in, found by
+/// longest-prefix match over `git worktree list`. Anchoring to the invoking
+/// worktree is wrong when a caller names a path in another tree; anchoring to
+/// the main worktree is worse, because a target inside a linked worktree
+/// shares no prefix with it and would get no rule at all.
+///
+/// One consequence is unavoidable: a same-named path at the same depth in a
+/// sibling worktree is hidden too. A shared exclude file cannot express
+/// "this worktree only", and over-hiding a planr worktree path is the safe
+/// direction -- the alternative is a gitlink committed onto trunk.
+fn containing_worktree_root(target: &Path, cwd: &Path) -> Option<PathBuf> {
     let out = git_in(cwd, &["worktree", "list", "--porcelain"]).ok()?;
-    let first = out.lines().find_map(|l| l.strip_prefix("worktree "))?;
-    PathBuf::from(first.trim()).canonicalize().ok()
+    out.lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .filter_map(|p| PathBuf::from(p.trim()).canonicalize().ok())
+        // Strictly above the target. The rule is written after the worktree
+        // exists, so the target is itself a registered worktree by then --
+        // matching it against itself would yield an empty relative path and
+        // no rule at all.
+        .filter(|root| target.starts_with(root) && target != root.as_path())
+        // Worktrees nest (planr's default location puts one inside the tree
+        // that claimed it), so the deepest match is the containing one.
+        .max_by_key(|root| root.components().count())
 }
 
 /// The anchored, directory-shaped exclude pattern for `target`, or `None`
-/// when it lies outside the repository -- git never looks there, so no rule
-/// is needed and none should be written.
+/// when it lies outside every working tree -- git never looks there, so no
+/// rule is needed and none should be written.
 fn exclude_pattern(target: &Path, cwd: &Path) -> Option<String> {
-    let root = main_worktree_root(cwd)?;
     let base = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
     let abs = canonicalize_existing(&normalize(&if target.is_absolute() {
         target.to_path_buf()
     } else {
         base.join(target)
     }));
+    let root = containing_worktree_root(&abs, cwd)?;
     let rel = abs.strip_prefix(&root).ok()?.to_string_lossy().to_string();
-    (!rel.is_empty()).then(|| format!("/{}/", rel.replace('\\', "/")))
+    (!rel.is_empty()).then(|| format!("/{}/", glob_escape(&rel.replace('\\', "/"))))
+}
+
+/// Escape the glob metacharacters gitignore gives meaning to.
+///
+/// A pattern is a glob, not a literal path: a worktree at `wt[1]` written
+/// verbatim becomes a character class that matches `wt1` and leaves the real
+/// directory visible -- and therefore staged as a gitlink. `/` is left alone;
+/// it is the path separator the anchoring depends on.
+fn glob_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '*' | '?' | '[' | ']' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Path to this repository's `.git/info/exclude`, creating `info/` if needed.

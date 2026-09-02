@@ -466,9 +466,22 @@ pub fn read_in_flight_branches(plan_dir: &str) -> Vec<BranchStatus> {
     let mut results = Vec::new();
     for b in &branches {
         let slug = b.strip_prefix("plan/").unwrap_or(b);
+        // A branch with no tasks directory at all -- one predating the plan
+        // directory, or left over from a `--plan-dir` rename -- still gets a
+        // row. Dropping it here would erase the branch from the in-flight
+        // section, from the counts, and from the warnings (which can only
+        // report rows that exist): the same silent-drop that hid every
+        // worktree branch from the board in the first place.
         let files = match crate::git::ls_tree_md(b, &format!("{plan_dir}/tasks")) {
             Ok(f) => f,
-            Err(_) => continue,
+            Err(_) => {
+                results.push(BranchStatus {
+                    branch: b.clone(),
+                    status: NO_TASK_FILE.to_string(),
+                    slug: slug.to_string(),
+                });
+                continue;
+            }
         };
         // Match /[0-9]+-<slug>.md$
         let re_str = format!(r"/[0-9]+-{}\.md$", regex::escape(slug));

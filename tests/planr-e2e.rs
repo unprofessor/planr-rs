@@ -1299,6 +1299,21 @@ fn read_exclude(dir: &Path) -> String {
     std::fs::read_to_string(dir.join(".git/info/exclude")).unwrap_or_default()
 }
 
+/// Ask git itself whether `path` is ignored *from within `dir`*.
+///
+/// Reading the exclude file only tells you what was written; git anchors a
+/// leading-slash pattern to whichever working tree it is evaluating, so only
+/// `check-ignore` run in the right tree answers the question that matters.
+fn git_ignored(dir: &Path, path: &str) -> bool {
+    Command::new("git")
+        .args(["check-ignore", "-q", path])
+        .current_dir(dir)
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
 /// A claim that fails must leave no ignore rule behind. The rule used to be
 /// written before `git worktree add` ran, so a failed claim permanently hid a
 /// real directory from git -- and an exclude rule is invisible in
@@ -1489,7 +1504,7 @@ fn test_e2e_claim_resume_does_not_revert_review() {
 /// the same name in the main tree, and made `close` from a secondary worktree
 /// silently fail to clean up.
 #[test]
-fn test_e2e_exclude_rule_anchors_to_main_worktree() {
+fn test_e2e_exclude_rule_hides_a_nested_worktree_where_it_lives() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
     planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
@@ -1510,23 +1525,82 @@ fn test_e2e_exclude_rule_anchors_to_main_worktree() {
     let nested = planr_ok(&wt1, &["claim", "t2", "--worktree", "wt2"]);
     assert!(nested.contains("wt2"), "nested claim output: {nested}");
 
-    // The rule must describe where the worktree really is, relative to the
-    // main tree -- not a bare `/wt2/` that would shadow a top-level `wt2`.
-    let exclude = read_exclude(td.path());
+    // The assertion that matters is in the tree that CONTAINS wt2, not the
+    // main tree. git anchors a leading-slash pattern to whichever working
+    // tree it is evaluating, so checking only the main tree would pass while
+    // the directory sat visible -- and staged as a gitlink -- in wt-t1.
+    let nested_status = git_stdout(&wt1, &["status", "--porcelain"]);
     assert!(
-        !exclude.lines().any(|l| l.trim() == "/wt2/"),
-        "rule must not be anchored to the linked worktree: {exclude:?}"
+        !nested_status.contains("wt2"),
+        "nested worktree must be hidden where it actually lives: {nested_status:?}"
     );
     assert!(
-        exclude.contains("wt-t1/wt2/"),
-        "rule should name the real location: {exclude:?}"
+        git_ignored(&wt1, "wt2"),
+        "wt2 must be ignored inside wt-t1: exclude={:?}",
+        read_exclude(td.path())
+    );
+}
+
+/// A linked worktree that is a *sibling* of the main tree, not inside it.
+/// Anchoring rules to the main worktree left this case with no rule at all:
+/// the target shares no prefix with the main root, so the pattern silently
+/// came out empty and the claimed worktree stayed visible -- ready to be
+/// committed onto the branch as a gitlink and merged to trunk by `close`.
+#[test]
+fn test_e2e_claim_from_a_sibling_worktree_is_hidden() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    // A worker's worktree beside the main tree, sharing its .git.
+    let worker = td.path().parent().unwrap().join(format!(
+        "planr-worker-{}",
+        td.path().file_name().unwrap().to_string_lossy()
+    ));
+    Command::new("git")
+        .args(["worktree", "add", worker.to_str().unwrap(), "-b", "worker"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    planr_ok(&worker, &["claim", "t1"]);
+
+    let status = git_stdout(&worker, &["status", "--porcelain"]);
+    assert!(
+        !status.contains(".plan/worktrees"),
+        "claimed worktree must be hidden in the tree that holds it: {status:?}"
+    );
+    assert!(
+        git_ignored(&worker, ".plan/worktrees"),
+        "the worktrees dir must be ignored in the sibling tree: exclude={:?}",
+        read_exclude(td.path())
     );
 
-    // The main tree stays clean: the nested worktree is hidden.
+    Command::new("git")
+        .args(["worktree", "remove", "--force", worker.to_str().unwrap()])
+        .current_dir(td.path())
+        .ok()
+        .ok();
+}
+
+/// A gitignore pattern is a glob, so a worktree path holding `[`, `*` or `?`
+/// must be escaped. Written verbatim, `/wt[1]/` is a character class matching
+/// `wt1`, and the real `wt[1]` directory stays visible.
+#[test]
+fn test_e2e_worktree_path_with_glob_metacharacters_is_hidden() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1", "--worktree", "wt[1]"]);
+
     let status = git_stdout(td.path(), &["status", "--porcelain"]);
     assert!(
-        !status.contains("wt2"),
-        "nested worktree must be hidden from the main tree: {status:?}"
+        !status.contains("wt[1]"),
+        "a path with glob metacharacters must still be hidden: {status:?}"
+    );
+    assert!(
+        git_ignored(td.path(), "wt[1]"),
+        "wt[1] must be ignored: exclude={:?}",
+        read_exclude(td.path())
     );
 }
 
@@ -1566,4 +1640,65 @@ fn test_e2e_symlinked_worktree_path_is_ignored() {
     );
 
     std::fs::remove_file(&link).ok();
+}
+
+/// `--no-worktree` opts out of worktree creation, not out of the concurrency
+/// check. The holder check used to sit below the opt-out's early return, so a
+/// second agent could "claim" a task another agent was actively working and be
+/// told it succeeded -- in the one command the whole workflow relies on to
+/// stop exactly that.
+#[test]
+fn test_e2e_no_worktree_claim_still_refuses_a_held_task() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1"]);
+    let err = planr_err(td.path(), &["claim", "t1", "--no-worktree"]);
+    assert!(
+        err.contains("already claimed"),
+        "--no-worktree must not bypass the holder check: {err}"
+    );
+}
+
+/// A branch can be ahead of trunk: a worker may have set `done` or
+/// `abandoned` there and had the worktree removed before `close` ran. The
+/// abandoned guard reads trunk only, so a resumed claim rebuilt the worktree,
+/// skipped the flip, and reported an ordinary claim -- handing an agent a
+/// finished or dead ticket with no indication.
+#[test]
+fn test_e2e_claim_refuses_a_terminal_branch() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1"]);
+    let wt = td.path().join(".plan/worktrees/wt-t1");
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+
+    let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    std::fs::write(
+        wt.join(&task_file),
+        content.replace("status: in_progress", "status: abandoned"),
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "abandon on branch"])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    let err = planr_err(td.path(), &["claim", "t1"]);
+    assert!(
+        err.contains("abandoned"),
+        "a terminal branch must refuse, not resume: {err}"
+    );
 }

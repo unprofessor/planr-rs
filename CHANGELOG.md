@@ -34,14 +34,37 @@
   enough -- which left the worktree in place and no longer hidden, exactly
   the gitlink corruption the rule exists to prevent.
 
-- **Local ignore rules are anchored to the main working tree.** The
-  pattern was resolved against the *invoking* worktree's root but written
-  to the shared `.git/info/exclude`, so a rule added from a linked worktree
-  matched a same-named directory in the main tree, and `close` run from a
-  secondary worktree silently removed nothing. Paths are also resolved
-  through symlinks now: a worktree reaching the repository via a symlinked
-  path used to look like it lay outside the repository and got no rule at
-  all (every `$TMPDIR` path on macOS takes that route).
+- **Local ignore rules are anchored to the working tree that contains the
+  path.** `.git/info/exclude` is shared by the whole clone, but git anchors
+  a leading-slash pattern to whichever working tree it is evaluating, so
+  the anchor that makes a rule fire is the tree the directory sits in --
+  found by longest-prefix match over `git worktree list`. Anchoring to the
+  invoking worktree was wrong for a path in another tree, and `close` run
+  from a secondary worktree silently removed nothing. Paths are also
+  resolved through symlinks now: a worktree reaching the repository via a
+  symlinked path used to look like it lay outside the repository and got
+  no rule at all (every `$TMPDIR` path on macOS takes that route).
+
+- **Ignore patterns escape glob metacharacters.** A gitignore pattern is a
+  glob, so a worktree at `wt[1]` was written as `/wt[1]/` -- a character
+  class matching `wt1` -- leaving the real directory visible and staged as
+  a gitlink.
+
+- **`planr claim --no-worktree` still refuses a task someone else holds.**
+  The holder check sat below the opt-out's early return, so a second agent
+  could claim a task another agent was actively working and be told it
+  succeeded -- in the one command the workflow relies on to prevent that.
+
+- **`planr claim` refuses a branch that already reports the task as `done`
+  or `abandoned`.** The terminal-status guard reads trunk, but a branch can
+  be ahead of it, so resuming a claim on a finished or dead ticket rebuilt
+  the worktree and reported an ordinary claim.
+
+- **`planr board` no longer drops a branch whose plan directory is
+  missing.** The last `Err(_) => continue` arm in the branch scan pushed no
+  row, so such a branch vanished from the in-flight section, the counts,
+  and the warnings alike -- the same silent drop that hid every worktree
+  branch to begin with.
 
 - **`planr claim` resumes instead of refusing on a stale worktree
   record.** git keeps listing a worktree whose directory was deleted with
