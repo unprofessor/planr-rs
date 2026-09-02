@@ -127,6 +127,56 @@ fn flip_status_in_fm(fm: &[&str], rest: &str, new_status: &str, date: &str) -> (
     (fm_str, full)
 }
 
+/// Hide the new worktree and flip the task to `in_progress` on its branch.
+///
+/// Split out so the caller has a single fallible unit to unwind: every step
+/// here runs after the worktree exists, and a failure in any of them must
+/// leave nothing behind.
+fn hide_and_flip(
+    wt_path: &Path,
+    ignore_target: &Path,
+    task_file: &str,
+    slug: &str,
+    cwd: &Path,
+) -> Result<(), String> {
+    git::exclude_add(ignore_target, cwd)?;
+
+    let wf_path = wt_path.join(task_file);
+    let content = std::fs::read_to_string(&wf_path)
+        .map_err(|e| format!("cannot read {}: {e}", wf_path.display()))?;
+    let sf = split_frontmatter(&content).ok_or_else(|| format!("no frontmatter in {task_file}"))?;
+
+    // Flip the status, but never backwards. A resumed claim finds the branch
+    // already at in_progress, or further along -- a worker can reach review
+    // before the worktree is removed. Rewriting that to in_progress would
+    // discard a finished review and then make `close` refuse the task for
+    // having the wrong status. Only a branch that has not started work gets
+    // flipped, which also keeps `git commit` from running with nothing staged
+    // when the claim is merely being resumed.
+    let current = read_status_from_fm(&sf.fm_lines);
+    if STARTED_STATUSES.contains(&current) {
+        return Ok(());
+    }
+
+    let date = local_date_string();
+    let (_new_fm, new_content) = flip_status_in_fm(&sf.fm_lines, sf.rest, "in_progress", &date);
+    std::fs::write(&wf_path, &new_content)
+        .map_err(|e| format!("cannot write {}: {e}", wf_path.display()))?;
+    git::add_file(task_file, wt_path)?;
+    git::commit_in(&format!("plan: claim {slug} (in_progress)"), wt_path)
+}
+
+/// The status a branch records for a task, read from the branch's own blob.
+///
+/// `None` when the branch has no such file or it has no frontmatter -- both
+/// mean "the branch says nothing", which is not the same as a status and must
+/// not be treated as one.
+fn status_on_branch(branch: &str, task_file: &str) -> Option<String> {
+    let blob = git::show_ref(branch, task_file).ok()?;
+    let sf = split_frontmatter(&blob)?;
+    Some(read_status_from_fm(&sf.fm_lines).to_string())
+}
+
 /// Read the `depends_on` and status from a trunk blob.
 struct DepCheck {
     deps: Vec<String>,
@@ -271,6 +321,28 @@ pub fn claim_task(
         git::worktree_prune(cwd)?;
     }
 
+    // A terminal branch is not something to resume. Step 2b refuses an
+    // abandoned task by reading trunk, but the branch can be ahead of trunk:
+    // a worker may have set done or abandoned there and had the worktree
+    // removed before close ran. Resuming would hand an agent a finished or
+    // dead ticket to work on.
+    //
+    // Read it out of the branch rather than a checkout, so the refusal lands
+    // before anything is created. Checking after `worktree_add` would leave a
+    // worktree behind for a claim that failed, and the next attempt would
+    // then report "already claimed" -- masking this diagnostic with a false
+    // one and putting the branch back on the board as in-flight.
+    if git::branch_exists(&branch) {
+        if let Some(status) = status_on_branch(&branch, &task_file) {
+            if status == "done" || status == "abandoned" {
+                return Err(format!(
+                    "refuse claim: branch {branch} already reports task '{slug}' as {status}; \
+                     close it or create a new ticket"
+                ));
+            }
+        }
+    }
+
     // ---- 4. Worktree or no-worktree path ----
     let Some(worktree_path) = worktree_path else {
         // None means skip worktree creation, status flip, and commit.
@@ -303,24 +375,25 @@ pub fn claim_task(
     // exclude rule is invisible in `git status`. Writing it first means a
     // failed claim -- a typo'd path, a directory that already exists -- can
     // permanently hide a real directory from git.
-    let wt_display = wt_path.display();
+    let wt_display = wt_path.display().to_string();
     let branch_existed = git::branch_exists(&branch);
     git::worktree_add(&wt_path, &branch, Some(trunk))?;
-    if let Err(e) = git::exclude_add(&ignore_target, cwd) {
-        // Reversing the order left the opposite gap: the worktree now exists
-        // but nothing hides it, so trunk would read dirty with a gitlink for
-        // a claim that reported failure. Undo it before returning. It was
-        // just created and holds nothing, so forcing is safe. A branch this
-        // call created goes too -- otherwise `planr board` would list an
-        // in-flight branch for a task nobody successfully claimed.
+
+    // Everything from here on can fail after the worktree exists, so every
+    // one of those failures unwinds it. A claim that reports an error must
+    // leave nothing behind: a worktree left by a failed claim is unhidden
+    // (so it dirties trunk as a gitlink), and it makes the *next* attempt
+    // report "already claimed", masking the real reason for good.
+    if let Err(e) = hide_and_flip(&wt_path, &ignore_target, &task_file, slug, cwd) {
         let removed = git::worktree_remove(&wt_path, true);
+        // A branch this call created goes too -- otherwise `planr board`
+        // lists an in-flight branch for a task nobody successfully claimed.
         if removed.is_ok() && !branch_existed {
             let _ = git::branch_delete(&branch, true, cwd);
         }
-        // Never report only the rollback's own success: if it failed, the
-        // worktree is still there and still unhidden, which is the state the
-        // rollback exists to prevent, and silence would leave it to be found
-        // later as a gitlink on trunk.
+        // Never report only the original error when the rollback also failed:
+        // the worktree is then still there and still unhidden, which is the
+        // state the rollback exists to prevent.
         return Err(match removed {
             Ok(()) => e,
             Err(cleanup) => format!(
@@ -328,41 +401,6 @@ pub fn claim_task(
                  it is not hidden from git -- remove it before committing on trunk"
             ),
         });
-    }
-
-    // 3b. Read the task file in the worktree
-    let wf_path = wt_path.join(&task_file);
-    let content = std::fs::read_to_string(&wf_path)
-        .map_err(|e| format!("cannot read {}: {e}", wf_path.display()))?;
-    let sf = split_frontmatter(&content).ok_or_else(|| format!("no frontmatter in {task_file}"))?;
-
-    // 3c. A terminal branch is not something to resume. Step 2b refuses an
-    // abandoned task by reading trunk, but the branch can be ahead of trunk:
-    // a worker may have set done or abandoned there and had the worktree
-    // removed before close ran. Skipping the flip and reporting a normal
-    // claim would hand an agent a finished or dead ticket to work on.
-    let current = read_status_from_fm(&sf.fm_lines).to_string();
-    if current == "done" || current == "abandoned" {
-        return Err(format!(
-            "refuse claim: branch {branch} already reports task '{slug}' as {current}; \
-             close it or create a new ticket"
-        ));
-    }
-
-    // 3d. Flip the status, but never backwards. A resumed claim finds the
-    // branch already at in_progress, or further along -- a worker can reach
-    // review before the worktree is removed. Rewriting that to in_progress
-    // would discard a finished review and then make `close` refuse the task
-    // for having the wrong status. Only a branch that has not started work
-    // gets flipped, which also keeps `git commit` from running with nothing
-    // staged when the claim is merely being resumed.
-    if !STARTED_STATUSES.contains(&current.as_str()) {
-        let date = local_date_string();
-        let (_new_fm, new_content) = flip_status_in_fm(&sf.fm_lines, sf.rest, "in_progress", &date);
-        std::fs::write(&wf_path, &new_content)
-            .map_err(|e| format!("cannot write {}: {e}", wf_path.display()))?;
-        git::add_file(&task_file, &wt_path)?;
-        git::commit_in(&format!("plan: claim {slug} (in_progress)"), &wt_path)?;
     }
 
     // 3d. Output worktree path

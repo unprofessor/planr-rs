@@ -45,15 +45,26 @@
   symlinked path used to look like it lay outside the repository and got
   no rule at all (every `$TMPDIR` path on macOS takes that route).
 
+- **`planr close` no longer deletes an ignore rule planr did not write.**
+  Rules were deduplicated against the whole exclude file, so a claim whose
+  path matched a line the user had written adopted it silently and `close`
+  later removed it. planr now owns only the patterns under its own header,
+  and keeps a rule that another live worktree still resolves to. Its header
+  is also dropped once its own section is empty, rather than being stranded
+  by any unrelated anchored rule elsewhere in the file.
+
 - **Ignore patterns escape glob metacharacters.** A gitignore pattern is a
   glob, so a worktree at `wt[1]` was written as `/wt[1]/` -- a character
   class matching `wt1` -- leaving the real directory visible and staged as
   a gitlink.
 
-- **`planr claim --no-worktree` still refuses a task someone else holds.**
-  The holder check sat below the opt-out's early return, so a second agent
-  could claim a task another agent was actively working and be told it
-  succeeded -- in the one command the workflow relies on to prevent that.
+- **`planr claim --no-worktree` refuses a task held by a worktree.** The
+  holder check sat below the opt-out's early return, so an agent could
+  `--no-worktree` claim a task another agent had checked out and be told it
+  succeeded. Note the limit: the check finds holders that registered a
+  worktree, and `--no-worktree` registers nothing, so two `--no-worktree`
+  claims of the same task still both report success. Mutual exclusion for
+  that path needs a marker the opt-out writes too, which this does not add.
 
 - **`planr claim` refuses a branch that already reports the task as `done`
   or `abandoned`.** The terminal-status guard reads trunk, but a branch can

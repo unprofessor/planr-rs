@@ -59,6 +59,11 @@ pub fn show_ref(ref_: &str, path: &str) -> Result<String, String> {
     git(&["show", &format!("{ref_}:{path}")])
 }
 
+/// Whether `refs/heads/<branch>` already exists.
+pub fn branch_exists(branch: &str) -> bool {
+    git(&["rev-parse", "--verify", &format!("refs/heads/{branch}")]).is_ok()
+}
+
 /// `git worktree add <path> [-b] <branch> <commit-ish>`.
 ///
 /// `ref_` is the commit-ish to branch *from*, and applies only when the
@@ -67,11 +72,6 @@ pub fn show_ref(ref_: &str, path: &str) -> Result<String, String> {
 /// worktree, which fails with "'<trunk>' is already used by worktree at
 /// ..." because trunk is checked out already. Naming the branch explicitly
 /// also stops git from inferring one from the path basename.
-/// Whether `refs/heads/<branch>` already exists.
-pub fn branch_exists(branch: &str) -> bool {
-    git(&["rev-parse", "--verify", &format!("refs/heads/{branch}")]).is_ok()
-}
-
 pub fn worktree_add(path: &Path, branch: &str, ref_: Option<&str>) -> Result<(), String> {
     let branch_exists = branch_exists(branch);
     let mut args: Vec<&str> = vec!["worktree", "add"];
@@ -225,20 +225,63 @@ pub fn exclude_add(target: &Path, cwd: &Path) -> Result<(), String> {
     };
     let path = exclude_file(cwd)?;
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    if existing.lines().any(|l| l.trim() == pattern) {
+    let (before, block, after) = split_planr_block(&existing);
+    // Deduplicate only against planr's own block. A matching line elsewhere
+    // in the file is the user's, and adopting it would mean `close` later
+    // deletes a rule planr never wrote -- unhiding, say, their `/build/`.
+    // A duplicate line costs nothing: git evaluates both, and removing ours
+    // leaves theirs.
+    if block.iter().any(|l| l.trim() == pattern) {
         return Ok(());
     }
 
-    let mut out = existing;
-    if !out.is_empty() && !out.ends_with('\n') {
+    let mut out: Vec<&str> = before.to_vec();
+    while out.last().is_some_and(|l| l.trim().is_empty()) {
+        out.pop();
+    }
+    if !out.is_empty() {
+        out.push("");
+    }
+    out.push(EXCLUDE_HEADER);
+    out.extend_from_slice(&block);
+    out.push(&pattern);
+    out.extend_from_slice(&after);
+    write_lines(&path, &out)
+}
+
+/// Join `lines` with newlines and write them, always newline-terminated.
+fn write_lines(path: &Path, lines: &[&str]) -> Result<(), String> {
+    let mut out = lines.join("\n");
+    if !out.is_empty() {
         out.push('\n');
     }
-    if !out.contains(EXCLUDE_HEADER) {
-        out.push_str(&format!("\n{EXCLUDE_HEADER}\n"));
+    std::fs::write(path, out).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+/// Split an exclude file into the lines before planr's header, the patterns
+/// planr owns, and everything after.
+///
+/// planr's block runs from its header to the first blank line, comment, or
+/// end of file. Anything outside it belongs to the user or another tool and
+/// is never rewritten.
+fn split_planr_block(existing: &str) -> (Vec<&str>, Vec<&str>, Vec<&str>) {
+    let lines: Vec<&str> = existing.lines().collect();
+    let Some(header) = lines.iter().position(|l| l.trim() == EXCLUDE_HEADER) else {
+        return (lines, Vec::new(), Vec::new());
+    };
+    let mut end = header + 1;
+    while end < lines.len() {
+        let t = lines[end].trim();
+        if t.is_empty() || t.starts_with('#') {
+            break;
+        }
+        end += 1;
     }
-    out.push_str(&pattern);
-    out.push('\n');
-    std::fs::write(&path, out).map_err(|e| format!("cannot write {}: {e}", path.display()))
+    (
+        lines[..header].to_vec(),
+        lines[header + 1..end].to_vec(),
+        lines[end..].to_vec(),
+    )
 }
 
 /// Drop the local ignore rule for `target`, if one is present.
@@ -252,30 +295,53 @@ pub fn exclude_remove(target: &Path, cwd: &Path) -> Result<(), String> {
     let Some(pattern) = exclude_pattern(target, cwd) else {
         return Ok(());
     };
+    // Patterns are anchored per containing worktree, so two worktrees in
+    // different trees can share one. Removing it because this one closed
+    // would unhide the other -- the corruption the rule exists to prevent.
+    if another_worktree_needs(&pattern, target, cwd) {
+        return Ok(());
+    }
     let path = exclude_file(cwd)?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(());
     };
-    if !existing.lines().any(|l| l.trim() == pattern) {
+    let (before, block, after) = split_planr_block(&existing);
+    // Only planr's own block is rewritten. A matching line outside it is the
+    // user's, and deleting it would unhide something they meant to keep
+    // hidden.
+    if !block.iter().any(|l| l.trim() == pattern) {
         return Ok(());
     }
+    let kept: Vec<&str> = block.into_iter().filter(|l| l.trim() != pattern).collect();
 
-    let mut kept: Vec<&str> = existing
-        .lines()
-        .filter(|l| l.trim() != pattern)
-        .collect::<Vec<_>>();
-    // Drop the header once it no longer introduces anything.
-    if !kept.iter().any(|l| l.starts_with('/')) {
-        kept.retain(|l| l.trim() != EXCLUDE_HEADER);
-        while kept.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
-            kept.pop();
+    let mut out: Vec<&str> = before;
+    if !kept.is_empty() {
+        out.push(EXCLUDE_HEADER);
+        out.extend_from_slice(&kept);
+    } else {
+        // The header introduces nothing now, so it goes too -- along with the
+        // blank line that separated it. Judging that by "no anchored rule
+        // anywhere in the file" would strand the header forever in any repo
+        // holding an unrelated `/target` rule.
+        while out.last().is_some_and(|l| l.trim().is_empty()) {
+            out.pop();
         }
     }
-    let mut out = kept.join("\n");
-    if !out.is_empty() {
-        out.push('\n');
-    }
-    std::fs::write(&path, out).map_err(|e| format!("cannot write {}: {e}", path.display()))
+    out.extend_from_slice(&after);
+    write_lines(&path, &out)
+}
+
+/// Whether some *other* live worktree still resolves to `pattern`.
+fn another_worktree_needs(pattern: &str, target: &Path, cwd: &Path) -> bool {
+    let Ok(out) = git_in(cwd, &["worktree", "list", "--porcelain"]) else {
+        return false;
+    };
+    let target = canonicalize_existing(target);
+    out.lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .map(|p| canonicalize_existing(Path::new(p.trim())))
+        .filter(|root| *root != target)
+        .any(|root| exclude_pattern(&root, cwd).as_deref() == Some(pattern))
 }
 
 const EXCLUDE_HEADER: &str = "# planr worktrees -- checkouts, not backlog content";

@@ -1702,3 +1702,141 @@ fn test_e2e_claim_refuses_a_terminal_branch() {
         "a terminal branch must refuse, not resume: {err}"
     );
 }
+
+/// A refusal must leave nothing behind. The terminal-branch guard used to run
+/// after the worktree was created, so the refused claim left one -- and the
+/// next attempt reported "already claimed", masking the real reason for good.
+#[test]
+fn test_e2e_terminal_branch_refusal_leaves_no_worktree() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1"]);
+    let wt = td.path().join(".plan/worktrees/wt-t1");
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    std::fs::write(
+        wt.join(&task_file),
+        content.replace("status: in_progress", "status: done"),
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "done on branch"])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    let first = planr_err(td.path(), &["claim", "t1"]);
+    assert!(
+        first.contains("done"),
+        "expected the terminal reason: {first}"
+    );
+    assert!(!wt.exists(), "a refused claim must not create a worktree");
+
+    // The same reason again, not "already claimed" from a worktree the
+    // previous refusal left lying around.
+    let second = planr_err(td.path(), &["claim", "t1"]);
+    assert!(
+        second.contains("done") && !second.contains("already claimed"),
+        "the real reason must survive a second attempt: {second}"
+    );
+}
+
+/// `close` must not delete an ignore rule the user wrote themselves. planr
+/// deduplicated against the whole file, so it silently adopted a matching
+/// line and later removed it -- unhiding whatever the user meant to hide.
+#[test]
+fn test_e2e_close_keeps_a_user_written_ignore_rule() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    // The user already ignores /build/ for their own reasons.
+    let excl = td.path().join(".git/info/exclude");
+    std::fs::create_dir_all(excl.parent().unwrap()).unwrap();
+    let mut user = std::fs::read_to_string(&excl).unwrap_or_default();
+    user.push_str("\n# my own rules\n/build/\n");
+    std::fs::write(&excl, user).unwrap();
+
+    planr_ok(td.path(), &["claim", "t1", "--worktree", "build"]);
+
+    // Take the task to review so close will merge and clean up.
+    let wt = td.path().join("build");
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    let reviewed = content.replace("status: in_progress", "status: review")
+        + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
+    std::fs::write(wt.join(&task_file), reviewed).unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "review: t1"])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+
+    planr_ok(td.path(), &["close", "task", "t1"]);
+
+    std::fs::create_dir_all(td.path().join("build")).unwrap();
+    std::fs::write(td.path().join("build/out.o"), "obj").unwrap();
+    assert!(
+        git_ignored(td.path(), "build"),
+        "the user's own rule must survive close: exclude={:?}",
+        read_exclude(td.path())
+    );
+}
+
+/// planr's header must not be stranded by an unrelated anchored rule. The
+/// cleanup used to ask whether *any* line in the file started with `/`, so a
+/// repo with its own `/target` rule kept an empty planr section forever.
+#[test]
+fn test_e2e_close_drops_its_header_alongside_a_foreign_rule() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let excl = td.path().join(".git/info/exclude");
+    std::fs::create_dir_all(excl.parent().unwrap()).unwrap();
+    std::fs::write(&excl, "/target\n").unwrap();
+
+    planr_ok(td.path(), &["claim", "t1", "--worktree", "wt-x"]);
+    let wt = td.path().join("wt-x");
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    let reviewed = content.replace("status: in_progress", "status: review")
+        + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
+    std::fs::write(wt.join(&task_file), reviewed).unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "review: t1"])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+
+    planr_ok(td.path(), &["close", "task", "t1"]);
+
+    let exclude = read_exclude(td.path());
+    assert!(
+        exclude.contains("/target"),
+        "the foreign rule must survive: {exclude:?}"
+    );
+    assert!(
+        !exclude.contains("planr worktrees"),
+        "planr's header must not be stranded: {exclude:?}"
+    );
+}
