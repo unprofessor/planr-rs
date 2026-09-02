@@ -219,10 +219,19 @@ fn exclude_file(cwd: &Path) -> Result<PathBuf, String> {
 /// The rule is local rather than a tracked `.gitignore` because a worktree
 /// is local: it exists in this clone alone. That also leaves nothing new in
 /// the working tree for anyone to notice or commit.
-pub fn exclude_add(target: &Path, cwd: &Path) -> Result<(), String> {
+/// Returns whether a rule was actually written -- `false` when none was
+/// needed or planr already had one. The caller needs that to know whether
+/// rolling back may remove it: the shared default rule is written once and
+/// reused by every later claim, so removing it on behalf of a claim that
+/// merely found it would unhide every other worktree under it.
+pub fn exclude_add(target: &Path, cwd: &Path) -> Result<bool, String> {
     let Some(pattern) = exclude_pattern(target, cwd) else {
-        return Ok(());
+        return Ok(false);
     };
+    // Rewriting the file is a read-modify-write, and claims run concurrently
+    // by design. Without this, two claims can both read the pre-rule file and
+    // both write it, dropping one rule and leaving that worktree visible.
+    let _lock = crate::lock::PlanrLock::exclude(cwd).map_err(|e| format!("lock error: {e}"))?;
     let path = exclude_file(cwd)?;
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let (before, block, after) = split_planr_block(&existing);
@@ -232,7 +241,7 @@ pub fn exclude_add(target: &Path, cwd: &Path) -> Result<(), String> {
     // A duplicate line costs nothing: git evaluates both, and removing ours
     // leaves theirs.
     if block.iter().any(|l| l.trim() == pattern) {
-        return Ok(());
+        return Ok(false);
     }
 
     let mut out: Vec<&str> = before.to_vec();
@@ -246,7 +255,8 @@ pub fn exclude_add(target: &Path, cwd: &Path) -> Result<(), String> {
     out.extend_from_slice(&block);
     out.push(&pattern);
     out.extend_from_slice(&after);
-    write_lines(&path, &out)
+    write_lines(&path, &out)?;
+    Ok(true)
 }
 
 /// Join `lines` with newlines and write them, always newline-terminated.
@@ -301,6 +311,8 @@ pub fn exclude_remove(target: &Path, cwd: &Path) -> Result<(), String> {
     if another_worktree_needs(&pattern, target, cwd) {
         return Ok(());
     }
+    // Same read-modify-write hazard as `exclude_add`.
+    let _lock = crate::lock::PlanrLock::exclude(cwd).map_err(|e| format!("lock error: {e}"))?;
     let path = exclude_file(cwd)?;
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(());
@@ -424,10 +436,15 @@ pub fn diff_refs(ref1: &str, ref2: &str) -> Result<String, String> {
 /// prefixes each line with a marker -- `* ` for HEAD, `+ ` for a branch
 /// checked out in a linked worktree, two spaces otherwise -- and every
 /// branch planr creates is a worktree branch, so the `+ ` case is the
-/// common one, not the exotic one. Asking git for `%(refname:short)`
-/// sidesteps the decoration entirely.
+/// common one, not the exotic one. Asking git for the ref name sidesteps
+/// the decoration entirely.
+///
+/// `lstrip=2`, not `:short`: the short form is the shortest *unambiguous*
+/// name, so a tag sharing a branch's name makes it report `heads/plan/x`.
+/// Stripping the two leading components yields the branch name whatever
+/// else exists.
 pub fn branch_list(pattern: Option<&str>) -> Result<Vec<String>, String> {
-    let mut args = vec!["branch", "--list", "--format=%(refname:short)"];
+    let mut args = vec!["branch", "--list", "--format=%(refname:lstrip=2)"];
     if let Some(p) = pattern {
         args.push(p);
     }

@@ -29,7 +29,7 @@ impl PlanrLock {
     /// Acquire a **shared** lock on planr.lock for the repo containing `cwd`.
     /// Multiple processes can hold a shared lock simultaneously.
     pub fn shared(cwd: &Path) -> io::Result<Self> {
-        let path = lock_path(cwd)?;
+        let path = lock_path(cwd, "planr.lock")?;
         let file = open_lock_file(&path)?;
         file.lock_shared()?;
         Ok(PlanrLock { _file: file })
@@ -38,18 +38,34 @@ impl PlanrLock {
     /// Acquire an **exclusive** lock on planr.lock for the repo containing
     /// `cwd`. Only one process can hold the exclusive lock at a time.
     pub fn exclusive(cwd: &Path) -> io::Result<Self> {
-        let path = lock_path(cwd)?;
+        let path = lock_path(cwd, "planr.lock")?;
+        let file = open_lock_file(&path)?;
+        file.lock_exclusive()?;
+        Ok(PlanrLock { _file: file })
+    }
+
+    /// Acquire an exclusive lock guarding edits to `.git/info/exclude`.
+    ///
+    /// A separate file from `planr.lock` on purpose. A claim holds that one
+    /// *shared* for its whole critical section -- concurrent claims are the
+    /// point of the workflow -- and flock is per descriptor, so asking for the
+    /// exclusive lock on the same file from the same process would block
+    /// forever on our own shared lock. Rewriting the exclude file is a
+    /// read-modify-write, though, and two claims doing it at once lose one of
+    /// the rules, so it needs a mutex of its own.
+    pub fn exclude(cwd: &Path) -> io::Result<Self> {
+        let path = lock_path(cwd, "planr-exclude.lock")?;
         let file = open_lock_file(&path)?;
         file.lock_exclusive()?;
         Ok(PlanrLock { _file: file })
     }
 }
 
-/// Resolve the lock file path: `<git-common-dir>/planr.lock`.
-fn lock_path(cwd: &Path) -> io::Result<PathBuf> {
+/// Resolve a lock file path under `<git-common-dir>`.
+fn lock_path(cwd: &Path, name: &str) -> io::Result<PathBuf> {
     let gd =
         git::git_common_dir(cwd).map_err(|e| io::Error::other(format!("git-common-dir: {e}")))?;
-    Ok(Path::new(&gd).join("planr.lock"))
+    Ok(Path::new(&gd).join(name))
 }
 
 /// Open (creating if absent) the lock file. The file is opened read-write so
@@ -110,7 +126,7 @@ mod tests {
     #[test]
     fn test_lock_path_matches_planr_lock() {
         let (_tmp, repo) = init_repo();
-        let path = lock_path(&repo).unwrap();
+        let path = lock_path(&repo, "planr.lock").unwrap();
         assert_eq!(path.file_name().unwrap(), "planr.lock");
         assert!(path.to_string_lossy().contains(".git"));
     }

@@ -20,6 +20,29 @@
 
 ### Fixed
 
+- **`planr claim` refuses a task trunk already records as finished.** The
+  guard only rejected `abandoned`, and the branch-side check cannot help
+  because `close` deletes the branch. Claiming a closed task therefore
+  created a worktree, declined to move the `done` status, and exited 0 --
+  the same silent success this release set out to remove. Any status at or
+  past `in_progress` on trunk now refuses.
+
+- **A failed `planr claim` takes its own ignore rule back out.** The
+  rollback removed the worktree but left the rule behind, so the path
+  stayed hidden from git for good. Only a rule that call wrote is removed:
+  the shared default rule is reused by every claim under it and stays.
+
+- **Concurrent claims no longer lose each other's ignore rules.** Rewriting
+  `.git/info/exclude` is a read-modify-write and claims run in parallel by
+  design, so two of them could both read the pre-rule file and both write
+  it, dropping one rule and leaving that worktree to be staged as a
+  gitlink. The edit now takes an exclusive lock of its own -- a separate
+  file from `planr.lock`, which a claim already holds shared.
+
+- **`planr board` reads branch names as `%(refname:lstrip=2)`.** The short
+  form is the shortest *unambiguous* name, so a tag sharing a branch's name
+  made git report `heads/plan/<slug>` and the scan derive a bogus slug.
+
 - **A failed `planr claim` no longer hides a real directory from git.**
   The local ignore rule was written before `git worktree add` ran and
   nothing removed it when the worktree creation failed, so a typo'd

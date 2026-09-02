@@ -1551,11 +1551,12 @@ fn test_e2e_claim_from_a_sibling_worktree_is_hidden() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
 
-    // A worker's worktree beside the main tree, sharing its .git.
-    let worker = td.path().parent().unwrap().join(format!(
-        "planr-worker-{}",
-        td.path().file_name().unwrap().to_string_lossy()
-    ));
+    // A worker's worktree beside the main tree, sharing its .git. It lives in
+    // a TempDir of its own rather than in the system temp root, so a failing
+    // assertion cannot leave a stray worktree behind: TempDir's Drop runs on
+    // the panic path, an explicit cleanup call after the asserts would not.
+    let outside = tempfile::tempdir().unwrap();
+    let worker = outside.path().join("worker");
     Command::new("git")
         .args(["worktree", "add", worker.to_str().unwrap(), "-b", "worker"])
         .current_dir(td.path())
@@ -1574,12 +1575,6 @@ fn test_e2e_claim_from_a_sibling_worktree_is_hidden() {
         "the worktrees dir must be ignored in the sibling tree: exclude={:?}",
         read_exclude(td.path())
     );
-
-    Command::new("git")
-        .args(["worktree", "remove", "--force", worker.to_str().unwrap()])
-        .current_dir(td.path())
-        .ok()
-        .ok();
 }
 
 /// A gitignore pattern is a glob, so a worktree path holding `[`, `*` or `?`
@@ -1614,10 +1609,11 @@ fn test_e2e_symlinked_worktree_path_is_ignored() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
 
-    let link = td.path().parent().unwrap().join(format!(
-        "planr-link-{}",
-        td.path().file_name().unwrap().to_string_lossy()
-    ));
+    // The symlink lives in a TempDir of its own, so a failing assertion
+    // cannot strand a dangling link in the system temp root -- Drop runs on
+    // the panic path, a cleanup call after the asserts does not.
+    let outside = tempfile::tempdir().unwrap();
+    let link = outside.path().join("repo-link");
     if std::os::unix::fs::symlink(td.path(), &link).is_err() {
         return; // no symlink support; nothing to assert
     }
@@ -1638,8 +1634,6 @@ fn test_e2e_symlinked_worktree_path_is_ignored() {
         !status.contains("wt-sym"),
         "worktree must not appear as a gitlink: {status:?}"
     );
-
-    std::fs::remove_file(&link).ok();
 }
 
 /// `--no-worktree` opts out of worktree creation, not out of the concurrency
@@ -1838,5 +1832,137 @@ fn test_e2e_close_drops_its_header_alongside_a_foreign_rule() {
     assert!(
         !exclude.contains("planr worktrees"),
         "planr's header must not be stranded: {exclude:?}"
+    );
+}
+
+/// Claiming a task trunk already records as finished must refuse, not report
+/// success having done nothing. `close` deletes the branch, so the
+/// branch-side terminal guard cannot see a closed task -- the claim created a
+/// worktree, the flip declined to move a `done` status, and the whole thing
+/// exited 0. That is the silent-success failure this PR exists to remove.
+#[test]
+fn test_e2e_claim_refuses_a_task_trunk_calls_done() {
+    for status in ["done", "review"] {
+        let td = tempfile::tempdir().unwrap();
+        seed_lint_repo(td.path());
+
+        let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+        let path = td.path().join(&task_file);
+        let content = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            content.replace("status: todo", &format!("status: {status}")),
+        )
+        .unwrap();
+        Command::new("git")
+            .args(["add", &task_file])
+            .current_dir(td.path())
+            .ok()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "advance t1"])
+            .current_dir(td.path())
+            .ok()
+            .unwrap();
+
+        let err = planr_err(td.path(), &["claim", "t1"]);
+        assert!(
+            err.contains(status),
+            "claiming a {status} task must refuse and say why: {err}"
+        );
+        assert!(
+            !td.path().join(".plan/worktrees/wt-t1").exists(),
+            "a refused claim must not create a worktree ({status})"
+        );
+    }
+}
+
+/// A claim that fails *after* writing its ignore rule must take the rule back
+/// out. The rollback removed the worktree but left the rule, so the path
+/// stayed hidden forever -- and an exclude rule is invisible in `git status`,
+/// so nothing would ever point at the cause.
+#[test]
+fn test_e2e_failed_claim_removes_the_rule_it_wrote() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    // A pre-commit hook that always fails makes the flip's commit fail, which
+    // is the first step after the rule is written.
+    let hooks = td.path().join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let err = planr_err(td.path(), &["claim", "t1", "--worktree", "mydir"]);
+    assert!(!err.is_empty(), "claim should have failed");
+
+    let exclude = read_exclude(td.path());
+    assert!(
+        !exclude.contains("/mydir/"),
+        "a failed claim must take its own rule back out: {exclude:?}"
+    );
+
+    // And the path is genuinely visible again.
+    std::fs::create_dir_all(td.path().join("mydir")).unwrap();
+    std::fs::write(td.path().join("mydir/real.txt"), "mine").unwrap();
+    let status = git_stdout(td.path(), &["status", "--porcelain"]);
+    assert!(
+        status.contains("mydir"),
+        "mydir must be visible to git again: {status:?}"
+    );
+}
+
+/// The shared default rule is written once and reused by every later claim,
+/// so a failed claim must not take it out from under the claims already
+/// relying on it.
+#[test]
+fn test_e2e_failed_claim_keeps_the_shared_default_rule() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
+    Command::new("git")
+        .args(["add", ".plan"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "add t2"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    // t1 claims successfully and establishes the shared rule.
+    planr_ok(td.path(), &["claim", "t1"]);
+    assert!(
+        git_ignored(td.path(), ".plan/worktrees"),
+        "rule established"
+    );
+
+    // t2's claim then fails after the rule check.
+    let hooks = td.path().join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    planr_err(td.path(), &["claim", "t2"]);
+
+    assert!(
+        git_ignored(td.path(), ".plan/worktrees"),
+        "t1's worktree must stay hidden: exclude={:?}",
+        read_exclude(td.path())
+    );
+    let status = git_stdout(td.path(), &["status", "--porcelain"]);
+    assert!(
+        !status.contains(".plan/worktrees"),
+        "trunk must stay clean: {status:?}"
     );
 }

@@ -199,7 +199,11 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
                 // which is the gitlink corruption the rule exists to prevent.
                 // A stale rule is the lesser harm, and the next close of that
                 // path clears it.
-                if git::worktree_remove(wt, false).is_ok() {
+                // `|| !wt.exists()` covers a stale record: the directory was
+                // deleted by hand, so `worktree remove` fails but there is
+                // nothing left to hide, and keeping the rule would hide
+                // whatever is created at that path next.
+                if git::worktree_remove(wt, false).is_ok() || !wt.exists() {
                     // The shared default rule covers a parent directory, so it
                     // does not match here and survives.
                     let _ = git::exclude_remove(wt, cwd);

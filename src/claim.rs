@@ -139,8 +139,23 @@ fn hide_and_flip(
     slug: &str,
     cwd: &Path,
 ) -> Result<(), String> {
-    git::exclude_add(ignore_target, cwd)?;
+    let added = git::exclude_add(ignore_target, cwd)?;
+    if let Err(e) = flip_to_in_progress(wt_path, task_file, slug) {
+        // The rule outlives the failed claim otherwise, hiding whatever the
+        // user later creates at that path -- invisible in `git status`, which
+        // is the hazard the write-after-create ordering was meant to close.
+        // Only a rule this call wrote comes back out: the shared default rule
+        // is reused by every claim under it.
+        if added {
+            let _ = git::exclude_remove(ignore_target, cwd);
+        }
+        return Err(e);
+    }
+    Ok(())
+}
 
+/// Move the task on the branch to `in_progress` and commit it.
+fn flip_to_in_progress(wt_path: &Path, task_file: &str, slug: &str) -> Result<(), String> {
     let wf_path = wt_path.join(task_file);
     let content = std::fs::read_to_string(&wf_path)
         .map_err(|e| format!("cannot read {}: {e}", wf_path.display()))?;
@@ -259,11 +274,24 @@ pub fn claim_task(
         .ok_or_else(|| format!("no task file for slug '{slug}' on {trunk}"))?
         .to_string();
 
-    // 2b. An abandoned task is terminal and cannot be claimed again.
+    // 2b. Trunk must record work that has not started. Anything else means
+    // the claim would do nothing: the flip below refuses to move a status
+    // that is already at or past in_progress, so the call would create a
+    // worktree, skip the flip, and exit 0 -- the silent success this PR
+    // exists to remove. The branch-side guard cannot cover this, because
+    // `close` deletes the branch, so a task closed and then claimed again has
+    // no branch left to check.
     let info = read_task_on_ref(trunk, &task_file)?;
     if info.status == "abandoned" {
         return Err(format!(
             "refuse claim: task '{slug}' is abandoned; update the ticket or create a new one"
+        ));
+    }
+    if STARTED_STATUSES.contains(&info.status.as_str()) {
+        return Err(format!(
+            "refuse claim: trunk records task '{slug}' as {}; \
+             reopen the ticket or create a new one",
+            info.status
         ));
     }
 
