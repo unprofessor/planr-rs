@@ -207,21 +207,26 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
                     Ok(()) => {
                         // The shared default rule covers a parent directory,
                         // so it does not match here and survives.
-                        let _ = git::exclude_remove(wt, cwd);
+                        git::drop_exclude(wt, cwd);
                     }
-                    // `try_exists().unwrap_or(true)`: an I/O error must not
-                    // read as "the directory is gone". A worktree that is
-                    // present but unreadable would otherwise have its rule
-                    // dropped while it is still registered and on disk --
-                    // unhiding a live worktree, which is the corruption the
-                    // rule exists to prevent.
-                    Err(e) if !wt.try_exists().unwrap_or(true) => {
-                        // A stale record: the directory was deleted by hand,
-                        // so removal fails but there is nothing left to hide,
-                        // and keeping the rule would hide whatever is created
-                        // at that path next.
-                        let _ = e;
-                        let _ = git::exclude_remove(wt, cwd);
+                    // A stale record: the directory is gone *and* git has
+                    // forgotten it, so there is nothing left to hide and
+                    // keeping the rule would hide whatever is created at that
+                    // path next.
+                    //
+                    // Both halves are load-bearing. `try_exists().unwrap_or
+                    // (true)` keeps an I/O error from reading as "the
+                    // directory is gone". And the record has to be checked
+                    // too: a *locked* worktree whose directory was deleted
+                    // fails removal while staying registered, so judging by
+                    // the directory alone dropped the rule, let the branch
+                    // delete below fail silently, and reported unqualified
+                    // success while `board` still listed the task in flight.
+                    Err(_)
+                        if !wt.try_exists().unwrap_or(true)
+                            && git::find_worktree_for_branch(&branch).is_none() =>
+                    {
+                        git::drop_exclude(wt, cwd);
                     }
                     Err(e) => {
                         // The merge succeeded, so this is not a failure of the

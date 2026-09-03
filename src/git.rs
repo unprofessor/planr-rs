@@ -410,6 +410,25 @@ pub fn exclude_remove(target: &Path, cwd: &Path) -> Result<(), String> {
     write_lines(&path, &out)
 }
 
+/// Drop the ignore rule for `target`, reporting a failure rather than
+/// swallowing it.
+///
+/// Every caller is on a cleanup path where the removal is not what the
+/// command was asked to do, so a failure must not abort it. It must not be
+/// silent either: what is left behind is a rule that hides anything later
+/// created at that path, and it is invisible in `git status`, so nothing else
+/// would ever point at it.
+pub fn drop_exclude(target: &Path, cwd: &Path) {
+    if let Err(e) = exclude_remove(target, cwd) {
+        eprintln!(
+            "warning: could not drop the local ignore rule for {} ({e}); \
+             it may still hide files created at that path -- check \
+             .git/info/exclude",
+            target.display()
+        );
+    }
+}
+
 /// Whether some *other* live worktree still depends on `pattern`.
 ///
 /// Two ways it can. A worktree elsewhere may resolve to the same pattern,

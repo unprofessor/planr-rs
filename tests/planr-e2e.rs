@@ -2293,3 +2293,99 @@ fn test_e2e_blocked_refusal_names_a_real_remedy() {
         "the refusal should say how to unblock: {err}"
     );
 }
+
+/// Dropping a stale worktree record must drop its ignore rule too. The next
+/// claim can land somewhere else entirely, and `close` only ever considers
+/// the path the task is holding now -- so the old rule would stay forever,
+/// silently hiding anything created at that path.
+#[test]
+fn test_e2e_stale_record_takes_its_ignore_rule_with_it() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    // Claim at an explicit path, then delete it by hand.
+    planr_ok(td.path(), &["claim", "t1", "--worktree", "mydir"]);
+    assert!(
+        git_ignored(td.path(), "mydir"),
+        "precondition: rule written"
+    );
+    std::fs::remove_dir_all(td.path().join("mydir")).unwrap();
+
+    // Re-claim: the stale record is dropped and the worktree lands at the
+    // default location instead.
+    planr_ok(td.path(), &["claim", "t1"]);
+
+    std::fs::create_dir_all(td.path().join("mydir")).unwrap();
+    std::fs::write(td.path().join("mydir/real.txt"), "mine").unwrap();
+    assert!(
+        !git_ignored(td.path(), "mydir/real.txt"),
+        "the old rule must not outlive its worktree: exclude={:?}",
+        read_exclude(td.path())
+    );
+    let status = git_stdout(td.path(), &["status", "--porcelain"]);
+    assert!(
+        status.contains("mydir"),
+        "mydir must be visible to git again: {status:?}"
+    );
+}
+
+/// A locked worktree survives `close`'s removal, so the branch delete after
+/// it fails too. `close` must say so rather than printing unqualified success
+/// while `board` keeps listing the task in flight.
+///
+/// Note this is the *reachable* half of that failure. A locked worktree whose
+/// directory was also deleted cannot get this far: `close` writes the done
+/// flip into the worktree before merging, so it aborts there. The stale-record
+/// guard in `close_cmd.rs` is defensive for that reason -- it now requires the
+/// worktree record to be gone as well as the directory, so it cannot drop a
+/// live worktree's rule if some future path does reach it.
+#[test]
+fn test_e2e_close_warns_when_a_locked_worktree_survives() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1", "--worktree", "wt-locked"]);
+    let wt = td.path().join("wt-locked");
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    let reviewed = content.replace("status: in_progress", "status: review")
+        + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
+    std::fs::write(wt.join(&task_file), reviewed).unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "review: t1"])
+        .current_dir(&wt)
+        .ok()
+        .unwrap();
+
+    // Locked, but still present: the merge succeeds and the removal refuses.
+    Command::new("git")
+        .args(["worktree", "lock", wt.to_str().unwrap()])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    let out = planr(td.path(), &["close", "task", "t1"]);
+    assert!(out.status.success(), "close should still report the merge");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("could not be removed"),
+        "a surviving worktree must be reported: stderr={stderr:?}"
+    );
+    // Its rule stays while it does, so trunk cannot pick it up as a gitlink.
+    assert!(
+        git_ignored(td.path(), "wt-locked"),
+        "a surviving worktree must stay hidden: exclude={:?}",
+        read_exclude(td.path())
+    );
+
+    Command::new("git")
+        .args(["worktree", "unlock", wt.to_str().unwrap()])
+        .current_dir(td.path())
+        .ok()
+        .ok();
+}

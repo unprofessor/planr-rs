@@ -214,7 +214,7 @@ fn rollback_claim(
     // ours was one of those until the line above. Removing it first would ask
     // that question while our own worktree still counted as a dependant.
     if placed.rule_added {
-        let _ = git::exclude_remove(ignore_target, cwd);
+        git::drop_exclude(ignore_target, cwd);
     }
     err
 }
@@ -441,6 +441,12 @@ pub fn claim_task(
         // unmounted volume, a network path, a home directory not yet
         // decrypted -- orphaning it as a side effect of an unrelated claim.
         git::worktree_remove(&held, true)?;
+        // The rule written for that worktree goes with it. This claim may
+        // land somewhere else entirely (the previous one could have used an
+        // explicit `--worktree`), and no later `close` would remove it --
+        // `close` only ever considers the path the task is holding now. Left
+        // behind, it silently hides whatever is created at the old path.
+        git::drop_exclude(&held, cwd);
     }
 
     // A terminal branch is not something to resume. Step 2b refuses an

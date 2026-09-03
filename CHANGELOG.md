@@ -71,6 +71,16 @@
   symlinked path used to look like it lay outside the repository and got
   no rule at all (every `$TMPDIR` path on macOS takes that route).
 
+- **Dropping a stale worktree record drops its ignore rule too.** Resuming
+  a claim whose worktree was deleted by hand forgot the record but kept the
+  rule, and no later `close` would remove it -- `close` only considers the
+  path the task holds now, which may be somewhere else entirely. The rule
+  stayed forever, hiding anything created at the old path.
+
+- **A failed ignore-rule removal is reported.** Every cleanup path
+  discarded the error, so a rule left behind by a read-only `.git` or a
+  full disk was invisible twice over: it hides files, and nothing said so.
+
 - **planr's ignore rules end with a blank line, so a rule appended by hand
   stays the user's.** planr writes its block last, so `echo '/mydir/' >>
   .git/info/exclude` -- the obvious way to add one -- landed *inside* that
