@@ -30,10 +30,32 @@ fn run_git(cwd: Option<&Path>, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// A `git` child process with its messages pinned to English.
+///
+/// git translates its own diagnostics, and planr reads them two ways that
+/// both break under a translated locale: `toplevel_or_none` tells "there is
+/// no repository here" from a real failure by matching git's wording, and
+/// every other wrapper puts git's last stderr line inside a planr sentence
+/// that is English either way. Left to the environment, an ordinary run
+/// outside a repository under `LC_ALL=fr_FR.UTF-8` was reported as a git
+/// failure -- exactly the noise the match exists to avoid -- and warnings
+/// came out half in one language and half in the other.
+///
+/// `LC_ALL=C` is the pin: it outranks `LC_MESSAGES`, and GNU gettext ignores
+/// `LANGUAGE` entirely once the locale is `C`, so nothing else in the
+/// environment can put the translation back. It is set on every git planr
+/// runs, not just the one that matches, because a message planr is about to
+/// quote is a message planr has to be able to read.
+pub(crate) fn git_command() -> Command {
+    let mut cmd = Command::new("git");
+    cmd.env("LC_ALL", "C");
+    cmd
+}
+
 /// The raw process result, for the one caller that has to read all of git's
 /// stderr rather than the last line of it.
 fn run_git_raw(cwd: Option<&Path>, args: &[&str]) -> Result<std::process::Output, String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command();
     cmd.args(args);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -745,6 +767,11 @@ pub fn show_toplevel() -> Result<String, String> {
 /// the line that survives when only the last one is kept. Matching that alone
 /// reported an ordinary run outside a repository as a git failure, which is
 /// exactly the noise the caller is trying not to make.
+///
+/// Matching English text is only sound because `git_command` pins the child
+/// to `LC_ALL=C`. Reading whatever the environment's locale produced made
+/// the same spurious warning on every ordinary non-repository run under a
+/// translated locale -- the very case this function exists to keep quiet.
 pub fn toplevel_or_none() -> Result<Option<String>, String> {
     let out = run_git_raw(None, &["rev-parse", "--show-toplevel"])?;
     if out.status.success() {

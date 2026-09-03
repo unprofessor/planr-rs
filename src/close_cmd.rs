@@ -11,7 +11,6 @@ use crate::lock::PlanrLock;
 use crate::parse::extract_last_review_verdict;
 use crate::ticket::{parse_ticket, ParsedTicket};
 use std::path::Path;
-use std::process::Command;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -318,7 +317,7 @@ fn try_merge(
     slug: &str,
     cwd: &Path,
 ) -> Result<String, String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = git::git_command();
     cmd.current_dir(cwd);
     cmd.args(["merge", "--no-ff", branch, "-m", message]);
 
@@ -333,7 +332,7 @@ fn try_merge(
         let full_log = format!("{stdout}{stderr}").trim().to_string();
 
         // List conflicted files
-        let conflicted = Command::new("git")
+        let conflicted = git::git_command()
             .current_dir(cwd)
             .args(["diff", "--name-only", "--diff-filter=U"])
             .output()
@@ -348,7 +347,7 @@ fn try_merge(
             .unwrap_or_else(|| "<unknown>".to_string());
 
         // Abort the merge
-        let _ = Command::new("git")
+        let _ = git::git_command()
             .current_dir(cwd)
             .args(["merge", "--abort"])
             .output();

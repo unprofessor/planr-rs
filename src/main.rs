@@ -115,8 +115,8 @@ enum Command {
         slug: String,
         /// override trunk branch for this invocation
         trunk_override: Option<String>,
-        /// Path for the worktree
-        /// (default: <plan-dir>/worktrees/wt-<slug>, used both when the
+        /// Path for the worktree, relative to the directory planr was run
+        /// in (default: <plan-dir>/worktrees/wt-<slug>, used both when the
         /// flag is omitted and when it is passed with no value;
         /// use --no-worktree to skip worktree creation entirely)
         #[arg(
@@ -161,20 +161,26 @@ enum Command {
 /// A relative `--plan-dir` (the default `.plan`) is relative to the
 /// repository, but every reader opens it relative to the process directory
 /// and passes it to git as a pathspec, which git resolves the same way. Run
-/// from a subdirectory, `planr board` and `planr lint` therefore read no
-/// tickets at all and said nothing about it: the board rendered empty tables,
-/// warned that every in-flight branch had no task on trunk, and `lint`
-/// reported a clean backlog it had never opened.
+/// from a subdirectory, every command that touches the plan directory
+/// therefore looked at the wrong one -- and each half of planr was wrong
+/// about it in its own way. `board` rendered empty tables and warned that
+/// every in-flight branch had no task on trunk; `lint` reported a clean
+/// backlog it had never opened; `new` created a second backlog under the
+/// subdirectory and printed the path; `claim`, `close` and `review` refused,
+/// naming a file as absent from trunk while it sat committed at the root.
 ///
-/// `planr new` has the same relative plan directory and writes to it, so it
-/// belongs here too. Applying this to the readers alone left the two halves
-/// disagreeing about where the backlog is: run from a subdirectory, `new`
-/// created `<subdir>/.plan/epics/01-e1.md`, printed it, and exited 0, and
-/// `board` in the same directory then reported a total of zero with an empty
-/// stderr. Every other command that touches the plan directory already
-/// refuses from a subdirectory, naming the slug it could not find, so none of
-/// them needs this -- and `claim` resolves a relative worktree path against
-/// the process directory, which moving it would silently redirect.
+/// Fixing the readers alone, then the readers and `new`, only moved the
+/// disagreement: `new` and `board` agreed on where the backlog was and
+/// `claim` did not, so `planr claim <slug>` from a subdirectory failed with
+/// "no task file for slug '<slug>' on main" about a file that was on main.
+/// Every command enters the root, so there is one answer to where the backlog
+/// is and every command gives it.
+///
+/// The one thing that must not move with it is a path the caller typed:
+/// `claim --worktree <relative path>` means relative to where they are
+/// standing, and entering the root first would silently redirect it. `main`
+/// resolves that against the invocation directory before calling this, which
+/// is the only reason `claim` was exempted before.
 ///
 /// Outside a git repository there is no root to enter; the working-tree
 /// readers still work relative to the current directory, as before. Any other
@@ -200,33 +206,153 @@ fn enter_repo_root() {
     }
 }
 
-/// Say so when the plan directory a command is about to read is not there.
+/// Say so when the plan directory a command is about to read cannot be read.
 ///
 /// `lint` prints nothing at all for a clean backlog, so a typo'd
 /// `--plan-dir` -- or a run in a clone that has no backlog yet -- was
 /// byte-identical to a clean bill of health, exit code included: it certified
 /// a backlog it had never opened. Neither case is an error, since planr is
 /// meant to be usable in a repository before `planr new` has ever made a
-/// backlog, but a directory that is simply not there is a fact neither
-/// command can establish any other way.
+/// backlog, but a directory that is not readable is a fact neither command
+/// can establish any other way.
+///
+/// "Not there" is only the commonest of several ways to read nothing, and
+/// `Path::exists` answers true for the rest of them: a directory whose
+/// permissions forbid opening it, and a plain file sitting where the backlog
+/// should be, both read as zero tickets and both certified a clean backlog in
+/// total silence. The readers below treat every I/O error as an empty
+/// directory, which is the fail-open direction, so the error has to be
+/// reported here or nowhere. Each kind subdirectory is checked the same way:
+/// one unreadable `tasks/` hides every task in the backlog just as quietly.
+/// A subdirectory that is simply absent is ordinary -- a backlog may hold
+/// only epics -- so only the plan directory itself is worth a word for that.
 ///
 /// Working-tree mode only -- in ref mode the plan directory is a pathspec in
 /// a commit, and an empty read there is git's answer, not the filesystem's.
 fn warn_if_plan_dir_missing(plan_dir: &str) {
-    if !std::path::Path::new(plan_dir).exists() {
-        eprintln!(
-            "warning: no plan directory at '{plan_dir}' -- there is no backlog here to \
-             read; check --plan-dir, or run `planr new` to start one"
-        );
+    match std::fs::read_dir(plan_dir) {
+        Ok(entries) => {
+            if let Some(e) = first_read_error(entries) {
+                eprintln!(
+                    "warning: could not read the plan directory at '{plan_dir}' ({e}) -- \
+                     planr read no backlog there, which is not the same as there being \
+                     none; check --plan-dir and the directory's permissions"
+                );
+                return;
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "warning: no plan directory at '{plan_dir}' -- there is no backlog here to \
+                 read; check --plan-dir, or run `planr new` to start one"
+            );
+            return;
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: could not read the plan directory at '{plan_dir}' ({e}) -- planr \
+                 read no backlog there, which is not the same as there being none; check \
+                 --plan-dir and the directory's permissions"
+            );
+            return;
+        }
     }
+
+    for kind in ["epics", "stories", "tasks"] {
+        let dir = format!("{plan_dir}/{kind}");
+        let problem = match std::fs::read_dir(&dir) {
+            Ok(entries) => first_read_error(entries),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => Some(e),
+        };
+        if let Some(e) = problem {
+            eprintln!(
+                "warning: could not read '{dir}' ({e}) -- any tickets in it are missing \
+                 from this run; check the directory's permissions"
+            );
+        }
+    }
+}
+
+/// The first error a directory listing produced, if any.
+///
+/// Opening a directory can succeed and then fail entry by entry, so a listing
+/// that was cut short reads as a short listing unless the errors are looked
+/// at. The readers discard them.
+fn first_read_error(entries: std::fs::ReadDir) -> Option<std::io::Error> {
+    entries.filter_map(|e| e.err()).next()
+}
+
+/// Resolve a path the caller typed against the directory they typed it in.
+///
+/// Entering the repository root moves that directory out from under every
+/// relative path in the command line, so any such path has to be pinned
+/// first. `claim --worktree ../scratch` means the caller's `..`, not the
+/// root's, and silently redirecting it is worse than the subdirectory bug
+/// that made entering the root necessary.
+fn resolve_from_invocation_dir(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        return path.to_string();
+    }
+    match std::env::current_dir() {
+        Ok(dir) => dir.join(p).to_string_lossy().to_string(),
+        // Nothing to resolve against. The path stays as typed, which is what
+        // planr did before it entered the root at all.
+        Err(e) => {
+            eprintln!(
+                "warning: could not read the current directory ({e}); using '{path}' as \
+                 given, relative to wherever planr ends up running"
+            );
+            path.to_string()
+        }
+    }
+}
+
+/// The directory planr works from once it has entered the repository root.
+///
+/// Every command that shells out to git or takes a lock needs a directory to
+/// do it in, and after `enter_repo_root` that is the process directory. Ask
+/// for it by name rather than passing `.`, so that what a command prints back
+/// -- a worktree path, a ticket path -- resolves from anywhere, not only from
+/// the directory planr happens to have entered.
+fn work_dir() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    match cli.command {
+    // Before anything moves: a path from the command line belongs to the
+    // directory the caller ran planr in.
+    let command = match cli.command {
+        Command::Claim {
+            slug,
+            trunk_override,
+            worktree,
+            no_worktree,
+        } => Command::Claim {
+            slug,
+            trunk_override,
+            worktree: worktree.map(|w| {
+                if w.is_empty() {
+                    w
+                } else {
+                    resolve_from_invocation_dir(&w)
+                }
+            }),
+            no_worktree,
+        },
+        other => other,
+    };
+
+    // Every command works on the backlog at the repository root, so that no
+    // two of them can disagree about where it is.
+    enter_repo_root();
+    let cwd = work_dir();
+
+    match command {
         Command::Board { r#ref } => {
-            enter_repo_root();
             let source = board::source_status_line(r#ref.as_deref());
             let tickets = match r#ref {
                 Some(ref_) if !ref_.is_empty() => board::read_ref_tickets(&ref_, &cli.plan_dir),
@@ -255,9 +381,23 @@ fn main() {
             }
         }
         Command::Lint { r#ref } => {
-            enter_repo_root();
             let report = match r#ref {
-                Some(ref_) if !ref_.is_empty() => lint::lint_ref(&ref_, &cli.plan_dir),
+                Some(ref_) if !ref_.is_empty() => {
+                    let report = lint::lint_ref(&ref_, &cli.plan_dir);
+                    // The same certification the missing-directory warning
+                    // exists to prevent, one mode over: in ref mode there is
+                    // no directory to look at, so a typo'd --plan-dir or a
+                    // ref that predates the backlog produced an empty read
+                    // and a clean bill of health, exit code included.
+                    if report.tickets_read == 0 {
+                        eprintln!(
+                            "warning: no tickets under '{}' at '{}' -- there is no backlog \
+                             at that ref to lint; check --plan-dir and the ref",
+                            cli.plan_dir, ref_
+                        );
+                    }
+                    report
+                }
                 _ => {
                     warn_if_plan_dir_missing(&cli.plan_dir);
                     lint::lint_working_tree(&cli.plan_dir)
@@ -277,7 +417,6 @@ fn main() {
             title,
             parent_slug,
         } => {
-            enter_repo_root();
             match new_cmd::create_ticket(
                 &kind,
                 &slug,
@@ -286,7 +425,12 @@ fn main() {
                 &cli.plan_dir,
             ) {
                 Ok(relative_path) => {
-                    println!("{relative_path}");
+                    // Absolute, because the path is printed for the caller to
+                    // use and the caller is not necessarily standing at the
+                    // repository root. `$EDITOR $(planr new ...)` run from a
+                    // subdirectory took the repo-relative path at face value
+                    // and created a stray file under the subdirectory.
+                    println!("{}", cwd.join(&relative_path).display());
                     // Informational lint findings on stderr (never fails)
                     let findings = new_cmd::lint_findings(&cli.plan_dir);
                     if !findings.is_empty() {
@@ -312,7 +456,7 @@ fn main() {
             } else {
                 Some(worktree.unwrap_or_default())
             };
-            match claim::claim_task(&slug, trunk, &cli.plan_dir, wt, std::path::Path::new(".")) {
+            match claim::claim_task(&slug, trunk, &cli.plan_dir, wt, &cwd) {
                 Ok(out) => println!("{out}"),
                 Err(e) => fail(&e),
             }
@@ -332,38 +476,16 @@ fn main() {
                 Ok(m) => m,
                 Err(e) => fail(&e),
             };
-            match abandon::abandon_ticket(
-                &kind,
-                &slug,
-                &msg,
-                &cli.trunk,
-                &cli.plan_dir,
-                std::path::Path::new("."),
-            ) {
+            match abandon::abandon_ticket(&kind, &slug, &msg, &cli.trunk, &cli.plan_dir, &cwd) {
                 Ok(out) => println!("{out}"),
                 Err(e) => fail(&e),
             }
         }
         Command::Close { kind, slug } => {
             let result = match kind.as_str() {
-                "task" => close_cmd::close_task(
-                    &slug,
-                    &cli.trunk,
-                    &cli.plan_dir,
-                    std::path::Path::new("."),
-                ),
-                "story" => close_cmd::close_story(
-                    &slug,
-                    &cli.trunk,
-                    &cli.plan_dir,
-                    std::path::Path::new("."),
-                ),
-                "epic" => close_cmd::close_epic(
-                    &slug,
-                    &cli.trunk,
-                    &cli.plan_dir,
-                    std::path::Path::new("."),
-                ),
+                "task" => close_cmd::close_task(&slug, &cli.trunk, &cli.plan_dir, &cwd),
+                "story" => close_cmd::close_story(&slug, &cli.trunk, &cli.plan_dir, &cwd),
+                "epic" => close_cmd::close_epic(&slug, &cli.trunk, &cli.plan_dir, &cwd),
                 _ => Err(format!("unknown kind: {kind} (want task|story|epic)")),
             };
             match result {

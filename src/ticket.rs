@@ -63,6 +63,19 @@ pub struct ParsedTicket {
     /// field above then reads as absent, so consumers must report this rather
     /// than the fields it swallowed.
     pub frontmatter_error: Option<String>,
+    /// True when `id` above was not read from the file at all -- it was
+    /// synthesised from the filename because the frontmatter carried none.
+    ///
+    /// The slug is then a guess, however good a one: it is the name of a file
+    /// that may sit next to another file claiming the same slug for real. A
+    /// synthesised id is fine to *name* a ticket with, which is why the
+    /// readers fill it in, but it must never be treated as the ticket's own
+    /// identity -- notably, nothing keyed on it may shadow a ticket that
+    /// declared that slug itself.
+    pub id_from_filename: bool,
+    /// The file the ticket was read from, when it was read from one. Warnings
+    /// use it to tell two broken files of the same slug apart.
+    pub source_file: Option<String>,
 }
 
 /// Extract the slug from a ticket filename: strip the directory, the `.md`
@@ -152,6 +165,8 @@ pub fn parse_ticket(blob: &str) -> ParsedTicket {
         links,
         raw: split.body,
         frontmatter_error,
+        id_from_filename: false,
+        source_file: None,
     }
 }
 

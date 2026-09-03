@@ -41,21 +41,46 @@ fn pad_right(s: &str, width: usize) -> String {
     }
 }
 
-/// Build a lookup map: slug -> status (from every trunk ticket a table shows).
+/// Whether a ticket may answer the question "what is the status of <slug>?".
 ///
-/// A ticket the board cannot place contributes nothing. Its `status` is not a
-/// value read from a file: a failed parse reads as every field absent, so the
-/// ticket arrives carrying the default `todo`, and its id comes from the
-/// filename. Letting that into the map put a default status into the same
-/// namespace as real ones, last write winning, so a broken duplicate of a
-/// finished ticket overwrote its `done` -- and every task depending on it
-/// turned up BLOCKED-BY on the same screen where the ticket itself read
-/// `done`. Unknown is the honest answer, and `blocked_by` already treats an
-/// unknown dependency as unmet.
+/// Two things have to be true, and guarding either one alone leaves the other
+/// open. The ticket has to be one some table shows, because a status the
+/// reader cannot find a row for is not checkable; and the slug has to be the
+/// ticket's own, declared in its frontmatter, rather than one the reader
+/// synthesised from the filename. A synthesised slug is a guess about a file
+/// that may be sitting next to a real ticket claiming that slug, and the
+/// status attached to it is just as likely to be the parser's default `todo`
+/// as anything the author wrote.
+///
+/// Guarding on the kind alone was the mistake this replaces: a file with
+/// valid frontmatter, a real `kind` and no `id` passed it, re-entered the
+/// slug-to-status namespace under a name it had never claimed, and overwrote
+/// a real ticket's `done` -- silently, because every warning was keyed on the
+/// kind too.
+fn contributes_status(t: &ParsedTicket) -> bool {
+    t.kind.is_some() && !t.id_from_filename && !t.id.is_empty()
+}
+
+/// Build a lookup map: slug -> status, from the tickets entitled to answer
+/// for that slug.
+///
+/// A ticket that is not entitled contributes nothing, and neither does a slug
+/// two tickets both claim: the board cannot tell which of them the dependency
+/// column is asking about, and picking the one that happened to be read last
+/// is how a broken duplicate of a finished ticket overwrote its `done` -- with
+/// every task depending on it showing BLOCKED-BY on the same screen where the
+/// ticket itself read `done`. Unknown is the honest answer, and `blocked_by`
+/// already treats an unknown dependency as unmet.
 fn trunk_status_map(tickets: &[ParsedTicket]) -> std::collections::HashMap<String, String> {
-    let mut m = std::collections::HashMap::new();
-    for t in tickets.iter().filter(|t| t.kind.is_some()) {
-        m.insert(t.id.clone(), t.status.clone());
+    let mut m: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut contested: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for t in tickets.iter().filter(|t| contributes_status(t)) {
+        if m.insert(t.id.clone(), t.status.clone()).is_some() {
+            contested.insert(t.id.clone());
+        }
+    }
+    for slug in &contested {
+        m.remove(slug);
     }
     m
 }
@@ -198,38 +223,95 @@ fn render_in_flight(branches: &[BranchStatus]) -> String {
     out
 }
 
-/// Warnings about trunk tickets that no table can show.
+/// How a warning names one ticket: its slug, and the file it came from when
+/// the reader knows it.
 ///
-/// The three tables filter on `kind`, and the summary counts only what they
-/// show, so a ticket whose kind is missing or unrecognized -- including one
-/// whose frontmatter failed to parse, which reads as every field absent -- is
-/// rendered nowhere and counted nowhere. Counting it while showing it nowhere
-/// was wrong; letting it vanish without a word would be worse, so say the
-/// file exists and point at the command that explains it.
+/// Two broken files of the same slug otherwise produce two identical lines
+/// that tell the reader nothing about either.
+fn ticket_name(t: &ParsedTicket) -> String {
+    let slug = if t.id.is_empty() {
+        "(no id)"
+    } else {
+        t.id.as_str()
+    };
+    match &t.source_file {
+        Some(file) => format!("'{slug}' ({file})"),
+        None => format!("'{slug}'"),
+    }
+}
+
+/// Warnings about every trunk ticket the board declines to place, to count,
+/// or to take a status from.
+///
+/// There are three ways to fall short of a full row and each has to be said,
+/// because the board is silent about all of them otherwise and silence is
+/// what makes them dangerous. The three tables filter on `kind`, and the
+/// summary counts only what they show, so a ticket whose kind is missing or
+/// unrecognized -- including one whose frontmatter failed to parse, which
+/// reads as every field absent -- is rendered nowhere and counted nowhere. A
+/// ticket that carries no `id` of its own is shown and counted under a slug
+/// the reader synthesised from its filename, but it answers for no slug in
+/// the dependency column. And a slug two tickets both claim answers for
+/// nothing either, because the board cannot tell which of them it belongs to.
+///
+/// Keying these on the kind alone was how the last two went out in silence: a
+/// file with valid frontmatter, a real kind and no `id` passed every filter,
+/// shadowed a real ticket's `done`, and warned about nothing at all.
 pub fn ticket_warnings(trunk_tickets: &[ParsedTicket]) -> Vec<String> {
-    trunk_tickets
-        .iter()
-        .filter(|t| t.kind.is_none())
-        .map(|t| {
-            let name = if t.id.is_empty() {
-                "(no id)"
-            } else {
-                t.id.as_str()
-            };
-            if t.frontmatter_error.is_some() {
-                format!(
-                    "warning: ticket '{name}': frontmatter did not parse, so the board \
-                     cannot tell what kind it is -- it is shown in no table and counted \
-                     nowhere; run `planr lint`"
-                )
-            } else {
-                format!(
-                    "warning: ticket '{name}': no recognized kind (want epic, story, or \
-                     task) -- it is shown in no table and counted nowhere; run `planr lint`"
-                )
-            }
-        })
-        .collect()
+    let mut out: Vec<String> = Vec::new();
+    for t in trunk_tickets {
+        let name = ticket_name(t);
+        if t.frontmatter_error.is_some() {
+            out.push(format!(
+                "warning: ticket {name}: frontmatter did not parse, so the board cannot \
+                 tell what kind it is -- it is shown in no table, counted nowhere, and \
+                 answers for no slug; run `planr lint`"
+            ));
+        } else if t.kind.is_none() {
+            out.push(format!(
+                "warning: ticket {name}: no recognized kind (want epic, story, or task) \
+                 -- it is shown in no table, counted nowhere, and answers for no slug; \
+                 run `planr lint`"
+            ));
+        } else if t.id_from_filename {
+            let slug = &t.id;
+            out.push(format!(
+                "warning: ticket {name}: no id in its frontmatter, so the board named it \
+                 after its file -- it is shown and counted, but it is not the ticket \
+                 that answers for '{slug}' in the dependency column; run `planr lint`"
+            ));
+        }
+    }
+
+    // One line per contested slug, not one per ticket: the point is that the
+    // board cannot tell these tickets apart, so naming them together is the
+    // only description of the problem that is true.
+    let mut order: Vec<&str> = Vec::new();
+    let mut claimants: std::collections::HashMap<&str, Vec<String>> =
+        std::collections::HashMap::new();
+    for t in trunk_tickets.iter().filter(|t| contributes_status(t)) {
+        let entry = claimants.entry(t.id.as_str()).or_default();
+        if entry.is_empty() {
+            order.push(t.id.as_str());
+        }
+        entry.push(match &t.source_file {
+            Some(file) => file.clone(),
+            None => format!("ticket '{}'", t.id),
+        });
+    }
+    for slug in order {
+        let files = &claimants[slug];
+        if files.len() > 1 {
+            let n = files.len();
+            let list = files.join(", ");
+            out.push(format!(
+                "warning: {n} tickets claim the slug '{slug}' ({list}) -- the board \
+                 cannot tell which status belongs to it, so it takes none of them, and \
+                 a task that depends on '{slug}' reads as blocked; run `planr lint`"
+            ));
+        }
+    }
+    out
 }
 
 /// Warnings about `plan/*` branches the board could not take a status from.
@@ -256,13 +338,18 @@ pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]
         .filter(|t| t.kind == Some(Kind::Task))
         .map(|t| t.id.as_str())
         .collect();
-    // Slugs of tickets that are on trunk but unreadable. A failed parse
-    // swallows `kind` along with everything else, so these are missing from
-    // the set above for a reason that has nothing to do with the branch.
-    let unparsed_slugs: std::collections::HashSet<&str> = trunk_tickets
+    // Slugs of tickets that are on trunk but that the board could not place,
+    // and why. `kind` is what the tables filter on, so a ticket without one
+    // is missing from the set above for a reason that has nothing to do with
+    // the branch -- whether the kind was swallowed by a failed parse, absent
+    // because the file has no frontmatter at all, or simply not a kind planr
+    // recognizes. Keying this on the parse error covered one of the three and
+    // sent the other two to the arm below, which then said no ticket of that
+    // slug was read on the line after the one saying it was.
+    let unplaceable_slugs: std::collections::HashMap<&str, bool> = trunk_tickets
         .iter()
-        .filter(|t| t.frontmatter_error.is_some())
-        .map(|t| t.id.as_str())
+        .filter(|t| t.kind.is_none())
+        .map(|t| (t.id.as_str(), t.frontmatter_error.is_some()))
         .collect();
     // An empty list is not evidence that a particular ticket is absent from
     // it -- it is evidence that the board read no tickets at all.
@@ -291,13 +378,19 @@ pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]
         // there, in the tasks table, counted. Saying it "counts towards
         // nothing" would be false, and it swallowed the warning about the
         // branch that the reader can actually act on.
-        if !trunk_task_slugs.contains(b.slug.as_str())
-            && unparsed_slugs.contains(b.slug.as_str())
-        {
+        if let (false, Some(&unparsed)) = (
+            trunk_task_slugs.contains(b.slug.as_str()),
+            unplaceable_slugs.get(b.slug.as_str()),
+        ) {
+            let why = if unparsed {
+                "its frontmatter did not parse"
+            } else {
+                "it carries no recognized kind"
+            };
             Some(format!(
-                "warning: {}: the ticket for '{}' is present but its frontmatter did \
-                 not parse, so the board cannot place it -- the branch is listed but \
-                 counts towards nothing; run `planr lint`",
+                "warning: {}: the ticket for '{}' is present but {why}, so the board \
+                 cannot place it -- the branch is listed but counts towards nothing; \
+                 run `planr lint`",
                 b.branch, b.slug
             ))
         } else if read_any && !trunk_task_slugs.contains(b.slug.as_str()) {
@@ -545,12 +638,17 @@ pub fn source_status_line(ref_arg: Option<&str>) -> String {
 ///
 /// The filename is the last readable evidence of the slug, and `lint` already
 /// treats it as authoritative (it is an error for `id` to disagree with it).
-/// Nothing else is invented: the kind stays unknown, so no table shows a row
-/// the file does not support, and `trunk_status_map` takes no status from a
-/// ticket no table shows.
+/// Nothing else is invented, and the recovery is recorded rather than hidden:
+/// `id_from_filename` says the slug is the reader's guess and not the
+/// ticket's own claim, so nothing keyed on it can shadow a ticket that
+/// declared that slug for real. Widening the recovery without recording it
+/// re-opened exactly that hole one axis over -- a file with a real `kind` and
+/// no `id` took the slug of a finished ticket and overwrote its `done`.
 fn name_from_file(mut ticket: ParsedTicket, file: &str) -> ParsedTicket {
+    ticket.source_file = Some(file.to_string());
     if ticket.id.is_empty() {
         ticket.id = crate::ticket::slug_from_filename(file);
+        ticket.id_from_filename = true;
     }
     ticket
 }
@@ -718,6 +816,8 @@ mod tests {
             links: vec![],
             raw: String::new(),
             frontmatter_error: None,
+            id_from_filename: false,
+            source_file: None,
         }
     }
 
@@ -1127,6 +1227,7 @@ mod tests {
     fn unparsed(id: &str) -> ParsedTicket {
         let mut t = t(id, "none", None, "todo", vec![]);
         t.frontmatter_error = Some("mapping values are not allowed".to_string());
+        t.id_from_filename = true;
         t
     }
 
@@ -1241,49 +1342,136 @@ mod tests {
         );
     }
 
+    /// Every way a ticket can end up carrying a slug it never claimed.
+    ///
+    /// All three arrive at the same place -- an id synthesised from the
+    /// filename, next to a real ticket of that slug -- so a guard that
+    /// catches one of them and not the others is not a fix, it is a smaller
+    /// version of the same bug. Round 15 guarded the parse error; the file
+    /// with a real `kind` and no `id` walked straight through it, and the
+    /// tests written for the fix used only the variant the guard caught.
+    fn anonymous_variants() -> Vec<(&'static str, &'static str, &'static str)> {
+        vec![
+            (
+                "frontmatter that does not parse",
+                "---\nid: dep\nkind: task\ntitle: Dep: broken\n---\n",
+                ".plan/tasks/02-dep.md",
+            ),
+            (
+                "no frontmatter at all",
+                "# Dep notes\n\nnothing to see\n",
+                ".plan/tasks/02-dep.md",
+            ),
+            (
+                "valid frontmatter, a real kind, no id",
+                "---\nkind: task\nparent: s1\nstatus: todo\ntitle: Broken dup\n---\n",
+                ".plan/tasks/02-dep.md",
+            ),
+        ]
+    }
+
     #[test]
-    fn test_status_map_takes_nothing_from_a_ticket_no_table_shows() {
-        // A broken duplicate of a finished ticket arrives carrying the
-        // default `todo` and the id recovered from its filename. Letting that
-        // overwrite the real `done` turned every dependent task BLOCKED-BY on
-        // the same screen where the ticket itself read `done`.
+    fn test_status_map_takes_nothing_from_a_ticket_that_never_named_itself() {
+        // A duplicate of a finished ticket arrives carrying the id recovered
+        // from its filename and, in two of the three cases, the parser's
+        // default `todo`. Letting that overwrite the real `done` turned every
+        // dependent task BLOCKED-BY on the same screen where the ticket
+        // itself read `done`.
+        for (what, blob, file) in anonymous_variants() {
+            let tickets = vec![
+                t("dep", "task", Some("s1"), "done", vec![]),
+                name_from_file(crate::ticket::parse_ticket(blob), file),
+                t("user", "task", Some("s1"), "todo", vec!["dep"]),
+            ];
+            assert_eq!(tickets[1].id, "dep", "{what}: named after its file");
+            let input = BoardInput {
+                trunk_tickets: tickets,
+                branch_statuses: vec![],
+            };
+            let map = trunk_status_map(&input.trunk_tickets);
+            assert_eq!(
+                map.get("dep"),
+                Some(&"done".to_string()),
+                "{what}: the real ticket keeps its status: {map:?}"
+            );
+            assert_eq!(
+                blocked_by(&input.trunk_tickets[2], &map),
+                "",
+                "{what}: 'dep' is done, so 'user' is not blocked"
+            );
+
+            let out = render_board(&input);
+            let count = |label: &str| -> Option<String> {
+                out.lines()
+                    .find(|l| l.starts_with(label))
+                    .and_then(|l| l.split_whitespace().last().map(String::from))
+            };
+            assert_eq!(
+                count("blocked"),
+                Some("0".to_string()),
+                "{what}: nothing is blocked: {out}"
+            );
+
+            // And never in silence: the board says what it did with the file,
+            // whichever way the file was broken.
+            let warnings = ticket_warnings(&input.trunk_tickets);
+            assert!(
+                warnings.iter().any(|w| w.contains(".plan/tasks/02-dep.md")),
+                "{what}: the board must name the file it declined to trust: {warnings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_two_tickets_claiming_one_slug_answer_for_neither() {
+        // Both declared `id: dep`, so neither id is a guess -- and that is
+        // exactly why the board cannot pick between them. Taking the one read
+        // last is the same last-write-wins shadowing by another route.
+        let mut done = t("dep", "task", Some("s1"), "done", vec![]);
+        done.source_file = Some(".plan/tasks/01-dep.md".to_string());
+        let mut todo = t("dep", "task", Some("s1"), "todo", vec![]);
+        todo.source_file = Some(".plan/tasks/02-dep.md".to_string());
         let tickets = vec![
-            t("dep", "task", Some("s1"), "done", vec![]),
-            unparsed("dep"),
+            done,
+            todo,
             t("user", "task", Some("s1"), "todo", vec!["dep"]),
         ];
-        let input = BoardInput {
-            trunk_tickets: tickets,
-            branch_statuses: vec![],
-        };
-        let map = trunk_status_map(&input.trunk_tickets);
+
+        let map = trunk_status_map(&tickets);
         assert_eq!(
             map.get("dep"),
-            Some(&"done".to_string()),
-            "the real ticket keeps its status: {map:?}"
+            None,
+            "neither claimant answers for the contested slug: {map:?}"
         );
         assert_eq!(
-            blocked_by(&input.trunk_tickets[2], &map),
-            "",
-            "'dep' is done, so 'user' is not blocked"
+            blocked_by(&tickets[2], &map),
+            "dep",
+            "an unanswered dependency is unmet, which is the honest answer"
         );
+        let warnings = ticket_warnings(&tickets);
+        assert!(
+            warnings.iter().any(|w| {
+                w.contains("2 tickets claim the slug 'dep'")
+                    && w.contains(".plan/tasks/01-dep.md")
+                    && w.contains(".plan/tasks/02-dep.md")
+            }),
+            "the contested slug must be named, with both files: {warnings:?}"
+        );
+    }
 
-        let out = render_board(&input);
-        let count = |label: &str| -> Option<String> {
-            out.lines()
-                .find(|l| l.starts_with(label))
-                .and_then(|l| l.split_whitespace().last().map(String::from))
-        };
-        assert_eq!(
-            count("blocked"),
-            Some("0".to_string()),
-            "nothing is blocked: {out}"
-        );
-        assert_eq!(
-            count("todo"),
-            Some("1".to_string()),
-            "'user' is todo, not blocked: {out}"
-        );
+    #[test]
+    fn test_ticket_warnings_speak_for_every_anonymity_path() {
+        // The silent path was the one with a real kind: it passed the kind
+        // filter, so the kind-keyed warning never fired for it.
+        for (what, blob, file) in anonymous_variants() {
+            let ticket = name_from_file(crate::ticket::parse_ticket(blob), file);
+            let warnings = ticket_warnings(std::slice::from_ref(&ticket));
+            assert_eq!(warnings.len(), 1, "{what}: exactly one line: {warnings:?}");
+            assert!(
+                warnings[0].contains(file) && warnings[0].contains("planr lint"),
+                "{what}: name the file and point at lint: {warnings:?}"
+            );
+        }
     }
 
     #[test]
@@ -1297,18 +1485,72 @@ mod tests {
             ".plan/tasks/notes.md",
         );
         assert_eq!(no_front.id, "notes");
+        assert!(no_front.id_from_filename, "the slug is the reader's guess");
         let no_id = name_from_file(
             crate::ticket::parse_ticket("---\nkind: task\nstatus: todo\n---\n"),
             ".plan/tasks/02-scratch.md",
         );
         assert_eq!(no_id.id, "scratch");
+        assert!(no_id.id_from_filename, "the slug is the reader's guess");
+        let declared = name_from_file(
+            crate::ticket::parse_ticket("---\nid: real\nkind: task\nstatus: todo\n---\n"),
+            ".plan/tasks/03-real.md",
+        );
+        assert!(
+            !declared.id_from_filename,
+            "a ticket that named itself is not a guess"
+        );
 
-        let warnings = ticket_warnings(&[no_front, no_id]);
-        assert_eq!(warnings.len(), 1, "only the kind-less one: {warnings:?}");
+        let warnings = ticket_warnings(&[no_front, no_id, declared]);
+        assert_eq!(
+            warnings.len(),
+            2,
+            "one per ticket that arrived anonymous, and no more: {warnings:?}"
+        );
         assert!(
             warnings[0].contains("'notes'") && !warnings[0].contains("(no id)"),
             "the warning should name the file it came from: {warnings:?}"
         );
+        assert!(
+            warnings[1].contains("'scratch'") && warnings[1].contains("no id"),
+            "a real kind is no reason to stay quiet about a missing id: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_branch_warning_covers_every_ticket_the_board_could_not_place() {
+        // Keying this on the parse error alone contradicted the ticket
+        // warning printed on the line above it: the first said a ticket named
+        // 'foo' had been read, the second said no such ticket was among the
+        // tickets the board read.
+        for (what, blob) in [
+            ("no frontmatter at all", "# Foo notes\n"),
+            (
+                "frontmatter that does not parse",
+                "---\nid: foo\nkind: task\ntitle: Foo: broken\n---\n",
+            ),
+            ("an unrecognized kind", "---\nid: foo\nkind: chore\n---\n"),
+        ] {
+            let trunk = vec![name_from_file(
+                crate::ticket::parse_ticket(blob),
+                ".plan/tasks/01-foo.md",
+            )];
+            let branches = vec![BranchStatus {
+                branch: "plan/foo".to_string(),
+                status: "in_progress".to_string(),
+                slug: "foo".to_string(),
+            }];
+            let warnings = branch_warnings(&branches, &trunk);
+            assert_eq!(warnings.len(), 1, "{what}: one warning: {warnings:?}");
+            assert!(
+                warnings[0].contains("is present but"),
+                "{what}: the file is there, so say so: {warnings:?}"
+            );
+            assert!(
+                !warnings[0].contains("no task 'foo' among the tickets the board read"),
+                "{what}: the board did read it -- it could not place it: {warnings:?}"
+            );
+        }
     }
 
     #[test]

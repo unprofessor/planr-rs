@@ -45,6 +45,12 @@ pub struct LintReport {
     pub issues: Vec<LintIssue>,
     pub error_count: usize,
     pub warning_count: usize,
+    /// How many ticket files the report was built from.
+    ///
+    /// A clean report and a report about nothing render identically -- no
+    /// output, exit 0 -- so the count is the only thing that tells the caller
+    /// which one it is holding.
+    pub tickets_read: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +435,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
         issues,
         error_count,
         warning_count,
+        tickets_read: inputs.len(),
     }
 }
 
@@ -543,6 +550,8 @@ mod tests {
             links: vec![],
             raw: String::new(),
             frontmatter_error: None,
+            id_from_filename: false,
+            source_file: None,
         }
     }
 
@@ -847,6 +856,7 @@ mod tests {
             issues: vec![],
             error_count: 0,
             warning_count: 0,
+            tickets_read: 0,
         };
         assert_eq!(render_report(&r), "");
     }
@@ -861,6 +871,7 @@ mod tests {
             }],
             error_count: 1,
             warning_count: 0,
+            tickets_read: 1,
         };
         let out = render_report(&r);
         assert!(out.contains("error: f.md: err"));

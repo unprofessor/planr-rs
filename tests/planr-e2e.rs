@@ -2770,13 +2770,24 @@ fn test_e2e_new_and_board_agree_from_a_subdirectory() {
     std::fs::create_dir_all(&sub).unwrap();
 
     let created = planr_ok(&sub, &["new", "epic", "e1", "E1"]);
-    assert_eq!(
-        created, ".plan/epics/01-e1.md",
-        "the path is reported relative to the repository root"
+    // The path is printed for the caller to open, and the caller is standing
+    // in `sub`. A repo-relative path taken at face value there -- by
+    // `$EDITOR $(planr new ...)`, say -- made a stray file under `sub`.
+    assert!(
+        Path::new(&created).is_absolute(),
+        "the printed path must resolve from the caller's directory: {created}"
+    );
+    assert!(
+        sub.join(&created).exists(),
+        "the printed path must open from where planr was run: {created}"
     );
     assert!(
         td.path().join(".plan/epics/01-e1.md").exists(),
         "the ticket belongs to the repository's backlog, not the subdirectory's"
+    );
+    assert!(
+        !sub.join(".plan").exists(),
+        "and the printed path must not have made a second backlog under `sub`"
     );
     assert!(
         !sub.join(".plan").exists(),
@@ -2914,33 +2925,52 @@ fn test_e2e_a_broken_duplicate_does_not_block_a_satisfied_dependency() {
         ".plan/tasks/01-dep.md",
         "---\nid: dep\nkind: task\nparent: s1\nstatus: done\ntitle: Dep\n---\n",
     );
-    // A second file for the same slug whose frontmatter does not parse.
-    write_file(
-        td.path(),
-        ".plan/tasks/02-dep.md",
-        "---\nid: dep\nkind: task\ntitle: Dep: broken\n---\n",
-    );
     write_file(
         td.path(),
         ".plan/tasks/03-user.md",
         "---\nid: user\nkind: task\nparent: s1\nstatus: todo\ntitle: User\ndepends_on: [dep]\n---\n",
     );
 
-    let out = planr_ok(td.path(), &["board"]);
-    let user_row = out
-        .lines()
-        .find(|l| l.starts_with("user"))
-        .unwrap_or_else(|| panic!("no row for 'user': {out}"))
-        .to_string();
-    assert!(
-        !user_row.contains(" dep "),
-        "'dep' is done, so 'user' must not be BLOCKED-BY it: {user_row}"
-    );
-    assert!(
-        out.lines()
-            .any(|l| l.starts_with("blocked") && l.ends_with('0')),
-        "nothing is blocked: {out}"
-    );
+    // Every way a second file can end up carrying the slug `dep` without
+    // having claimed it. The parse error was the only one the first fix
+    // guarded, and the third walked straight through that guard: valid
+    // frontmatter, a real kind, no `id` -- so it passed the kind filter,
+    // took the finished ticket's slug, and overwrote its `done` in silence.
+    for (what, body) in [
+        (
+            "frontmatter that does not parse",
+            "---\nid: dep\nkind: task\ntitle: Dep: broken\n---\n",
+        ),
+        ("no frontmatter at all", "# Dep notes\n\nnothing to see\n"),
+        (
+            "valid frontmatter, a real kind, no id",
+            "---\nkind: task\nparent: s1\nstatus: todo\ntitle: Broken dup\n---\n",
+        ),
+    ] {
+        write_file(td.path(), ".plan/tasks/02-dep.md", body);
+
+        let (out, err) = planr_ok_both(td.path(), &["board"]);
+        let user_row = out
+            .lines()
+            .find(|l| l.starts_with("user"))
+            .unwrap_or_else(|| panic!("{what}: no row for 'user': {out}"))
+            .to_string();
+        assert!(
+            !user_row.contains(" dep "),
+            "{what}: 'dep' is done, so 'user' must not be BLOCKED-BY it: {user_row}"
+        );
+        assert!(
+            out.lines()
+                .any(|l| l.starts_with("blocked") && l.ends_with('0')),
+            "{what}: nothing is blocked: {out}"
+        );
+        // And the board says what it did with the file. Silence was the worst
+        // part of this: the parse-error variant at least warned.
+        assert!(
+            err.contains(".plan/tasks/02-dep.md"),
+            "{what}: the board must name the file it declined to trust: {err:?}"
+        );
+    }
 }
 
 /// A slug that is both a real trunk task and the recovered id of some
@@ -3033,5 +3063,236 @@ fn test_e2e_a_failed_git_toplevel_is_not_silent() {
     assert!(
         !quiet.contains("could not ask git"),
         "no repository here is normal, not a failure: {quiet}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: one answer to where the backlog is
+// ---------------------------------------------------------------------------
+
+/// `board` and `new` agreeing about the backlog while `claim`, `close` and
+/// `review` disagreed was not half a fix, it was a relocated split -- and the
+/// half that was left over stated something untrue. Run from a subdirectory,
+/// `planr claim t1` failed with "no task file for slug 't1' on main" about a
+/// file committed on main at `.plan/tasks/01-t1.md`.
+#[test]
+fn test_e2e_every_command_uses_the_backlog_at_the_repository_root() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    let sub = td.path().join("src/deep");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    // review reads the task file for a branch that does not exist yet, so it
+    // fails either way -- but it must fail about the branch, not about a file
+    // that is sitting on trunk.
+    let review_err = planr_err(&sub, &["review", "t1"]);
+    assert!(
+        !review_err.contains("no task file"),
+        "review from a subdirectory must find the trunk file: {review_err}"
+    );
+
+    // claim is the one command that was deliberately left behind.
+    let printed = planr_ok(&sub, &["claim", "t1"]);
+    assert!(
+        Path::new(&printed).is_absolute() && Path::new(&printed).is_dir(),
+        "claim must print a worktree path the caller can use: {printed}"
+    );
+    assert!(
+        td.path().join(".plan/worktrees/wt-t1").is_dir(),
+        "the worktree belongs to the repository's plan directory: {printed}"
+    );
+
+    // close now gets far enough to refuse for the real reason: the task is
+    // in_progress, not review. Before, it refused for a false one.
+    let close_err = planr_err(&sub, &["close", "task", "t1"]);
+    assert!(
+        !close_err.contains("no task file"),
+        "close from a subdirectory must find the branch's file: {close_err}"
+    );
+    assert!(
+        close_err.contains("must be 'review'"),
+        "close should refuse on the status it read: {close_err}"
+    );
+}
+
+/// The one thing that must not move to the root with everything else: a path
+/// the caller typed. `--worktree ../wt` means the caller's `..`, and resolving
+/// it at the root instead would put the worktree somewhere they never named.
+#[test]
+fn test_e2e_claim_resolves_a_relative_worktree_against_the_callers_directory() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    let sub = td.path().join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let printed = planr_ok(&sub, &["claim", "t1", "--worktree", "wt"]);
+    assert!(
+        sub.join("wt").is_dir(),
+        "the worktree belongs where the caller pointed: printed {printed}, \
+         root has {}",
+        td.path().join("wt").exists()
+    );
+    assert!(
+        !td.path().join("wt").exists(),
+        "and not at the repository root"
+    );
+    assert!(
+        git_ignored(td.path(), "sub/wt"),
+        "the worktree still has to be hidden from trunk: {}",
+        read_exclude(td.path())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: reading git's own messages
+// ---------------------------------------------------------------------------
+
+/// planr tells "there is no repository here" from a real git failure by
+/// matching git's wording, so the child has to be pinned to a locale whose
+/// wording planr knows. Left to the environment, every ordinary run outside a
+/// repository under a translated locale warned that planr could not ask git
+/// where the repository was -- exactly the noise the match exists to avoid.
+///
+/// The locale is pinned on the child here rather than assumed of the runner:
+/// a `git` stub answers in French unless it was run under `LC_ALL=C`, so the
+/// test says the same thing on a machine with no French locale installed.
+#[cfg(unix)]
+#[test]
+fn test_e2e_outside_a_repository_is_quiet_under_a_translated_locale() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempfile::tempdir().unwrap();
+    let bin = td.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("git");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\n\
+         if [ \"$1 $2\" = \"rev-parse --show-toplevel\" ] && [ \"$LC_ALL\" != C ]; then\n\
+         \techo \"fatal : ni ceci ni aucun de ses repertoires parents n est un depot git : .git\" >&2\n\
+         \texit 128\n\
+         fi\n\
+         echo \"fatal: not a git repository (or any of the parent directories): .git\" >&2\n\
+         exit 128\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let plain = td.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    for locale in ["fr_FR.UTF-8", "de_DE.UTF-8"] {
+        let out = Command::cargo_bin("planr")
+            .unwrap()
+            .args(["board"])
+            .current_dir(&plain)
+            .env("PATH", &path)
+            .env("LC_ALL", locale)
+            .env("LANGUAGE", "fr")
+            .output()
+            .unwrap();
+        let err = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            !err.contains("could not ask git for the repository root"),
+            "LC_ALL={locale}: being outside a repository is ordinary: {err}"
+        );
+        assert!(
+            err.contains("no plan directory"),
+            "LC_ALL={locale}: planr should still have run: {err}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: a plan directory that cannot be read is not an empty one
+// ---------------------------------------------------------------------------
+
+/// `Path::exists` answers true for a plan directory planr cannot open, and
+/// every reader below treats an I/O error as an empty directory, so a backlog
+/// that could not be read came out byte-identical to a clean one: `lint` exit
+/// 0, no stdout, no stderr. That is the fail-open direction, on the same
+/// `Path::exists` this branch has already had to correct twice elsewhere.
+#[test]
+fn test_e2e_an_unreadable_plan_directory_is_not_a_clean_bill_of_health() {
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    std::fs::remove_dir_all(td.path().join(".plan")).unwrap();
+    // A plain file where the backlog should be: no permissions involved, so
+    // this case reads the same for every user, root included.
+    std::fs::write(td.path().join(".plan"), "not a directory\n").unwrap();
+
+    let (out, err) = planr_ok_both(td.path(), &["lint"]);
+    assert!(out.is_empty(), "there was no backlog to report on: {out}");
+    assert!(
+        err.contains("could not read the plan directory"),
+        "lint must not certify a backlog it could not open: {err:?}"
+    );
+    let (_, board_err) = planr_ok_both(td.path(), &["board"]);
+    assert!(
+        board_err.contains("could not read the plan directory"),
+        "board reads the same directory and owes the same warning: {board_err:?}"
+    );
+}
+
+/// The same fact one level down: one unreadable `tasks/` hides every task in
+/// the backlog just as quietly as an unreadable `.plan` hides all of it.
+#[cfg(unix)]
+#[test]
+fn test_e2e_an_unreadable_kind_directory_is_reported() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    let tasks = td.path().join(".plan/tasks");
+    std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let readable_anyway = std::fs::read_dir(&tasks).is_ok();
+    let (_, err) = planr_ok_both(td.path(), &["lint"]);
+    std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    if readable_anyway {
+        // Running as root: the permissions did not stop the read, so there is
+        // nothing to warn about and nothing this test can check.
+        return;
+    }
+    assert!(
+        err.contains(".plan/tasks"),
+        "the directory whose tickets went missing must be named: {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: lint in ref mode
+// ---------------------------------------------------------------------------
+
+/// `lint` prints nothing for a clean backlog, so an empty read is
+/// byte-identical to a clean bill of health -- and in ref mode there is no
+/// directory for the missing-directory warning to look at. A typo'd
+/// `--plan-dir` therefore certified a backlog `lint` had never opened, which
+/// is the defect that warning exists to prevent, one mode over.
+#[test]
+fn test_e2e_lint_says_so_when_a_ref_holds_no_backlog() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let (out, err) = planr_ok_both(td.path(), &["-D", "typo", "lint", "main"]);
+    assert!(
+        out.is_empty(),
+        "nothing was read, so nothing to report: {out}"
+    );
+    assert!(
+        err.contains("no tickets under 'typo' at 'main'"),
+        "lint must not certify a ref it read nothing from: {err:?}"
+    );
+
+    // The real plan directory at the same ref is not warned about.
+    let (_, clean_err) = planr_ok_both(td.path(), &["lint", "main"]);
+    assert!(
+        !clean_err.contains("no tickets under"),
+        "a backlog that was read must not be reported as absent: {clean_err:?}"
     );
 }
