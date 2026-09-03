@@ -96,10 +96,38 @@ pub fn parse_ticket(slug: &str, blob: &str) -> Result<Ticket, String> {
 
 /// Current state of a ticket, plus which enumeration strategy answered.
 pub fn state_of(ctx: &Ctx, slug: &str) -> Result<(String, &'static str, usize), String> {
-    let ticket = read_ticket(ctx, &ctx.trunk, slug)?;
+    let ticket = read_ticket_or_archived(ctx, slug)?;
     let (evs, how) = events::for_ticket(slug, &ticket.kind, &ctx.trunk)?;
     let state = fold::fold_state(&ctx.schema, &ticket.kind, &evs)?;
     Ok((state, how, evs.len()))
+}
+
+/// Read a ticket from trunk, falling back to the last commit that still had
+/// it.
+///
+/// Folding needs the KIND, because the kind selects the sub-machine -- and the
+/// kind lives in the file that `archive` deletes. Enumeration survives
+/// archival (trailers are in the messages), so without this the events are
+/// still there but nothing can interpret them.
+///
+/// The pathspec is safe here in a way it is NOT for enumeration: an archived
+/// ticket's file was demonstrably created and deleted, so it touches the path.
+/// The lookup only runs on the miss, so a live ticket pays nothing.
+fn read_ticket_or_archived(ctx: &Ctx, slug: &str) -> Result<Ticket, String> {
+    let path = ctx.ticket_path(slug);
+    // Present-but-invalid is NOT a miss: a ticket carrying a stored `status`
+    // must report that, not be silently searched for in history and then
+    // reported as never having existed.
+    if let Ok(blob) = git::show(&ctx.trunk, &path) {
+        return parse_ticket(slug, &blob);
+    }
+    let removed = git::log_raw(&["-1", "--format=%H", &ctx.trunk, "--", &path])
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| format!("no ticket '{slug}', now or in history"))?;
+    let blob = git::show(&format!("{}~1", removed.trim()), &path)
+        .map_err(|_| format!("no ticket '{slug}', now or in history"))?;
+    parse_ticket(slug, &blob)
 }
 
 fn state_at(ctx: &Ctx, slug: &str, kind: &str) -> Result<String, String> {
@@ -193,24 +221,36 @@ fn check_require(ctx: &Ctx, verb: &Verb, ticket: &Ticket, base_ref: &str) -> Res
     Ok(())
 }
 
+/// The tickets naming `slug` as their parent.
+///
+/// The edge is stored once, on the child, so finding children means reading
+/// every ticket's frontmatter. That is O(T) blobs but must not be O(T)
+/// processes: one `ls-tree` and one `cat-file --batch`, the same shape board
+/// uses. A ticket whose frontmatter does not parse is skipped rather than
+/// fatal -- one malformed ticket should not make a parent unreadable.
 fn children_of(ctx: &Ctx, slug: &str) -> Result<Vec<String>, String> {
     let dir = format!("{}/tickets", ctx.plan_dir);
-    let listing = git::log_raw(&["-0"]).ok(); // keep git warm; ignored
-    let _ = listing;
     let files = crate::git::ls_tree_md(&ctx.trunk, &dir)?;
+
+    let stems: Vec<String> = files
+        .iter()
+        .filter_map(|f| {
+            PathBuf::from(f)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(String::from)
+        })
+        .collect();
+    let specs: Vec<String> = files.iter().map(|f| format!("{}:{f}", ctx.trunk)).collect();
+    let blobs = git::cat_file_batch(&specs)?;
+
     let mut out = Vec::new();
-    for f in files {
-        let Some(stem) = PathBuf::from(&f)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-        else {
-            continue;
-        };
+    for (stem, blob) in stems.into_iter().zip(blobs) {
         if stem == slug {
             continue;
         }
-        if let Ok(t) = read_ticket(ctx, &ctx.trunk, &stem) {
+        let Some(blob) = blob else { continue };
+        if let Ok(t) = parse_ticket(&stem, &blob) {
             if t.fm.get("parent").map(|p| p == slug).unwrap_or(false) {
                 out.push(stem);
             }
@@ -346,9 +386,15 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
                 "refuse {verb_name}: '{slug}' is '{current}', not '{from}'"
             ));
         }
-    } else {
+    } else if !verb.require.self_.contains_key("status") {
         // from-less verbs are the "any non-terminal state" case; the absorbing
         // rule keeps them from firing on an already-terminal ticket.
+        //
+        // Unless the verb states its own status precondition, in which case
+        // the explicit rule wins. `archive` is exactly that: from-less, and
+        // `require: { self: { status: terminal } }`. The implicit rule made it
+        // contradict itself and it could never fire -- which is also why the
+        // archived read path went unexercised for so long.
         if fold::terminal_states(&ctx.schema, &kind).contains(&current) {
             return Err(format!(
                 "refuse {verb_name}: '{slug}' is already '{current}' (terminal)"
