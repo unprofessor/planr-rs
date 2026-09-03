@@ -65,6 +65,28 @@ pub struct ParsedTicket {
     pub frontmatter_error: Option<String>,
 }
 
+/// Extract the slug from a ticket filename: strip the directory, the `.md`
+/// suffix, and the `NN-` sort-hint prefix.
+///
+/// The filename is the one piece of a ticket that is still readable when the
+/// frontmatter is not, so both `lint` and `board` fall back to it to name a
+/// file they could not parse.
+pub fn slug_from_filename(file: &str) -> String {
+    let base = std::path::Path::new(file)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let no_md = base.strip_suffix(".md").unwrap_or(base);
+    // Strip a leading NN- prefix: "01-foo" -> "foo", "foo" -> "foo".
+    if let Some(hyphen_at) = no_md.find('-') {
+        let prefix = &no_md[..hyphen_at];
+        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+            return no_md[hyphen_at + 1..].to_string();
+        }
+    }
+    no_md.to_string()
+}
+
 /// Parse a complete ticket blob (frontmatter + body) into a `ParsedTicket`.
 pub fn parse_ticket(blob: &str) -> ParsedTicket {
     let split = split_frontmatter(blob);

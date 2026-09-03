@@ -4,7 +4,6 @@
 //! returns issues); the CLI I/O (working tree scan, ref scan) is separate.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use crate::git;
 use crate::ticket::{Kind, ParsedTicket};
@@ -66,25 +65,6 @@ fn dir_kind_from_path(file: &str) -> Option<&'static str> {
     }
 }
 
-/// Extract the slug from a filename: strip the directory, `.md` suffix, and
-/// the `NN-` sort-hint prefix.
-fn slug_from_filename(file: &str) -> String {
-    let base = Path::new(file)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    let no_md = base.strip_suffix(".md").unwrap_or(base);
-    // Strip leading NN- prefix (TS equivalent: replace(/^\d+-/, ''))
-    // e.g. "01-foo" -> "foo", "foo" -> "foo"
-    if let Some(hyphen_at) = no_md.find('-') {
-        let prefix = &no_md[..hyphen_at];
-        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
-            return no_md[hyphen_at + 1..].to_string();
-        }
-    }
-    no_md.to_string()
-}
-
 #[allow(dead_code)]
 fn escape_regex(s: &str) -> String {
     regex::escape(s)
@@ -132,7 +112,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
         let ticket = &input.ticket;
 
         let dir_kind = dir_kind_from_path(file);
-        let fslug = slug_from_filename(file);
+        let fslug = crate::ticket::slug_from_filename(file);
 
         // Frontmatter that failed to parse reads as every-field-missing, so
         // the per-file checks below would all fire on fields that are in fact

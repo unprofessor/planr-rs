@@ -471,13 +471,23 @@ pub fn worktrees_under(path: &Path, cwd: &Path) -> Result<Vec<PathBuf>, String> 
 /// `<plan-dir>/worktrees/` parent -- and drop anything else planr owns. Only
 /// planr's own block is touched; a rule the user wrote is not planr's to
 /// prune.
+///
+/// Every way this can fail leaves the rules in place, which is the safe
+/// direction -- a rule kept too long is tidiness, a rule dropped too early
+/// unhides a live worktree. Keeping them quietly is not safe, though: what
+/// stays behind hides whatever is created at that path and leaves no trace in
+/// `git status`, so nothing else would ever point at it. Say so on stderr,
+/// naming what could not be done and why, and let the command that asked for
+/// the prune carry on -- the prune is never what it was asked to do.
 pub fn exclude_prune(cwd: &Path) {
     let _lock = match crate::lock::PlanrLock::exclude(cwd) {
         Ok(l) => l,
-        Err(_) => return,
+        Err(e) => return warn_prune_failed(&format!("lock error: {e}")),
     };
-    let Ok(roots) = worktree_roots(cwd) else {
-        return; // fail closed: keep every rule rather than guess
+    let roots = match worktree_roots(cwd) {
+        Ok(r) => r,
+        // fail closed: keep every rule rather than guess
+        Err(e) => return warn_prune_failed(&e),
     };
 
     let mut needed: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -495,9 +505,17 @@ pub fn exclude_prune(cwd: &Path) {
         }
     }
 
-    let Ok(path) = exclude_file(cwd) else { return };
-    let Ok(existing) = std::fs::read_to_string(&path) else {
-        return;
+    let path = match exclude_file(cwd) {
+        Ok(p) => p,
+        Err(e) => return warn_prune_failed(&e),
+    };
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        // No exclude file is not a failure: there is nothing to prune, and
+        // that much the code did establish. Any other read error means rules
+        // may be sitting there unread.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => return warn_prune_failed(&format!("cannot read {}: {e}", path.display())),
     };
     let (before, block, after) = split_planr_block(&existing);
     let kept: Vec<&str> = block
@@ -520,8 +538,18 @@ pub fn exclude_prune(cwd: &Path) {
     }
     out.extend_from_slice(&after);
     if let Err(e) = write_lines(&path, &out) {
-        eprintln!("warning: could not prune stale local ignore rules ({e})");
+        warn_prune_failed(&e);
     }
+}
+
+/// One wording for every way `exclude_prune` can fail, since every one of them
+/// leaves the same thing behind.
+fn warn_prune_failed(reason: &str) {
+    eprintln!(
+        "warning: could not prune stale local ignore rules ({reason}); \
+         a rule left behind may still hide files created at that path -- \
+         check .git/info/exclude"
+    );
 }
 
 /// Drop the ignore rule for `target`, reporting a failure rather than

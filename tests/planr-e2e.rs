@@ -393,6 +393,109 @@ fn test_e2e_board_defaults_to_working_tree() {
     );
 }
 
+/// The backlog lives at the repository root, and planr resolves `--plan-dir`
+/// relative to it -- but every reader used to open that path relative to the
+/// process directory. Run from a subdirectory, `board` read no tickets at
+/// all: it rendered empty tables and warned that every in-flight branch named
+/// a task that is not on trunk, about tickets that were committed and
+/// present. `lint` was worse: it reported a clean backlog it had never
+/// opened.
+#[test]
+fn test_e2e_board_and_lint_read_the_backlog_from_a_subdirectory() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    // A dangling dependency, so lint has something to find.
+    let t1 = td.path().join(t1_path_of(td.path()));
+    let body = std::fs::read_to_string(&t1).unwrap();
+    std::fs::write(&t1, body.replace("depends_on: []", "depends_on: [ghost]")).unwrap();
+
+    let sub = td.path().join("src/deep");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let (root_board, _) = planr_ok_both(td.path(), &["board"]);
+    let (sub_board, sub_err) = planr_ok_both(&sub, &["board"]);
+    assert!(
+        sub_board.contains("## tasks") && sub_board.lines().any(|l| l.starts_with("t1")),
+        "the board from a subdirectory must show the backlog: {sub_board}"
+    );
+    // Identical but for the source header, which names the same repo root.
+    assert_eq!(
+        sub_board.split("## tasks").nth(1),
+        root_board.split("## tasks").nth(1),
+        "same repo, same board: sub={sub_board} root={root_board}"
+    );
+    assert!(
+        sub_err.is_empty(),
+        "nothing is wrong with this backlog's branches: {sub_err}"
+    );
+
+    let sub_lint = planr(&sub, &["lint"]);
+    assert!(
+        !sub_lint.status.success(),
+        "lint from a subdirectory must not certify a backlog it never read"
+    );
+    let sub_lint_out = String::from_utf8(sub_lint.stdout).unwrap();
+    assert!(
+        sub_lint_out.contains("ghost"),
+        "lint from a subdirectory should find the dangling dep: {sub_lint_out}"
+    );
+}
+
+/// A task whose frontmatter does not parse is absent from the board's
+/// kind-filtered slug set even though the file is committed and sitting right
+/// where the reader left it. The board used to report its branch as naming a
+/// task that was "renamed or not committed" -- a cause it had not
+/// established, about a file nobody had touched.
+#[test]
+fn test_e2e_board_does_not_call_a_committed_ticket_missing() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    // Break t1's frontmatter with an unquoted colon, and give it a branch.
+    let t1 = td.path().join(t1_path_of(td.path()));
+    let body = std::fs::read_to_string(&t1).unwrap();
+    std::fs::write(
+        &t1,
+        body.replace("title: Task One", "title: Task One: broken"),
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["commit", "-am", "break t1"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["branch", "plan/t1"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    let (out, err) = planr_ok_both(td.path(), &["board"]);
+    assert!(
+        !err.contains("no task 't1'") && !err.contains("not committed"),
+        "the file is committed and present: stderr={err}"
+    );
+    assert!(
+        err.contains("plan/t1") && err.contains("frontmatter did not parse"),
+        "the branch warning should name the cause the board can establish: stderr={err}"
+    );
+    assert!(
+        err.contains("ticket 't1'"),
+        "the ticket shown in no table should be named: stderr={err}"
+    );
+
+    // Shown nowhere means counted nowhere: e1 and s1 are the only rows.
+    let total = out
+        .lines()
+        .find(|l| l.starts_with("total"))
+        .and_then(|l| l.split_whitespace().last().map(String::from));
+    assert_eq!(
+        total,
+        Some("2".to_string()),
+        "only the two rendered tickets may count: {out}"
+    );
+}
+
 /// Read the first output line of `planr board [args]` -- the source header.
 fn board_header(dir: &Path, args: &[&str]) -> String {
     let out = planr(dir, args);
@@ -1312,6 +1415,54 @@ fn git_ignored(dir: &Path, path: &str) -> bool {
         .unwrap()
         .status
         .success()
+}
+
+/// Every path out of the prune leaves the rules in place, which is right --
+/// but silence is not. What stays behind hides whatever is created at that
+/// path and leaves no trace in `git status`, so unless the prune says it
+/// failed, nothing ever points at the rule. `planr abandon` used to exit 0
+/// with an empty stderr and the stale rule still sitting there.
+#[test]
+#[cfg(unix)]
+fn test_e2e_abandon_warns_when_it_cannot_prune_ignore_rules() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    // A planr rule for a worktree that no longer exists: exactly what the
+    // prune is there to remove.
+    let exclude = td.path().join(".git/info/exclude");
+    std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+    let stale = "# planr worktrees -- checkouts, not backlog content\n/.plan/worktrees/t1/\n\n";
+    std::fs::write(&exclude, stale).unwrap();
+    std::fs::set_permissions(&exclude, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_to_string(&exclude).is_ok() {
+        // Running as root, or on a filesystem that ignores the mode: the
+        // prune would succeed and there would be nothing to report.
+        return;
+    }
+
+    let (out, err) = planr_ok_both(td.path(), &["abandon", "task", "t1", "OBE"]);
+    assert!(
+        out.contains("abandoned task t1"),
+        "abandon should still do its own job: {out}"
+    );
+    assert!(
+        err.contains("could not prune stale local ignore rules"),
+        "a prune that failed must say so: stderr={err}"
+    );
+    assert!(
+        err.contains(".git/info/exclude"),
+        "the warning should point at the file to check: stderr={err}"
+    );
+
+    std::fs::set_permissions(&exclude, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        read_exclude(td.path()),
+        stale,
+        "the rule is kept, not silently dropped"
+    );
 }
 
 /// A claim that fails must leave no ignore rule behind. The rule used to be

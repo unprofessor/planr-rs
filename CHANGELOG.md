@@ -20,21 +20,59 @@
 
 ### Fixed
 
-- **The board summary counts only the branches the board actually shows.**
-  A `plan/*` branch whose slug names no task on trunk -- the ticket was
-  renamed, or was never committed there -- appears in no table, yet it still
-  added one to `total` and one to a status bucket. The rows and the summary
-  therefore disagreed, with nothing on the page to say which was right. It is
-  the mirror image of the branches this release stopped dropping from the
-  counts, and reads just as wrong.
+- **The board summary counts only what a ticket table shows.** A `plan/*`
+  branch whose slug names no task on trunk is listed in the in-flight table,
+  but the tasks table is built from trunk, so no row there describes it --
+  and yet it still added one to `total` and one to a status bucket. A ticket
+  whose `kind` is missing or unrecognized was counted the same way, and all
+  three tables filter on `kind`, so it appeared in none of them: three rows
+  against a total of four, with nothing on the page to say which was right.
+  Both now count only if some ticket table shows them. It is the mirror image
+  of the branches this release stopped dropping from the counts, and read
+  just as wrong.
+
+- **A ticket no table can show is named on stderr.** Being counted oddly was
+  wrong, but vanishing from the board entirely is worse: a ticket the reader
+  cannot see anywhere has no way of getting fixed. `planr board` now warns
+  for each ticket it cannot place -- naming it, saying whether its `kind` is
+  unrecognized or its frontmatter failed to parse, and pointing at `planr
+  lint`, which explains the file in full.
 
 - **A branch whose task is not on trunk is called out by name.** Such a
   branch is listed in flight and counts towards nothing, so on its own the
   fix above would have made it silently absent from the summary. The branch
-  scan now warns on stderr that no task of that slug exists on trunk --
-  renamed, or not committed -- and that the branch counts towards nothing, so
-  the gap between the in-flight table and the totals is explained rather than
-  merely correct.
+  scan now warns on stderr that no task of that slug is among the tickets the
+  board read, and that the branch counts towards nothing, so the gap between
+  the in-flight table and the totals is explained rather than merely correct.
+
+- **The board no longer reports a present ticket as missing.** That warning
+  fired whenever a branch's slug was absent from the board's list of trunk
+  tasks, and blamed a cause it had not established: "renamed or not
+  committed". A ticket whose frontmatter fails to parse reads as every field
+  absent, `kind` included, so it drops out of that list while its file sits
+  committed and unmoved -- and the reader was sent hunting for it. The board
+  now says what it can establish: that the ticket is there and did not parse.
+  A list that came back empty says nothing about any individual slug either,
+  so it no longer produces one such warning per branch.
+
+- **`planr board` and `planr lint` read the backlog from a subdirectory.**
+  A relative `--plan-dir` (the default `.plan`) is relative to the repository,
+  but both commands opened it relative to the directory they were run from.
+  From anywhere but the root they therefore read nothing and said so in the
+  worst possible way: the board rendered empty tables and warned that every
+  in-flight branch named a task that was not on trunk, and `lint` printed a
+  clean bill of health for a backlog it had never opened, exiting 0. Both now
+  read from the repository root.
+
+- **A prune that cannot drop planr's stale ignore rules says so.** Four of
+  the five ways `exclude_prune` can fail returned in silence -- an exclude
+  file that could not be locked, listed, opened, or read. Keeping the rules
+  is the right direction, but each silent path left behind exactly the
+  artefact the prune exists to remove: a rule that hides whatever is created
+  at that path, invisible in `git status`, with nothing anywhere to point at
+  it. `planr abandon` would report success with an empty stderr. Every path
+  now warns, naming what could not be done and why, and still completes the
+  command it was asked to run.
 
 - **`planr abandon` takes the abandoned task's ignore rule with it.**
   Abandon refuses until the branch and worktree have been cleaned up by hand,

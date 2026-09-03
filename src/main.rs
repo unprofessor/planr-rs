@@ -156,11 +156,38 @@ enum Command {
     },
 }
 
+/// Read the backlog from the repository root, wherever planr was invoked.
+///
+/// A relative `--plan-dir` (the default `.plan`) is relative to the
+/// repository, but every reader opens it relative to the process directory
+/// and passes it to git as a pathspec, which git resolves the same way. Run
+/// from a subdirectory, `planr board` and `planr lint` therefore read no
+/// tickets at all and said nothing about it: the board rendered empty tables,
+/// warned that every in-flight branch had no task on trunk, and `lint`
+/// reported a clean backlog it had never opened. Both are read-only, and
+/// neither takes a path from the user, so entering the root before reading
+/// changes nothing else about them.
+///
+/// Outside a git repository there is no root to enter; the working-tree
+/// readers still work relative to the current directory, as before.
+fn enter_repo_root() {
+    let Ok(root) = git::show_toplevel() else {
+        return;
+    };
+    if let Err(e) = std::env::set_current_dir(&root) {
+        eprintln!(
+            "warning: could not enter the repository root {root} ({e}); \
+             reading the plan directory relative to the current directory instead"
+        );
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
         Command::Board { r#ref } => {
+            enter_repo_root();
             let source = board::source_status_line(r#ref.as_deref());
             let tickets = match r#ref {
                 Some(ref_) if !ref_.is_empty() => board::read_ref_tickets(&ref_, &cli.plan_dir),
@@ -169,6 +196,9 @@ fn main() {
             let branches = board::read_in_flight_branches(&cli.plan_dir);
             // Warnings go to stderr so the board on stdout stays a clean,
             // parseable document.
+            for w in board::ticket_warnings(&tickets) {
+                eprintln!("{w}");
+            }
             for w in board::branch_warnings(&branches, &tickets) {
                 eprintln!("{w}");
             }
@@ -183,6 +213,7 @@ fn main() {
             }
         }
         Command::Lint { r#ref } => {
+            enter_repo_root();
             let report = match r#ref {
                 Some(ref_) if !ref_.is_empty() => lint::lint_ref(&ref_, &cli.plan_dir),
                 _ => lint::lint_working_tree(&cli.plan_dir),
