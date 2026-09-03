@@ -2505,3 +2505,78 @@ fn test_e2e_dropping_a_stale_record_warns() {
         "dropping a record must be reported, with the volume caveat: {stderr:?}"
     );
 }
+
+/// `abandon` refuses until the branch and worktree are cleaned up by hand, so
+/// it never learns the worktree path and cannot remove that rule by name --
+/// and `close`, which normally removes it, never runs for an abandoned task.
+/// The rule outlived everything that referred to it and went on hiding
+/// whatever was created at that path, with nothing in `git status` to say so.
+/// A rule a live worktree still justifies must survive the same pass.
+#[test]
+fn test_e2e_abandon_prunes_the_stale_ignore_rule() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
+    Command::new("git")
+        .args(["add", ".plan"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "add t2"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    planr_ok(td.path(), &["claim", "t1", "--worktree", "wt-t1"]);
+    planr_ok(td.path(), &["claim", "t2", "--worktree", "wt-t2"]);
+    let exclude = read_exclude(td.path());
+    assert!(
+        exclude.contains("/wt-t1/") && exclude.contains("/wt-t2/"),
+        "both claims should have written a rule: {exclude:?}"
+    );
+
+    // What abandon demands before it will run: the branch and the worktree
+    // gone. Doing that by hand is the only way, and it is what loses the path.
+    Command::new("git")
+        .args(["worktree", "remove", "--force", "wt-t1"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["branch", "-D", "plan/t1"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    planr_ok(td.path(), &["abandon", "task", "t1", "wont-do -- OBE"]);
+
+    let exclude = read_exclude(td.path());
+    assert!(
+        !exclude.contains("/wt-t1/"),
+        "the rule for the gone worktree must be pruned: {exclude:?}"
+    );
+    assert!(
+        exclude.contains("/wt-t2/"),
+        "a rule a live worktree still needs must survive: {exclude:?}"
+    );
+
+    // The pruned path is visible to git again -- which is the whole point.
+    std::fs::create_dir_all(td.path().join("wt-t1")).unwrap();
+    std::fs::write(td.path().join("wt-t1/new.txt"), "new\n").unwrap();
+    let status = git_stdout(td.path(), &["status", "--porcelain"]);
+    assert!(
+        status.contains("wt-t1"),
+        "the old path must no longer be hidden: {status:?}"
+    );
+    // The surviving worktree is still hidden, so it cannot be staged as a
+    // gitlink.
+    assert!(
+        git_ignored(td.path(), "wt-t2"),
+        "the live worktree must stay ignored: {exclude:?}"
+    );
+    assert!(
+        !status.contains("wt-t2"),
+        "the live worktree must never show up as a gitlink: {status:?}"
+    );
+}

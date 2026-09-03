@@ -169,7 +169,7 @@ fn main() {
             let branches = board::read_in_flight_branches(&cli.plan_dir);
             // Warnings go to stderr so the board on stdout stays a clean,
             // parseable document.
-            for w in board::branch_warnings(&branches) {
+            for w in board::branch_warnings(&branches, &tickets) {
                 eprintln!("{w}");
             }
             let input = board::BoardInput {

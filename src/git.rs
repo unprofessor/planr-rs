@@ -457,6 +457,73 @@ pub fn worktrees_under(path: &Path, cwd: &Path) -> Result<Vec<PathBuf>, String> 
         .collect())
 }
 
+/// Drop every rule in planr's block that no live worktree needs.
+///
+/// `exclude_remove` needs the path a rule was written for, and by the time a
+/// worktree is gone that path is no longer known -- `abandon`, for one,
+/// refuses until the worktree and branch have been cleaned up by hand, so it
+/// never sees them. The rule then outlives everything that referred to it and
+/// silently hides whatever is created at that path next.
+///
+/// This asks the question the other way round: build the set of patterns the
+/// live worktrees actually justify -- each worktree's own pattern, and every
+/// ancestor of it up to its containing tree, which is what covers the shared
+/// `<plan-dir>/worktrees/` parent -- and drop anything else planr owns. Only
+/// planr's own block is touched; a rule the user wrote is not planr's to
+/// prune.
+pub fn exclude_prune(cwd: &Path) {
+    let _lock = match crate::lock::PlanrLock::exclude(cwd) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    let Ok(roots) = worktree_roots(cwd) else {
+        return; // fail closed: keep every rule rather than guess
+    };
+
+    let mut needed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for root in &roots {
+        let Ok(Some(tree)) = containing_worktree_root(root, cwd) else {
+            continue;
+        };
+        let mut cur = root.as_path();
+        while cur != tree {
+            if let Ok(Some(p)) = exclude_pattern(cur, cwd) {
+                needed.insert(p);
+            }
+            let Some(parent) = cur.parent() else { break };
+            cur = parent;
+        }
+    }
+
+    let Ok(path) = exclude_file(cwd) else { return };
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let (before, block, after) = split_planr_block(&existing);
+    let kept: Vec<&str> = block
+        .iter()
+        .copied()
+        .filter(|l| needed.contains(l.trim()))
+        .collect();
+    if kept.len() == block.len() {
+        return;
+    }
+
+    let mut out: Vec<&str> = before;
+    if !kept.is_empty() {
+        out.push(EXCLUDE_HEADER);
+        out.extend_from_slice(&kept);
+    } else {
+        while out.last().is_some_and(|l| l.trim().is_empty()) {
+            out.pop();
+        }
+    }
+    out.extend_from_slice(&after);
+    if let Err(e) = write_lines(&path, &out) {
+        eprintln!("warning: could not prune stale local ignore rules ({e})");
+    }
+}
+
 /// Drop the ignore rule for `target`, reporting a failure rather than
 /// swallowing it.
 ///

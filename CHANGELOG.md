@@ -20,6 +20,33 @@
 
 ### Fixed
 
+- **The board summary counts only the branches the board actually shows.**
+  A `plan/*` branch whose slug names no task on trunk -- the ticket was
+  renamed, or was never committed there -- appears in no table, yet it still
+  added one to `total` and one to a status bucket. The rows and the summary
+  therefore disagreed, with nothing on the page to say which was right. It is
+  the mirror image of the branches this release stopped dropping from the
+  counts, and reads just as wrong.
+
+- **A branch whose task is not on trunk is called out by name.** Such a
+  branch is listed in flight and counts towards nothing, so on its own the
+  fix above would have made it silently absent from the summary. The branch
+  scan now warns on stderr that no task of that slug exists on trunk --
+  renamed, or not committed -- and that the branch counts towards nothing, so
+  the gap between the in-flight table and the totals is explained rather than
+  merely correct.
+
+- **`planr abandon` takes the abandoned task's ignore rule with it.**
+  Abandon refuses until the branch and worktree have been cleaned up by hand,
+  so it never learns which path the worktree had and could not remove that
+  rule by name -- and `close`, which is what normally removes it, never runs
+  for an abandoned task. The rule outlived everything that referred to it and
+  went on hiding whatever was created at that path, invisibly: an exclude
+  rule leaves no trace in `git status`. Abandon now drops every rule in
+  planr's own block that no live worktree still justifies, keeping the ones
+  they do -- including the shared `<plan-dir>/worktrees/` parent -- and never
+  touching a rule the user wrote.
+
 - **`planr claim` refuses a task trunk already records as finished.** The
   guard only rejected `abandoned`, and the branch-side check cannot help
   because `close` deletes the branch. Claiming a closed task therefore

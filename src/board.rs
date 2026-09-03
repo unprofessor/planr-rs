@@ -196,12 +196,27 @@ fn render_in_flight(branches: &[BranchStatus]) -> String {
 /// its file; an unrecognized status means the ticket is there and its
 /// frontmatter is wrong. Reporting the second as the first sends the reader
 /// looking for a file that is sitting right where they left it.
-pub fn branch_warnings(branches: &[BranchStatus]) -> Vec<String> {
+pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]) -> Vec<String> {
+    let trunk_task_slugs: std::collections::HashSet<&str> = trunk_tickets
+        .iter()
+        .filter(|t| t.kind == Some(Kind::Task))
+        .map(|t| t.id.as_str())
+        .collect();
     branches
         .iter()
         .filter_map(|b| {
             let status = b.status.as_str();
-            if is_placeholder(status) {
+            if !trunk_task_slugs.contains(b.slug.as_str()) {
+                // The branch reads a status fine, but for a task no longer on
+                // trunk -- renamed, or never committed there. It counts
+                // towards nothing, so without this it would simply be absent
+                // from the summary with no explanation.
+                Some(format!(
+                    "warning: {}: no task '{}' on trunk -- renamed or not committed; \
+                     the branch is listed but counts towards nothing",
+                    b.branch, b.slug
+                ))
+            } else if is_placeholder(status) {
                 Some(format!(
                     "warning: {}: no readable task file for '{}' -- renamed, removed, or not yet committed",
                     b.branch, b.slug
@@ -269,8 +284,21 @@ fn render_summary(
         }
     }
 
-    // Count in-flight branch statuses
+    // Count in-flight branch statuses -- but only for a branch that stands in
+    // for a task the tables actually show. A branch whose slug names no trunk
+    // task (the ticket was renamed, which is the very detachment the branch
+    // scan warns about) would otherwise add to `total` and to a status bucket
+    // while appearing in no table: the mirror image of the drop this counting
+    // was reworked to fix, and just as confusing to read.
+    let trunk_task_slugs: std::collections::HashSet<&str> = trunk_tickets
+        .iter()
+        .filter(|t| t.kind == Some(Kind::Task))
+        .map(|t| t.id.as_str())
+        .collect();
     for b in branches {
+        if !trunk_task_slugs.contains(b.slug.as_str()) {
+            continue;
+        }
         match b.status.as_str() {
             "todo" => t_todo += 1,
             "in_progress" => t_ip += 1,
@@ -797,6 +825,97 @@ mod tests {
     }
 
     #[test]
+    fn test_summary_skips_branch_naming_no_trunk_task() {
+        // The tasks table is built from trunk, so a branch whose slug names
+        // no task there shows up in no table at all. Counting it anyway put a
+        // ticket in the summary that the reader cannot find above it -- the
+        // mirror image of the drop the test above covers.
+        let tickets = vec![
+            t("proxy", "task", Some("net"), "todo", vec![]),
+            t("cache", "task", Some("net"), "todo", vec![]),
+        ];
+        let branches = vec![
+            BranchStatus {
+                branch: "plan/cache".to_string(),
+                status: "review".to_string(),
+                slug: "cache".to_string(),
+            },
+            BranchStatus {
+                branch: "plan/ghost".to_string(),
+                status: "in_progress".to_string(),
+                slug: "ghost".to_string(),
+            },
+        ];
+        let input = BoardInput {
+            trunk_tickets: tickets,
+            branch_statuses: branches,
+        };
+        let out = render_board(&input);
+
+        let count = |label: &str| -> Option<String> {
+            out.lines()
+                .find(|l| l.starts_with(label))
+                .and_then(|l| l.split_whitespace().last().map(String::from))
+        };
+        assert_eq!(
+            count("total"),
+            Some("2".to_string()),
+            "only the tasks the tables show may count: {out}"
+        );
+        assert_eq!(
+            count("in_progress"),
+            Some("0".to_string()),
+            "a branch with no task on trunk must count towards nothing: {out}"
+        );
+        // The other branch does name a trunk task, so it still counts -- the
+        // skip must not swallow the healthy case.
+        assert_eq!(count("review"), Some("1".to_string()), "cache: {out}");
+        assert_eq!(count("todo"), Some("1".to_string()), "proxy: {out}");
+        assert!(
+            out.contains("plan/ghost"),
+            "the branch is still listed in flight: {out}"
+        );
+    }
+
+    #[test]
+    fn test_branch_warning_for_slug_with_no_trunk_task() {
+        // A branch counted towards nothing would otherwise be absent from the
+        // summary with no explanation. A story of the same name does not
+        // rescue it: the tasks table is what the branch stands in for.
+        let branches = vec![
+            BranchStatus {
+                branch: "plan/proxy".to_string(),
+                status: "in_progress".to_string(),
+                slug: "proxy".to_string(),
+            },
+            BranchStatus {
+                branch: "plan/ghost".to_string(),
+                status: "in_progress".to_string(),
+                slug: "ghost".to_string(),
+            },
+        ];
+        let trunk = vec![
+            t("proxy", "task", None, "todo", vec![]),
+            t("ghost", "story", None, "todo", vec![]),
+        ];
+        let warnings = branch_warnings(&branches, &trunk);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "only the detached branch warns: {warnings:?}"
+        );
+        let w = &warnings[0];
+        assert!(
+            w.contains("plan/ghost") && w.contains("no task 'ghost' on trunk"),
+            "warning should name the branch and the slug: {w}"
+        );
+        assert!(
+            w.contains("counts towards nothing"),
+            "warning should say the branch is uncounted: {w}"
+        );
+    }
+
+    #[test]
     fn test_branch_warning_distinguishes_invalid_status_from_missing_file() {
         // A typo'd status means the ticket is right where the reader left it,
         // with bad frontmatter. Reporting that as "no readable task file"
@@ -806,7 +925,8 @@ mod tests {
             status: "in-progress".to_string(), // hyphen: lint rejects this
             slug: "proxy".to_string(),
         }];
-        let warnings = branch_warnings(&branches);
+        let trunk = vec![t("proxy", "task", None, "todo", vec![])];
+        let warnings = branch_warnings(&branches, &trunk);
         assert_eq!(
             warnings.len(),
             1,
@@ -842,7 +962,12 @@ mod tests {
                 slug: "ghost".to_string(),
             },
         ];
-        let warnings = branch_warnings(&branches);
+        let trunk = vec![
+            t("proxy", "task", None, "todo", vec![]),
+            t("cache", "task", None, "todo", vec![]),
+            t("ghost", "task", None, "todo", vec![]),
+        ];
+        let warnings = branch_warnings(&branches, &trunk);
         assert_eq!(
             warnings.len(),
             2,
