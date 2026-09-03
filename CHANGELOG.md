@@ -71,6 +71,17 @@
   symlinked path used to look like it lay outside the repository and got
   no rule at all (every `$TMPDIR` path on macOS takes that route).
 
+- **`planr close` no longer deletes a worktree nested inside the one it is
+  closing.** `git worktree remove` decides a worktree is safe to delete by
+  asking `git status --porcelain`, which does not list ignored paths -- and
+  planr's own rule hides `<plan-dir>/worktrees/` inside *every* working
+  tree. A worker that claims its next task from inside its own worktree
+  nests one there by default, so git's safety check could not see it and
+  deleted it recursively, uncommitted work and all, while `close` reported
+  success. Without the ignore rule git refuses; the rule is what made the
+  deletion silent. `close` now looks for registered worktrees under the one
+  it is about to remove, leaves it in place if it finds any, and says which.
+
 - **Dropping a stale worktree record drops its ignore rule too.** Resuming
   a claim whose worktree was deleted by hand forgot the record but kept the
   rule, and no later `close` would remove it -- `close` only considers the

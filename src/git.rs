@@ -149,9 +149,17 @@ fn canonicalize_existing(p: &Path) -> PathBuf {
 /// shares no prefix with it and would get no rule at all.
 ///
 /// One consequence is unavoidable: a same-named path at the same depth in a
-/// sibling worktree is hidden too. A shared exclude file cannot express
-/// "this worktree only", and over-hiding a planr worktree path is the safe
-/// direction -- the alternative is a gitlink committed onto trunk.
+/// sibling worktree is hidden too. A shared exclude file cannot express "this
+/// worktree only", and over-hiding is the safe direction -- the alternative is
+/// a gitlink committed onto trunk.
+///
+/// Note the reach of that, though, because it is wider than planr's own
+/// directories. `claim x --worktree scratch` run inside one worktree writes
+/// `/scratch/`, which also hides a `scratch/` at the top of trunk and of every
+/// sibling -- a path that need not have anything to do with planr. An explicit
+/// relative `--worktree` name is worth choosing with that in mind; the default
+/// location does not have the problem, since nothing else is called
+/// `<plan-dir>/worktrees/`.
 ///
 /// `Err` when git could not be asked. That is deliberately distinct from
 /// `Ok(None)`: "the target is outside every working tree, so no rule is
@@ -408,6 +416,23 @@ pub fn exclude_remove(target: &Path, cwd: &Path) -> Result<(), String> {
     }
     out.extend_from_slice(&after);
     write_lines(&path, &out)
+}
+
+/// Registered worktrees that live inside `path`.
+///
+/// `git worktree remove` decides whether a worktree is safe to delete by
+/// asking `git status --porcelain`, which does not list ignored paths. planr's
+/// own rule hides `<plan-dir>/worktrees/` inside *every* working tree, so a
+/// nested worktree -- what a worker gets by default when it claims from inside
+/// its own worktree -- is invisible to that check, and git deletes it
+/// recursively along with any uncommitted work in it. Callers must look for
+/// themselves before removing anything.
+pub fn worktrees_under(path: &Path, cwd: &Path) -> Result<Vec<PathBuf>, String> {
+    let target = resolve_against(path, cwd)?;
+    Ok(worktree_roots(cwd)?
+        .into_iter()
+        .filter(|root| *root != target && root.starts_with(&target))
+        .collect())
 }
 
 /// Drop the ignore rule for `target`, reporting a failure rather than

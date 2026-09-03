@@ -2389,3 +2389,68 @@ fn test_e2e_close_warns_when_a_locked_worktree_survives() {
         .ok()
         .ok();
 }
+
+/// `close` must never delete a worktree that holds another one.
+///
+/// `git worktree remove` decides it is safe by asking `git status
+/// --porcelain`, which does not list ignored paths -- and planr's own rule
+/// hides `<plan-dir>/worktrees/` inside every working tree. A worker that
+/// claims from inside its own worktree nests one there by default, so git's
+/// safety check could not see it and deleted it recursively, uncommitted work
+/// and all, while `close` reported success. Without the ignore rule git
+/// refuses the removal; the rule is what made this silent.
+#[test]
+fn test_e2e_close_does_not_delete_a_nested_worktree() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
+    Command::new("git")
+        .args(["add", ".plan"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "add t2"])
+        .current_dir(td.path())
+        .ok()
+        .unwrap();
+
+    planr_ok(td.path(), &["claim", "t1"]);
+    let wt1 = td.path().join(".plan/worktrees/wt-t1");
+    // The worker claims its next task from inside its own worktree, which is
+    // where the default path nests one.
+    planr_ok(&wt1, &["claim", "t2"]);
+    let nested = wt1.join(".plan/worktrees/wt-t2");
+    assert!(nested.is_dir(), "nested worktree should exist");
+    std::fs::write(nested.join("PRECIOUS.txt"), "uncommitted work").unwrap();
+
+    // Take t1 to review and close it.
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let content = std::fs::read_to_string(wt1.join(&task_file)).unwrap();
+    let reviewed = content.replace("status: in_progress", "status: review")
+        + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
+    std::fs::write(wt1.join(&task_file), reviewed).unwrap();
+    Command::new("git")
+        .args(["add", &task_file])
+        .current_dir(&wt1)
+        .ok()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "review: t1"])
+        .current_dir(&wt1)
+        .ok()
+        .unwrap();
+
+    let out = planr(td.path(), &["close", "task", "t1"]);
+    assert!(out.status.success(), "close should still merge");
+
+    assert!(
+        nested.join("PRECIOUS.txt").is_file(),
+        "closing the parent must not destroy the nested worktree's work"
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("live worktree"),
+        "the operator must be told why the worktree was left: {stderr:?}"
+    );
+}
