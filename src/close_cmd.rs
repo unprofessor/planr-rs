@@ -219,7 +219,10 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
                             "warning: merged, but the worktree at {} was left in place: \
                              it holds {} live worktree(s) ({}). Removing it would delete \
                              them and any uncommitted work in them. Close or remove those \
-                             first, then `git worktree remove {}`",
+                             first, then `git worktree remove {}` and \
+                             `git branch -d {branch}` -- until the worktree goes the \
+                             branch cannot be deleted either, so `planr board` keeps \
+                             listing {slug} in flight",
                             wt.display(),
                             nested.len(),
                             paths.join(", "),

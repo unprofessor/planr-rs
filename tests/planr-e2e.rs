@@ -2454,3 +2454,54 @@ fn test_e2e_close_does_not_delete_a_nested_worktree() {
         "the operator must be told why the worktree was left: {stderr:?}"
     );
 }
+
+/// A gitignore file is line-oriented, so a worktree path holding a newline
+/// cannot be expressed as a rule. Writing it anyway split the pattern across
+/// two lines: the worktree stayed visible and was staged as a gitlink, the
+/// claim reported success, and neither fragment could ever be removed --
+/// `/wt` and `evil/` then hid unrelated paths in every worktree, forever.
+#[test]
+#[cfg(unix)]
+fn test_e2e_claim_refuses_a_worktree_path_with_a_newline() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let before = read_exclude(td.path());
+    let err = planr_err(td.path(), &["claim", "t1", "--worktree", "wt\nevil"]);
+    assert!(
+        err.contains("line break"),
+        "the refusal should name the reason: {err}"
+    );
+
+    let after = read_exclude(td.path());
+    assert_eq!(
+        after.trim_end(),
+        before.trim_end(),
+        "no rule -- whole or broken -- may be written"
+    );
+    let status = git_stdout(td.path(), &["status", "--porcelain"]);
+    assert!(
+        !status.contains("evil"),
+        "a refused claim must leave no worktree: {status:?}"
+    );
+}
+
+/// Dropping a stale worktree record is not silent: the directory being absent
+/// cannot be told apart from a volume that is merely unmounted, so the
+/// operator gets the one chance to notice.
+#[test]
+fn test_e2e_dropping_a_stale_record_warns() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    planr_ok(td.path(), &["claim", "t1"]);
+    std::fs::remove_dir_all(td.path().join(".plan/worktrees/wt-t1")).unwrap();
+
+    let out = planr(td.path(), &["claim", "t1"]);
+    assert!(out.status.success(), "re-claim should succeed");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("dropping that record") && stderr.contains("unmounted"),
+        "dropping a record must be reported, with the volume caveat: {stderr:?}"
+    );
+}

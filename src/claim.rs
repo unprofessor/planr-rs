@@ -419,11 +419,16 @@ pub fn claim_task(
     // actively working and be told it succeeded.
     if let Some(held) = git::find_worktree_for_branch(&branch) {
         // `try_exists`, not `exists`: the latter reports `false` for any I/O
-        // error -- a permission denied on an ancestor, an unmounted volume, an
-        // unreachable network path -- and reading that as "the worktree is
-        // gone" would destroy a live holder's record and hand their task to a
-        // second agent. Not knowing counts as held, the same fail-closed
-        // choice `another_worktree_needs` makes.
+        // error, so a permission denied on an ancestor read as "the worktree
+        // is gone" and destroyed a live holder's record. Not knowing counts as
+        // held, the same fail-closed choice `another_worktree_needs` makes.
+        //
+        // It is not a guarantee, and the limit is worth naming: a path under
+        // an unmounted mountpoint answers `ENOENT`, which is `Ok(false)`, not
+        // an error. A worktree on a removable or network volume that happens
+        // to be unmounted is therefore indistinguishable from one deleted by
+        // hand -- git's own `prunable` flag makes the same call. That is why
+        // dropping a record warns below rather than doing it silently.
         if held.try_exists().unwrap_or(true) {
             return Err(format!(
                 "refuse claim: task '{slug}' is already claimed; its worktree is at {}",
@@ -440,6 +445,17 @@ pub fn claim_task(
         // worktree that merely happens to be unreachable right now -- an
         // unmounted volume, a network path, a home directory not yet
         // decrypted -- orphaning it as a side effect of an unrelated claim.
+        // Say so. The directory being absent cannot be told apart from a
+        // volume that is merely unmounted, so this is the operator's one
+        // chance to notice that a worktree they still care about was
+        // forgotten -- and it is otherwise invisible.
+        eprintln!(
+            "warning: {branch} had a registered worktree at {} whose directory is \
+             not there; dropping that record and re-claiming. If that path lives \
+             on a volume that is currently unmounted, mount it and run \
+             `git worktree repair` before working there again.",
+            held.display()
+        );
         git::worktree_remove(&held, true)?;
         // The rule written for that worktree goes with it. This claim may
         // land somewhere else entirely (the previous one could have used an

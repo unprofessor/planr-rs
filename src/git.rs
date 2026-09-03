@@ -230,7 +230,29 @@ fn exclude_pattern(target: &Path, cwd: &Path) -> Result<Option<String>, String> 
     let Ok(rel) = abs.strip_prefix(&root) else {
         return Ok(None);
     };
-    let rel = rel.to_string_lossy().to_string();
+    // A gitignore file is line-oriented, so a path that is not one line of
+    // valid UTF-8 cannot be expressed as a rule at all. Writing it anyway
+    // split the pattern across lines: the worktree stayed visible (staged as
+    // a gitlink on the next `git add -A`), the claim reported success, and
+    // neither fragment could ever be removed, because removal matches the
+    // recomputed pattern. `/wt` and `evil/` would then hide unrelated paths
+    // across every worktree, permanently. Refuse instead -- an error the
+    // caller can act on, not a rule that quietly does the wrong thing.
+    let Some(rel) = rel.to_str() else {
+        return Err(format!(
+            "cannot hide {}: the path is not valid UTF-8, so no ignore rule \
+             can be written for it",
+            abs.display()
+        ));
+    };
+    if rel.contains(['\n', '\r']) {
+        return Err(format!(
+            "cannot hide {}: the path contains a line break, so no ignore \
+             rule can be written for it",
+            abs.display()
+        ));
+    }
+    let rel = rel.to_string();
     // Separator normalization is Windows-only. On Unix a backslash is an
     // ordinary filename character, so rewriting it split `wt\1` into `wt/1`:
     // git then looked for a `1` inside a `wt` directory, the real worktree

@@ -123,10 +123,22 @@
 
 - **An unreadable worktree path counts as held, not as gone.** The holder
   check and `close`'s cleanup used `Path::exists`, which reports `false` for
-  any I/O error, so a live worktree on a momentarily unreachable path -- an
-  unmounted volume, a permission error on an ancestor -- read as a stale
-  record: its admin record was destroyed and a second agent took over a
-  task someone was working. Both now fail closed.
+  any I/O error, so a live worktree behind a permission error read as a
+  stale record: its admin record was destroyed and a second agent took over
+  a task someone was working. Both now fail closed on an error. Note the
+  limit: a path under an *unmounted* mountpoint answers `ENOENT`, which is
+  not an error, so a worktree on a volume that happens to be unmounted is
+  indistinguishable from one deleted by hand -- git's own `prunable` flag
+  makes the same call. Dropping a record therefore warns, naming the path
+  and pointing at `git worktree repair`.
+
+- **A worktree path that cannot be written as an ignore rule is refused.**
+  A path holding a line break rendered as two lines in
+  `.git/info/exclude`: the worktree stayed visible and was staged as a
+  gitlink, the claim reported success, and neither fragment could ever be
+  removed -- so `/wt` and `evil/` went on hiding unrelated paths in every
+  worktree indefinitely. A path that is not one line of valid UTF-8 now
+  fails the claim instead.
 
 - **A backslash in a worktree path is a filename character on Unix.** The
   path was normalized as if `\` were a separator, so `wt\1` became the
