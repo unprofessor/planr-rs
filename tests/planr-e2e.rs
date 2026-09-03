@@ -2731,3 +2731,307 @@ fn test_e2e_abandon_prunes_the_stale_ignore_rule() {
         "the live worktree must never show up as a gitlink: {status:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Scenario: the plan directory is the repository's, wherever planr is run
+// ---------------------------------------------------------------------------
+
+/// Run git in `dir` and require it to succeed.
+fn git_must(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn write_file(dir: &Path, rel: &str, body: &str) {
+    let path = dir.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, body).unwrap();
+}
+
+/// `new` writes the plan directory and `board` reads it, so from the same
+/// subdirectory they have to be talking about the same one. They were not:
+/// `new` resolved `.plan` against the process directory, wrote
+/// `<subdir>/.plan/epics/01-e1.md`, printed it and exited 0, while `board`
+/// read the repository root and reported a total of zero with an empty
+/// stderr -- a ticket the tool had just made and then denied existed.
+#[test]
+fn test_e2e_new_and_board_agree_from_a_subdirectory() {
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    let sub = td.path().join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let created = planr_ok(&sub, &["new", "epic", "e1", "E1"]);
+    assert_eq!(
+        created, ".plan/epics/01-e1.md",
+        "the path is reported relative to the repository root"
+    );
+    assert!(
+        td.path().join(".plan/epics/01-e1.md").exists(),
+        "the ticket belongs to the repository's backlog, not the subdirectory's"
+    );
+    assert!(
+        !sub.join(".plan").exists(),
+        "no second backlog under the subdirectory"
+    );
+
+    let (out, err) = planr_ok_both(&sub, &["board"]);
+    assert!(
+        out.lines().any(|l| l.starts_with("e1")),
+        "the board run from the same directory must show the ticket: {out}"
+    );
+    assert!(
+        err.is_empty(),
+        "nothing to warn about -- the backlog was found: {err}"
+    );
+
+    // And the board run from the root agrees with the board run from `sub`.
+    let (root_out, _) = planr_ok_both(td.path(), &["board"]);
+    assert_eq!(
+        out, root_out,
+        "the board must not depend on which directory it was run from"
+    );
+}
+
+/// The same defect with an explicit plan directory: `board` read
+/// `<root>/myplan` while `new` wrote `<subdir>/myplan`.
+#[test]
+fn test_e2e_new_honours_a_relative_plan_dir_from_a_subdirectory() {
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    for d in &["myplan/epics", "myplan/stories", "myplan/tasks"] {
+        std::fs::create_dir_all(td.path().join(d)).unwrap();
+    }
+    let sub = td.path().join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    planr_ok(&sub, &["-D", "myplan", "new", "epic", "e1", "E1"]);
+    assert!(
+        td.path().join("myplan/epics/01-e1.md").exists(),
+        "the plan directory is relative to the repository"
+    );
+    assert!(
+        !sub.join("myplan").exists(),
+        "and never to the directory planr was run from"
+    );
+    let out = planr_ok(&sub, &["-D", "myplan", "board"]);
+    assert!(
+        out.lines().any(|l| l.starts_with("e1")),
+        "the board reads what new wrote: {out}"
+    );
+}
+
+/// `lint` prints nothing at all for a clean backlog, so a typo'd plan
+/// directory was byte-identical to a clean bill of health, exit code
+/// included: it certified a backlog it had never opened.
+#[test]
+fn test_e2e_lint_says_so_when_the_plan_directory_is_not_there() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+
+    let (out, err) = planr_ok_both(td.path(), &["-D", ".plans", "lint"]);
+    assert!(
+        err.contains("no plan directory at '.plans'"),
+        "lint must not certify a directory it never opened: stderr={err:?} stdout={out:?}"
+    );
+
+    // A backlog that is really there still lints in silence.
+    let (_, clean_err) = planr_ok_both(td.path(), &["lint"]);
+    assert!(
+        !clean_err.contains("no plan directory"),
+        "the real backlog is there: {clean_err}"
+    );
+}
+
+/// In-flight rows against a total of zero, in complete silence, is a gap the
+/// reader cannot explain. The per-branch warning was rightly suppressed --
+/// an empty list says nothing about any one slug -- but nothing replaced it.
+#[test]
+fn test_e2e_board_says_so_when_it_read_no_tickets_at_all() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    git_must(td.path(), &["branch", "plan/t1"]);
+
+    // Take the backlog away: every working-tree read now comes back empty.
+    std::fs::remove_dir_all(td.path().join(".plan")).unwrap();
+
+    let (out, err) = planr_ok_both(td.path(), &["board"]);
+    assert!(out.contains("plan/t1"), "the branch is still listed: {out}");
+    assert!(
+        err.contains("read no tickets at all") && err.contains("1 in-flight branch"),
+        "the gap between the in-flight table and the totals must be explained: {err}"
+    );
+    assert!(
+        !err.contains("no task 't1'"),
+        "an empty read says nothing about 't1' in particular: {err}"
+    );
+}
+
+/// A ticket with no frontmatter at all, or with frontmatter that omits `id`,
+/// used to warn as "(no id)" -- two identical, unattributable lines for two
+/// different files, while `lint` next door named both paths.
+#[test]
+fn test_e2e_board_names_every_ticket_it_cannot_place() {
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    write_file(td.path(), ".plan/tasks/notes.md", "# Notes\n");
+    write_file(td.path(), ".plan/tasks/scratch.md", "# More notes\n");
+
+    let (_, err) = planr_ok_both(td.path(), &["board"]);
+    assert!(
+        !err.contains("(no id)"),
+        "no ticket should stay anonymous: {err}"
+    );
+    assert!(
+        err.contains("ticket 'notes'") && err.contains("ticket 'scratch'"),
+        "both files must be named apart: {err}"
+    );
+}
+
+/// The broken file's id is recovered from its filename and its status is the
+/// default `todo`, not a value read from anywhere. Letting that into the
+/// status map overwrote the real `done`, and every dependent task turned up
+/// BLOCKED-BY on the same screen where the ticket itself read `done`.
+#[test]
+fn test_e2e_a_broken_duplicate_does_not_block_a_satisfied_dependency() {
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    write_file(
+        td.path(),
+        ".plan/stories/01-s1.md",
+        "---\nid: s1\nkind: story\nstatus: todo\ntitle: S1\n---\n",
+    );
+    write_file(
+        td.path(),
+        ".plan/tasks/01-dep.md",
+        "---\nid: dep\nkind: task\nparent: s1\nstatus: done\ntitle: Dep\n---\n",
+    );
+    // A second file for the same slug whose frontmatter does not parse.
+    write_file(
+        td.path(),
+        ".plan/tasks/02-dep.md",
+        "---\nid: dep\nkind: task\ntitle: Dep: broken\n---\n",
+    );
+    write_file(
+        td.path(),
+        ".plan/tasks/03-user.md",
+        "---\nid: user\nkind: task\nparent: s1\nstatus: todo\ntitle: User\ndepends_on: [dep]\n---\n",
+    );
+
+    let out = planr_ok(td.path(), &["board"]);
+    let user_row = out
+        .lines()
+        .find(|l| l.starts_with("user"))
+        .unwrap_or_else(|| panic!("no row for 'user': {out}"))
+        .to_string();
+    assert!(
+        !user_row.contains(" dep "),
+        "'dep' is done, so 'user' must not be BLOCKED-BY it: {user_row}"
+    );
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("blocked") && l.ends_with('0')),
+        "nothing is blocked: {out}"
+    );
+}
+
+/// A slug that is both a real trunk task and the recovered id of some
+/// unreadable file took the "counts towards nothing" arm -- which is false of
+/// a task sitting in the tasks table, and which swallowed the invalid status
+/// the reader can actually act on.
+#[test]
+fn test_e2e_board_keeps_the_actionable_warning_about_a_real_task() {
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    write_file(
+        td.path(),
+        ".plan/stories/01-net.md",
+        "---\nid: net\nkind: story\nstatus: todo\ntitle: Net\n---\n",
+    );
+    write_file(
+        td.path(),
+        ".plan/tasks/01-proxy.md",
+        "---\nid: proxy\nkind: task\nparent: net\nstatus: todo\ntitle: Proxy\n---\n",
+    );
+    git_must(td.path(), &["add", "-A"]);
+    git_must(td.path(), &["commit", "-m", "seed tickets"]);
+
+    // A branch whose task file carries a status lint would reject.
+    git_must(td.path(), &["checkout", "-b", "plan/proxy"]);
+    write_file(
+        td.path(),
+        ".plan/tasks/01-proxy.md",
+        "---\nid: proxy\nkind: task\nparent: net\nstatus: wip\ntitle: Proxy\n---\n",
+    );
+    git_must(td.path(), &["commit", "-am", "claim with a typo'd status"]);
+    git_must(td.path(), &["checkout", "main"]);
+
+    // A story of the same slug whose frontmatter does not parse.
+    write_file(
+        td.path(),
+        ".plan/stories/02-proxy.md",
+        "---\nid: proxy\nkind: story\ntitle: Proxy: broken\n---\n",
+    );
+
+    let (out, err) = planr_ok_both(td.path(), &["board"]);
+    assert!(
+        err.contains("invalid status") && err.contains("wip"),
+        "the actionable warning must survive: {err}"
+    );
+    assert!(
+        !err.contains("counts towards nothing"),
+        "the task is shown and counted, so that would be false: {err} / {out}"
+    );
+}
+
+/// Outside a repository there is no root to enter, and saying so on every run
+/// would be noise. Any other reason git could not answer is worth a word,
+/// because what follows is a report about a backlog read from wherever the
+/// process happened to start.
+#[cfg(unix)]
+#[test]
+fn test_e2e_a_failed_git_toplevel_is_not_silent() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    let bin = td.path().join("fakebin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let shim = bin.join("git");
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\necho 'fatal: detected dubious ownership in repository' >&2\nexit 128\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let out = Command::cargo_bin("planr")
+        .unwrap()
+        .args(["lint"])
+        .current_dir(td.path())
+        .env("PATH", &bin)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        err.contains("could not ask git for the repository root")
+            && err.contains("dubious ownership"),
+        "a git failure that is not 'no repo here' must be reported: {err:?}"
+    );
+
+    // Outside a repository, though, there is nothing to say.
+    let outside = tempfile::tempdir().unwrap();
+    let (_, quiet) = planr_ok_both(outside.path(), &["lint"]);
+    assert!(
+        !quiet.contains("could not ask git"),
+        "no repository here is normal, not a failure: {quiet}"
+    );
+}

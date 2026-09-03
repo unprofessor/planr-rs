@@ -41,10 +41,20 @@ fn pad_right(s: &str, width: usize) -> String {
     }
 }
 
-/// Build a lookup map: slug -> status (from trunk tickets, all kinds).
+/// Build a lookup map: slug -> status (from every trunk ticket a table shows).
+///
+/// A ticket the board cannot place contributes nothing. Its `status` is not a
+/// value read from a file: a failed parse reads as every field absent, so the
+/// ticket arrives carrying the default `todo`, and its id comes from the
+/// filename. Letting that into the map put a default status into the same
+/// namespace as real ones, last write winning, so a broken duplicate of a
+/// finished ticket overwrote its `done` -- and every task depending on it
+/// turned up BLOCKED-BY on the same screen where the ticket itself read
+/// `done`. Unknown is the honest answer, and `blocked_by` already treats an
+/// unknown dependency as unmet.
 fn trunk_status_map(tickets: &[ParsedTicket]) -> std::collections::HashMap<String, String> {
     let mut m = std::collections::HashMap::new();
-    for t in tickets {
+    for t in tickets.iter().filter(|t| t.kind.is_some()) {
         m.insert(t.id.clone(), t.status.clone());
     }
     m
@@ -236,8 +246,10 @@ pub fn ticket_warnings(trunk_tickets: &[ParsedTicket]) -> Vec<String> {
 /// cannot tell apart, two of which are not the branch's fault at all: a
 /// ticket whose frontmatter did not parse is absent from the list even though
 /// the file is committed and present, and a list that came back empty says
-/// nothing about any individual slug. Both are excluded here, and the first
-/// gets a warning that names what actually happened.
+/// nothing about any individual slug. Both are excluded here, and each gets a
+/// warning that names what actually happened instead -- per branch for the
+/// first, once for the second, which is a fact about the read and not about
+/// any one branch.
 pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]) -> Vec<String> {
     let trunk_task_slugs: std::collections::HashSet<&str> = trunk_tickets
         .iter()
@@ -255,42 +267,65 @@ pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]
     // An empty list is not evidence that a particular ticket is absent from
     // it -- it is evidence that the board read no tickets at all.
     let read_any = !trunk_tickets.is_empty();
-    branches
-        .iter()
-        .filter_map(|b| {
-            let status = b.status.as_str();
-            if unparsed_slugs.contains(b.slug.as_str()) {
-                Some(format!(
-                    "warning: {}: the ticket for '{}' is present but its frontmatter did \
-                     not parse, so the board cannot place it -- the branch is listed but \
-                     counts towards nothing; run `planr lint`",
-                    b.branch, b.slug
-                ))
-            } else if read_any && !trunk_task_slugs.contains(b.slug.as_str()) {
-                // The branch reads a status fine, but names a task that is
-                // not among the tickets the board read. It counts towards
-                // nothing, so without this it would simply be absent from the
-                // summary with no explanation.
-                Some(format!(
-                    "warning: {}: no task '{}' among the tickets the board read; \
-                     the branch is listed but counts towards nothing; run `planr lint`",
-                    b.branch, b.slug
-                ))
-            } else if is_placeholder(status) {
-                Some(format!(
-                    "warning: {}: no readable task file for '{}' -- renamed, removed, or not yet committed",
-                    b.branch, b.slug
-                ))
-            } else if !crate::ticket::VALID_STATUSES.contains(&status) {
-                Some(format!(
-                    "warning: {}: task '{}' has an invalid status '{}' -- counting the trunk status; run `planr lint`",
-                    b.branch, b.slug, status
-                ))
-            } else {
-                None
-            }
-        })
-        .collect()
+    let mut out: Vec<String> = Vec::new();
+    // Which is worth saying once. Suppressing the per-branch warning was
+    // right and left nothing in its place: the board printed in-flight rows
+    // against a total of zero in complete silence, with no hint that the gap
+    // came from the read rather than from the branches.
+    if !read_any && !branches.is_empty() {
+        let n = branches.len();
+        let subject = if n == 1 {
+            "1 in-flight branch counts".to_string()
+        } else {
+            format!("{n} in-flight branches count")
+        };
+        out.push(format!(
+            "warning: the board read no tickets at all, so {subject} towards nothing \
+             -- check the plan directory and the ref the board read"
+        ));
+    }
+    let per_branch = branches.iter().filter_map(|b| {
+        let status = b.status.as_str();
+        // A slug that is both a real trunk task and the recovered id of
+        // some unreadable file is not detached from anything: the task is
+        // there, in the tasks table, counted. Saying it "counts towards
+        // nothing" would be false, and it swallowed the warning about the
+        // branch that the reader can actually act on.
+        if !trunk_task_slugs.contains(b.slug.as_str())
+            && unparsed_slugs.contains(b.slug.as_str())
+        {
+            Some(format!(
+                "warning: {}: the ticket for '{}' is present but its frontmatter did \
+                 not parse, so the board cannot place it -- the branch is listed but \
+                 counts towards nothing; run `planr lint`",
+                b.branch, b.slug
+            ))
+        } else if read_any && !trunk_task_slugs.contains(b.slug.as_str()) {
+            // The branch reads a status fine, but names a task that is
+            // not among the tickets the board read. It counts towards
+            // nothing, so without this it would simply be absent from the
+            // summary with no explanation.
+            Some(format!(
+                "warning: {}: no task '{}' among the tickets the board read; \
+                 the branch is listed but counts towards nothing; run `planr lint`",
+                b.branch, b.slug
+            ))
+        } else if is_placeholder(status) {
+            Some(format!(
+                "warning: {}: no readable task file for '{}' -- renamed, removed, or not yet committed",
+                b.branch, b.slug
+            ))
+        } else if !crate::ticket::VALID_STATUSES.contains(&status) {
+            Some(format!(
+                "warning: {}: task '{}' has an invalid status '{}' -- counting the trunk status; run `planr lint`",
+                b.branch, b.slug, status
+            ))
+        } else {
+            None
+        }
+    });
+    out.extend(per_branch);
+    out
 }
 
 fn render_summary(
@@ -495,18 +530,26 @@ pub fn source_status_line(ref_arg: Option<&str>) -> String {
     }
 }
 
-/// Name a ticket whose frontmatter did not parse after the file it came from.
+/// Name a ticket with no `id` of its own after the file it came from.
 ///
-/// A failed parse swallows every field, `id` included, so such a ticket
-/// otherwise arrives anonymous -- and an anonymous ticket cannot be matched
-/// to the `plan/<slug>` branch that names it, which made the board report a
-/// present, committed file as a task that is not there. The filename is the
-/// last readable evidence of the slug, and `lint` already treats it as
-/// authoritative (it is an error for `id` to disagree with it). Nothing else
-/// is invented: the kind stays unknown, so no table shows a row the file does
-/// not support.
+/// A ticket can arrive anonymous three ways: its frontmatter failed to parse,
+/// which swallows every field, `id` included; it has no frontmatter at all; or
+/// it has frontmatter that simply omits `id`. All three read the same to every
+/// caller downstream, and an anonymous ticket cannot be matched to the
+/// `plan/<slug>` branch that names it or named in a warning -- which made the
+/// board report a present, committed file as a task that is not there, and
+/// then warn about "(no id)" once per file, telling a reader with two broken
+/// files nothing about either. Guarding on the parse error covered only the
+/// first of the three; the other two stayed anonymous while `lint` next door
+/// named their paths.
+///
+/// The filename is the last readable evidence of the slug, and `lint` already
+/// treats it as authoritative (it is an error for `id` to disagree with it).
+/// Nothing else is invented: the kind stays unknown, so no table shows a row
+/// the file does not support, and `trunk_status_map` takes no status from a
+/// ticket no table shows.
 fn name_from_file(mut ticket: ParsedTicket, file: &str) -> ParsedTicket {
-    if ticket.frontmatter_error.is_some() && ticket.id.is_empty() {
+    if ticket.id.is_empty() {
         ticket.id = crate::ticket::slug_from_filename(file);
     }
     ticket
@@ -1113,19 +1156,170 @@ mod tests {
     }
 
     #[test]
-    fn test_branch_warnings_say_nothing_when_no_tickets_were_read() {
+    fn test_branch_warnings_blame_the_read_not_the_branch_when_nothing_was_read() {
         // An empty ticket list is evidence about the read, not about any
         // individual slug: every branch would otherwise be reported as
-        // detached from a file that may be exactly where it belongs.
+        // detached from a file that may be exactly where it belongs. Saying
+        // nothing at all is not the answer either -- the board then prints
+        // in-flight rows against a total of zero in silence.
         let branches = vec![BranchStatus {
             branch: "plan/proxy".to_string(),
             status: "in_progress".to_string(),
             slug: "proxy".to_string(),
         }];
         let warnings = branch_warnings(&branches, &[]);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "one warning about the read: {warnings:?}"
+        );
+        let w = &warnings[0];
         assert!(
-            warnings.is_empty(),
-            "no ticket was read, so nothing is established about 'proxy': {warnings:?}"
+            w.contains("read no tickets at all") && w.contains("1 in-flight branch counts"),
+            "the warning should blame the read and count the branches: {w}"
+        );
+        assert!(
+            !w.contains("no task 'proxy'") && !w.contains("plan/proxy"),
+            "nothing is established about 'proxy' in particular: {w}"
+        );
+    }
+
+    #[test]
+    fn test_branch_warnings_count_every_branch_when_nothing_was_read() {
+        // The one warning stands in for every branch, so it has to say how
+        // many rows the reader is looking at.
+        let branches = vec![
+            BranchStatus {
+                branch: "plan/proxy".to_string(),
+                status: "in_progress".to_string(),
+                slug: "proxy".to_string(),
+            },
+            BranchStatus {
+                branch: "plan/cache".to_string(),
+                status: "review".to_string(),
+                slug: "cache".to_string(),
+            },
+        ];
+        let warnings = branch_warnings(&branches, &[]);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("2 in-flight branches count towards nothing")),
+            "the warning should count both branches: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_branches_and_no_tickets_warns_about_nothing() {
+        // Nothing read and nothing in flight is an empty backlog, not a
+        // discrepancy. `main` says the plan directory is missing when it is.
+        assert!(branch_warnings(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn test_branch_warning_does_not_call_a_real_task_uncounted() {
+        // 'proxy' is a task on trunk *and* the recovered id of an unreadable
+        // story of the same slug. The task is in the tasks table and in the
+        // totals, so "counts towards nothing" would be false -- and it hid
+        // the invalid status the reader can actually act on.
+        let branches = vec![BranchStatus {
+            branch: "plan/proxy".to_string(),
+            status: "wip".to_string(), // not a valid status
+            slug: "proxy".to_string(),
+        }];
+        let trunk = vec![t("proxy", "task", None, "todo", vec![]), unparsed("proxy")];
+        let warnings = branch_warnings(&branches, &trunk);
+        assert_eq!(warnings.len(), 1, "one warning: {warnings:?}");
+        let w = &warnings[0];
+        assert!(
+            w.contains("invalid status") && w.contains("wip"),
+            "the actionable warning must survive: {w}"
+        );
+        assert!(
+            !w.contains("counts towards nothing"),
+            "the task is shown and counted, so this would be false: {w}"
+        );
+    }
+
+    #[test]
+    fn test_status_map_takes_nothing_from_a_ticket_no_table_shows() {
+        // A broken duplicate of a finished ticket arrives carrying the
+        // default `todo` and the id recovered from its filename. Letting that
+        // overwrite the real `done` turned every dependent task BLOCKED-BY on
+        // the same screen where the ticket itself read `done`.
+        let tickets = vec![
+            t("dep", "task", Some("s1"), "done", vec![]),
+            unparsed("dep"),
+            t("user", "task", Some("s1"), "todo", vec!["dep"]),
+        ];
+        let input = BoardInput {
+            trunk_tickets: tickets,
+            branch_statuses: vec![],
+        };
+        let map = trunk_status_map(&input.trunk_tickets);
+        assert_eq!(
+            map.get("dep"),
+            Some(&"done".to_string()),
+            "the real ticket keeps its status: {map:?}"
+        );
+        assert_eq!(
+            blocked_by(&input.trunk_tickets[2], &map),
+            "",
+            "'dep' is done, so 'user' is not blocked"
+        );
+
+        let out = render_board(&input);
+        let count = |label: &str| -> Option<String> {
+            out.lines()
+                .find(|l| l.starts_with(label))
+                .and_then(|l| l.split_whitespace().last().map(String::from))
+        };
+        assert_eq!(
+            count("blocked"),
+            Some("0".to_string()),
+            "nothing is blocked: {out}"
+        );
+        assert_eq!(
+            count("todo"),
+            Some("1".to_string()),
+            "'user' is todo, not blocked: {out}"
+        );
+    }
+
+    #[test]
+    fn test_name_from_file_names_a_ticket_with_no_frontmatter_at_all() {
+        // Guarding on the parse error left two other ways to arrive
+        // anonymous: no frontmatter at all, and frontmatter that omits `id`.
+        // Both then warned as "(no id)", telling a reader with two broken
+        // files nothing about either.
+        let no_front = name_from_file(
+            crate::ticket::parse_ticket("# Notes\n\nnothing to see\n"),
+            ".plan/tasks/notes.md",
+        );
+        assert_eq!(no_front.id, "notes");
+        let no_id = name_from_file(
+            crate::ticket::parse_ticket("---\nkind: task\nstatus: todo\n---\n"),
+            ".plan/tasks/02-scratch.md",
+        );
+        assert_eq!(no_id.id, "scratch");
+
+        let warnings = ticket_warnings(&[no_front, no_id]);
+        assert_eq!(warnings.len(), 1, "only the kind-less one: {warnings:?}");
+        assert!(
+            warnings[0].contains("'notes'") && !warnings[0].contains("(no id)"),
+            "the warning should name the file it came from: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_ticket_warnings_name_two_broken_files_apart() {
+        let a = name_from_file(crate::ticket::parse_ticket("# Notes\n"), "x/notes.md");
+        let b = name_from_file(crate::ticket::parse_ticket("# More\n"), "x/scratch.md");
+        let warnings = ticket_warnings(&[a, b]);
+        assert_eq!(warnings.len(), 2, "one each: {warnings:?}");
+        assert_ne!(
+            warnings[0], warnings[1],
+            "two files must not produce the same line: {warnings:?}"
         );
     }
 

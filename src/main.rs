@@ -156,7 +156,7 @@ enum Command {
     },
 }
 
-/// Read the backlog from the repository root, wherever planr was invoked.
+/// Work on the backlog at the repository root, wherever planr was invoked.
 ///
 /// A relative `--plan-dir` (the default `.plan`) is relative to the
 /// repository, but every reader opens it relative to the process directory
@@ -164,20 +164,59 @@ enum Command {
 /// from a subdirectory, `planr board` and `planr lint` therefore read no
 /// tickets at all and said nothing about it: the board rendered empty tables,
 /// warned that every in-flight branch had no task on trunk, and `lint`
-/// reported a clean backlog it had never opened. Both are read-only, and
-/// neither takes a path from the user, so entering the root before reading
-/// changes nothing else about them.
+/// reported a clean backlog it had never opened.
+///
+/// `planr new` has the same relative plan directory and writes to it, so it
+/// belongs here too. Applying this to the readers alone left the two halves
+/// disagreeing about where the backlog is: run from a subdirectory, `new`
+/// created `<subdir>/.plan/epics/01-e1.md`, printed it, and exited 0, and
+/// `board` in the same directory then reported a total of zero with an empty
+/// stderr. Every other command that touches the plan directory already
+/// refuses from a subdirectory, naming the slug it could not find, so none of
+/// them needs this -- and `claim` resolves a relative worktree path against
+/// the process directory, which moving it would silently redirect.
 ///
 /// Outside a git repository there is no root to enter; the working-tree
-/// readers still work relative to the current directory, as before.
+/// readers still work relative to the current directory, as before. Any other
+/// failure to ask git is worth a word, because what follows is a report about
+/// a backlog read from wherever the process happened to start.
 fn enter_repo_root() {
-    let Ok(root) = git::show_toplevel() else {
-        return;
+    let root = match git::toplevel_or_none() {
+        Ok(Some(root)) => root,
+        Ok(None) => return,
+        Err(e) => {
+            eprintln!(
+                "warning: could not ask git for the repository root ({e}); \
+                 using the plan directory relative to the current directory instead"
+            );
+            return;
+        }
     };
     if let Err(e) = std::env::set_current_dir(&root) {
         eprintln!(
             "warning: could not enter the repository root {root} ({e}); \
-             reading the plan directory relative to the current directory instead"
+             using the plan directory relative to the current directory instead"
+        );
+    }
+}
+
+/// Say so when the plan directory a command is about to read is not there.
+///
+/// `lint` prints nothing at all for a clean backlog, so a typo'd
+/// `--plan-dir` -- or a run in a clone that has no backlog yet -- was
+/// byte-identical to a clean bill of health, exit code included: it certified
+/// a backlog it had never opened. Neither case is an error, since planr is
+/// meant to be usable in a repository before `planr new` has ever made a
+/// backlog, but a directory that is simply not there is a fact neither
+/// command can establish any other way.
+///
+/// Working-tree mode only -- in ref mode the plan directory is a pathspec in
+/// a commit, and an empty read there is git's answer, not the filesystem's.
+fn warn_if_plan_dir_missing(plan_dir: &str) {
+    if !std::path::Path::new(plan_dir).exists() {
+        eprintln!(
+            "warning: no plan directory at '{plan_dir}' -- there is no backlog here to \
+             read; check --plan-dir, or run `planr new` to start one"
         );
     }
 }
@@ -191,7 +230,10 @@ fn main() {
             let source = board::source_status_line(r#ref.as_deref());
             let tickets = match r#ref {
                 Some(ref_) if !ref_.is_empty() => board::read_ref_tickets(&ref_, &cli.plan_dir),
-                _ => board::read_working_tree_tickets(&cli.plan_dir),
+                _ => {
+                    warn_if_plan_dir_missing(&cli.plan_dir);
+                    board::read_working_tree_tickets(&cli.plan_dir)
+                }
             };
             let branches = board::read_in_flight_branches(&cli.plan_dir);
             // Warnings go to stderr so the board on stdout stays a clean,
@@ -216,7 +258,10 @@ fn main() {
             enter_repo_root();
             let report = match r#ref {
                 Some(ref_) if !ref_.is_empty() => lint::lint_ref(&ref_, &cli.plan_dir),
-                _ => lint::lint_working_tree(&cli.plan_dir),
+                _ => {
+                    warn_if_plan_dir_missing(&cli.plan_dir);
+                    lint::lint_working_tree(&cli.plan_dir)
+                }
             };
             let out = lint::render_report(&report);
             if !out.is_empty() {
@@ -232,6 +277,7 @@ fn main() {
             title,
             parent_slug,
         } => {
+            enter_repo_root();
             match new_cmd::create_ticket(
                 &kind,
                 &slug,

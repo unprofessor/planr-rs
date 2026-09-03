@@ -36,7 +36,11 @@
   cannot see anywhere has no way of getting fixed. `planr board` now warns
   for each ticket it cannot place -- naming it, saying whether its `kind` is
   unrecognized or its frontmatter failed to parse, and pointing at `planr
-  lint`, which explains the file in full.
+  lint`, which explains the file in full. A ticket that carries no `id` of
+  its own is named after its file, the way `lint` names it: a file with no
+  frontmatter at all, or with frontmatter that simply omits `id`, otherwise
+  warned as "(no id)", so two broken files produced two identical lines that
+  told the reader nothing about either.
 
 - **A branch whose task is not on trunk is called out by name.** Such a
   branch is listed in flight and counts towards nothing, so on its own the
@@ -53,26 +57,42 @@
   committed and unmoved -- and the reader was sent hunting for it. The board
   now says what it can establish: that the ticket is there and did not parse.
   A list that came back empty says nothing about any individual slug either,
-  so it no longer produces one such warning per branch.
+  so it no longer produces one such warning per branch -- it says once that
+  the board read no tickets at all, and how many in-flight branches that
+  leaves counting towards nothing. Suppressing the per-branch warning without
+  that would have printed in-flight rows against a total of zero in complete
+  silence, which is the same gap read from the other side.
 
-- **`planr board` and `planr lint` read the backlog from a subdirectory.**
-  A relative `--plan-dir` (the default `.plan`) is relative to the repository,
-  but both commands opened it relative to the directory they were run from.
-  From anywhere but the root they therefore read nothing and said so in the
-  worst possible way: the board rendered empty tables and warned that every
-  in-flight branch named a task that was not on trunk, and `lint` printed a
-  clean bill of health for a backlog it had never opened, exiting 0. Both now
-  read from the repository root.
+- **`planr board`, `planr lint` and `planr new` use the backlog at the
+  repository root from a subdirectory.** A relative `--plan-dir` (the default
+  `.plan`) is relative to the repository, but all three opened it relative to
+  the directory they were run from. From anywhere but the root the readers
+  therefore read nothing and said so in the worst possible way: the board
+  rendered empty tables and warned that every in-flight branch named a task
+  that was not on trunk, and `lint` printed a clean bill of health for a
+  backlog it had never opened, exiting 0. `new` was worse still, because it
+  writes: from a subdirectory it created a second backlog there, printed the
+  path and exited 0, and `board` run from that same directory then reported a
+  total of zero with an empty stderr -- a ticket the tool had just made and
+  then denied existed. All three now work at the repository root. Every other
+  command already refuses from a subdirectory, naming the slug it could not
+  find, so none of them needed moving -- and `claim` resolves a relative
+  worktree path against the directory it was run from, which moving it would
+  have silently redirected.
 
-- **A prune that cannot drop planr's stale ignore rules says so.** Four of
-  the five ways `exclude_prune` can fail returned in silence -- an exclude
-  file that could not be locked, listed, opened, or read. Keeping the rules
-  is the right direction, but each silent path left behind exactly the
+- **A prune that cannot drop planr's stale ignore rules says so, and keeps
+  them.** Most of the ways the prune can fail returned in silence -- an
+  exclude file that could not be locked, listed, opened, or read. Keeping the
+  rules is the right direction, but each silent path left behind exactly the
   artefact the prune exists to remove: a rule that hides whatever is created
   at that path, invisible in `git status`, with nothing anywhere to point at
-  it. `planr abandon` would report success with an empty stderr. Every path
-  now warns, naming what could not be done and why, and still completes the
-  command it was asked to run.
+  it. `planr abandon` would report success with an empty stderr. Two paths
+  did not even keep them: when the prune could not work out where a live
+  worktree sits, or what pattern hides it, it carried on and counted that
+  worktree as needing nothing -- so the rule that hides it was dropped, which
+  is the one outcome the rest of this file fails closed against. Every path
+  now keeps the rules and warns, naming what could not be done and why, and
+  still completes the command it was asked to run.
 
 - **`planr abandon` takes the abandoned task's ignore rule with it.**
   Abandon refuses until the branch and worktree have been cleaned up by hand,
@@ -84,6 +104,43 @@
   planr's own block that no live worktree still justifies, keeping the ones
   they do -- including the shared `<plan-dir>/worktrees/` parent -- and never
   touching a rule the user wrote.
+
+- **The board takes no status from a ticket it cannot place.** A ticket whose
+  frontmatter failed to parse arrives with every field absent: its id is
+  recovered from its filename, and its status is the default `todo`, which was
+  read from nowhere. That went into the same slug-to-status lookup the
+  dependency column and the summary buckets use, last write winning, so a
+  broken duplicate of a finished ticket overwrote its `done` -- and every task
+  depending on it showed BLOCKED-BY on the same screen where the ticket itself
+  read `done`, and moved from the `todo` bucket to `blocked`. Only a ticket
+  some table shows now contributes a status; an unknown dependency already
+  counts as unmet, which is the honest answer.
+
+- **A branch no longer loses its warning to a broken file of the same slug.**
+  The warning that a ticket is present but did not parse fired on the slug
+  alone, so a slug that was both a real task on trunk and the recovered id of
+  some unreadable file took it. The board then rendered that task in the tasks
+  table and counted it while stderr said the branch "counts towards nothing",
+  and the warning the reader could act on -- that the branch's task file
+  carries a status planr does not recognize -- never appeared at all. The
+  warning is now only for a slug that names no task the board could place.
+
+- **`planr lint` says when the plan directory is not there.** `lint` prints
+  nothing for a clean backlog, so a typo'd `--plan-dir` was byte-identical to
+  a clean bill of health, exit code included: it certified a backlog it had
+  never opened. A directory that is simply not there is not an error -- planr
+  is meant to be usable in a repository before `planr new` has ever made a
+  backlog -- but it is a fact neither `lint` nor `board` can establish any
+  other way, so both now say it.
+
+- **planr says when it could not ask git where the repository is.** Being
+  outside a repository is ordinary and stays quiet, but any other reason git
+  could not answer -- a dubious-ownership refusal, git missing from `PATH` --
+  was swallowed just as quietly, and what followed was a report about a
+  backlog read from wherever the process happened to start. The two are now
+  told apart by reading all of git's message rather than the last line of it,
+  which is the line that says "Stopping at filesystem boundary" on a perfectly
+  normal run outside a repository.
 
 - **`planr claim` refuses a task trunk already records as finished.** The
   guard only rejected `abandoned`, and the branch-side check cannot help

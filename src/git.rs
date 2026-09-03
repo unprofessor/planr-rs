@@ -22,26 +22,33 @@ pub(crate) fn git_in(cwd: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git(cwd: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    let out = run_git_raw(cwd, args)?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    } else {
+        Err(last_stderr_line(&out))
+    }
+}
+
+/// The raw process result, for the one caller that has to read all of git's
+/// stderr rather than the last line of it.
+fn run_git_raw(cwd: Option<&Path>, args: &[&str]) -> Result<std::process::Output, String> {
     let mut cmd = Command::new("git");
     cmd.args(args);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
-    let out = cmd
-        .output()
-        .map_err(|e| format!("git command failed: {e}"))?;
+    cmd.output().map_err(|e| format!("git command failed: {e}"))
+}
 
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let last_line = stderr
-            .lines()
-            .rfind(|l| !l.trim().is_empty())
-            .unwrap_or("git failed")
-            .to_string();
-        Err(last_line)
-    }
+/// The last non-empty line of git's stderr -- the part that usually names the
+/// problem, and short enough to put in one warning.
+fn last_stderr_line(out: &std::process::Output) -> String {
+    String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .rfind(|l| !l.trim().is_empty())
+        .unwrap_or("git failed")
+        .to_string()
 }
 
 /// List all `.md` files under `dir` at `ref` (e.g. `HEAD:.plan`).
@@ -474,11 +481,15 @@ pub fn worktrees_under(path: &Path, cwd: &Path) -> Result<Vec<PathBuf>, String> 
 ///
 /// Every way this can fail leaves the rules in place, which is the safe
 /// direction -- a rule kept too long is tidiness, a rule dropped too early
-/// unhides a live worktree. Keeping them quietly is not safe, though: what
-/// stays behind hides whatever is created at that path and leaves no trace in
-/// `git status`, so nothing else would ever point at it. Say so on stderr,
-/// naming what could not be done and why, and let the command that asked for
-/// the prune carry on -- the prune is never what it was asked to do.
+/// unhides a live worktree. That includes the per-tree loop: a tree whose
+/// pattern cannot be worked out contributes nothing to `needed`, so carrying
+/// on would drop the very rule that hides it, which is the outcome the rest
+/// of this file fails closed against. Keeping them quietly is not safe
+/// either: what stays behind hides whatever is created at that path and
+/// leaves no trace in `git status`, so nothing else would ever point at it.
+/// Say so on stderr, naming what could not be done and why, and let the
+/// command that asked for the prune carry on -- the prune is never what it
+/// was asked to do.
 pub fn exclude_prune(cwd: &Path) {
     let _lock = match crate::lock::PlanrLock::exclude(cwd) {
         Ok(l) => l,
@@ -492,13 +503,23 @@ pub fn exclude_prune(cwd: &Path) {
 
     let mut needed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for root in &roots {
-        let Ok(Some(tree)) = containing_worktree_root(root, cwd) else {
-            continue;
+        // `Ok(None)` is an answer: nothing sits above this tree, so no rule
+        // hides it and none is needed. `Err` is not an answer, and treating
+        // it as one dropped the rules that tree justifies -- the fail-open
+        // this whole path exists to avoid.
+        let tree = match containing_worktree_root(root, cwd) {
+            Ok(Some(tree)) => tree,
+            Ok(None) => continue,
+            Err(e) => return warn_prune_failed(&e),
         };
         let mut cur = root.as_path();
         while cur != tree {
-            if let Ok(Some(p)) = exclude_pattern(cur, cwd) {
-                needed.insert(p);
+            match exclude_pattern(cur, cwd) {
+                Ok(Some(p)) => {
+                    needed.insert(p);
+                }
+                Ok(None) => {}
+                Err(e) => return warn_prune_failed(&e),
             }
             let Some(parent) = cur.parent() else { break };
             cur = parent;
@@ -713,6 +734,28 @@ pub fn rev_parse_verify(ref_: &str) -> Result<String, String> {
 /// containing the process cwd.
 pub fn show_toplevel() -> Result<String, String> {
     Ok(git(&["rev-parse", "--show-toplevel"])?.trim().to_string())
+}
+
+/// The repository root, with "there is no repository here" as its own answer.
+///
+/// Git reports both outcomes as exit 128 and only the message tells them
+/// apart, so the message has to be read in full. Its discovery failure says
+/// "not a git repository" on the first line and, when the search stops at a
+/// mount point, adds "Stopping at filesystem boundary" after it -- which is
+/// the line that survives when only the last one is kept. Matching that alone
+/// reported an ordinary run outside a repository as a git failure, which is
+/// exactly the noise the caller is trying not to make.
+pub fn toplevel_or_none() -> Result<Option<String>, String> {
+    let out = run_git_raw(None, &["rev-parse", "--show-toplevel"])?;
+    if out.status.success() {
+        return Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        ));
+    }
+    if String::from_utf8_lossy(&out.stderr).contains("not a git repository") {
+        return Ok(None);
+    }
+    Err(last_stderr_line(&out))
 }
 
 /// `git rev-parse --short <ref>`: abbreviated commit id for a commit-ish.
