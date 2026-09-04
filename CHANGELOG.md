@@ -28,6 +28,13 @@
 
 ### Fixed
 
+- **A task's status is whatever its file says, even when that reads like one
+  of the board's stand-ins.** The branch scan reports `(no task file)` and
+  `(unreadable)` for a task file it could not read, and it recognized them by
+  their text, so a ticket whose frontmatter carried one of those strings was
+  reported as a missing file rather than as the invalid status it is. The
+  scan now returns which of the three it means.
+
 - **`planr board <ref>` no longer presents a total it computed from ticket
   files it never opened.** The reader skipped a ticket file whose blob it
   could not `show` -- a damaged object, a packfile planr cannot open, a
