@@ -408,6 +408,37 @@ fn write_lines(path: &Path, lines: &[&[u8]]) -> Result<(), String> {
     std::fs::write(path, out).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
+/// Write the file back with `block` as planr's rules, between the lines it
+/// does not own.
+///
+/// When `block` is empty the header introduces nothing, so it goes too --
+/// along with the blank line that separated it. Judging that by "no anchored
+/// rule anywhere in the file" would strand the header forever in any repo
+/// holding an unrelated `/target` rule.
+///
+/// Every caller that shrinks planr's block goes through here, so one place
+/// decides what happens to the header. Keep it that way: a second reassembly
+/// is a second chance to strand the header or to rewrite a line planr does
+/// not own.
+fn write_planr_block<'a>(
+    path: &Path,
+    before: Vec<&'a [u8]>,
+    block: &[&'a [u8]],
+    after: &[&'a [u8]],
+) -> Result<(), String> {
+    let mut out = before;
+    if !block.is_empty() {
+        out.push(EXCLUDE_HEADER.as_bytes());
+        out.extend_from_slice(block);
+    } else {
+        while out.last().is_some_and(|l| l.trim_ascii().is_empty()) {
+            out.pop();
+        }
+    }
+    out.extend_from_slice(after);
+    write_lines(path, &out)
+}
+
 /// Read an exclude file that is about to be rewritten.
 ///
 /// Two things this must not do, because the caller writes the file back.
@@ -524,22 +555,7 @@ pub fn exclude_remove(target: &Path, cwd: &Path) -> Result<(), String> {
         .into_iter()
         .filter(|l| l.trim_ascii() != pattern.as_bytes())
         .collect();
-
-    let mut out: Vec<&[u8]> = before;
-    if !kept.is_empty() {
-        out.push(EXCLUDE_HEADER.as_bytes());
-        out.extend_from_slice(&kept);
-    } else {
-        // The header introduces nothing now, so it goes too -- along with the
-        // blank line that separated it. Judging that by "no anchored rule
-        // anywhere in the file" would strand the header forever in any repo
-        // holding an unrelated `/target` rule.
-        while out.last().is_some_and(|l| l.trim_ascii().is_empty()) {
-            out.pop();
-        }
-    }
-    out.extend_from_slice(&after);
-    write_lines(&path, &out)
+    write_planr_block(&path, before, &kept, &after)
 }
 
 /// Registered worktrees that live inside `path`.
@@ -650,17 +666,7 @@ pub fn exclude_prune(cwd: &Path) {
         return;
     }
 
-    let mut out: Vec<&[u8]> = before;
-    if !kept.is_empty() {
-        out.push(EXCLUDE_HEADER.as_bytes());
-        out.extend_from_slice(&kept);
-    } else {
-        while out.last().is_some_and(|l| l.trim_ascii().is_empty()) {
-            out.pop();
-        }
-    }
-    out.extend_from_slice(&after);
-    if let Err(e) = write_lines(&path, &out) {
+    if let Err(e) = write_planr_block(&path, before, &kept, &after) {
         warn_prune_failed(&e);
     }
 }
