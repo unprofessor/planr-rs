@@ -20,6 +20,54 @@
 
 ### Fixed
 
+- **planr keeps the ignore rules it did not write, whatever encoding they
+  are in.** `.git/info/exclude` is a list of paths, and on Unix a path is
+  bytes -- a `/caf\xe9/` rule written years ago under Latin-1 is an ordinary
+  thing to find there. planr read the file as text and rewrote it whole, so
+  one such byte made the read fail, the failure was taken for an empty file,
+  and `claim` wrote back planr's own block alone: `/build/`, `/node_modules/`
+  and every other rule gone, exit 0, no warning, and the file is untracked,
+  so git cannot put it back. `close` read the same file the same way and
+  simply did nothing, leaving its own rule behind for good. The whole
+  pipeline now works over bytes: every line planr does not own comes back
+  exactly as it went in, and a prune keeps a line it cannot even decode,
+  because planr never writes one. A read that fails for any reason other
+  than "the file is not there" is now reported instead of being rewritten
+  over -- planr must not overwrite what it could not read.
+
+- **`planr close` finishes its cleanup when run from inside the worktree it
+  removes.** Closing your own task from your own worktree is how a worker
+  runs the command, and it left the process standing in a directory that no
+  longer existed, so every git run after the removal failed at `chdir`
+  before git was reached. Two things went with it, neither naming the cause:
+  the ignore rule for a custom worktree path could not be dropped, so a rule
+  hiding a path that was gone outlived it and silently hid whatever was
+  created there next; and the "all tasks under this story are done" hint was
+  computed from a failed listing and dropped, so the close that finished a
+  story said nothing about it. `close` now steps out to the worktree holding
+  trunk before removing anything, and says so if it cannot.
+
+- **`planr lint <ref>` no longer calls a backlog with no tickets in it
+  absent.** A repository that has scaffolded `.plan/epics`, `.plan/stories`
+  and `.plan/tasks` and written no tickets yet was told there was no backlog
+  at that ref to lint and sent to check `--plan-dir` and the ref, when both
+  were right and the backlog was there -- working-tree `lint` and `board`
+  are silent on the identical state. Zero tickets is not zero backlog: ref
+  mode now asks the ref the same question working-tree mode asks the
+  filesystem, whether anything is committed under that path at all, and
+  warns only when the answer is nothing. A ref that does not resolve is
+  reported as its own thing, quoting git, rather than as a finding about the
+  backlog.
+
+- **`planr claim` prints the worktree path it resolved.** `claim --worktree
+  ../out` run from a subdirectory printed `/repo/sub/../out`. It opens, but
+  it is the path the caller pastes into their next command, and it was not
+  the path planr itself had used: the ignore rule is anchored after
+  normalizing, so planr wrote `/out` while handing back the caller's `..`.
+  The typed path is now normalized once, up front, so the directory git
+  creates, the rule that hides it, and the path printed back all name the
+  same place -- an absolute path carrying `..` included.
+
 - **The board summary counts only what a ticket table shows.** A `plan/*`
   branch whose slug names no task on trunk is listed in the in-flight table,
   but the tasks table is built from trunk, so no row there describes it --

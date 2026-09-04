@@ -73,13 +73,26 @@ fn last_stderr_line(out: &std::process::Output) -> String {
         .to_string()
 }
 
-/// List all `.md` files under `dir` at `ref` (e.g. `HEAD:.plan`).
-pub fn ls_tree_md(ref_: &str, dir: &str) -> Result<Vec<String>, String> {
+/// List every file under `dir` at `ref`, whatever its extension.
+///
+/// The unfiltered listing answers a question the `.md` one cannot: whether
+/// anything is there at all. A backlog scaffolded with `.gitkeep` files and
+/// no tickets yet reads as zero tickets, and that is not the same fact as a
+/// plan directory that is not in the commit.
+pub fn ls_tree(ref_: &str, dir: &str) -> Result<Vec<String>, String> {
     let out = git(&["ls-tree", "-r", "--name-only", ref_, "--", dir])?;
     Ok(out
         .lines()
         .map(|l| l.trim().to_string())
-        .filter(|l| l.ends_with(".md") && !l.is_empty())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
+/// List all `.md` files under `dir` at `ref` (e.g. `HEAD:.plan`).
+pub fn ls_tree_md(ref_: &str, dir: &str) -> Result<Vec<String>, String> {
+    Ok(ls_tree(ref_, dir)?
+        .into_iter()
+        .filter(|l| l.ends_with(".md"))
         .collect())
 }
 
@@ -123,7 +136,14 @@ pub fn worktree_add(path: &Path, branch: &str, ref_: Option<&str>) -> Result<(),
 
 /// Strip `.` and resolve `..` lexically. The target may not exist yet, so
 /// `canonicalize` is not available to do it.
-fn normalize(p: &Path) -> PathBuf {
+///
+/// This is the one reading planr gives a path the caller typed, and every
+/// use of that path has to agree with it: the directory git is told to make
+/// the worktree in, the anchored rule written to hide it, and the path
+/// printed back for the caller to `cd` into. Resolving the rule one way and
+/// printing the path another is how `claim --worktree ../out` came to print
+/// `/repo/sub/../out`.
+pub fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
@@ -344,35 +364,35 @@ pub fn exclude_add(target: &Path, cwd: &Path) -> Result<bool, String> {
         return Ok(false);
     };
     let path = exclude_file(cwd)?;
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let existing = read_exclude_file(&path)?;
     let (before, block, after) = split_planr_block(&existing);
     // Deduplicate only against planr's own block. A matching line elsewhere
     // in the file is the user's, and adopting it would mean `close` later
     // deletes a rule planr never wrote -- unhiding, say, their `/build/`.
     // A duplicate line costs nothing: git evaluates both, and removing ours
     // leaves theirs.
-    if block.iter().any(|l| l.trim() == pattern) {
+    if block.iter().any(|l| l.trim_ascii() == pattern.as_bytes()) {
         return Ok(false);
     }
 
-    let mut out: Vec<&str> = before.to_vec();
-    while out.last().is_some_and(|l| l.trim().is_empty()) {
+    let mut out: Vec<&[u8]> = before.to_vec();
+    while out.last().is_some_and(|l| l.trim_ascii().is_empty()) {
         out.pop();
     }
     if !out.is_empty() {
-        out.push("");
+        out.push(b"");
     }
-    out.push(EXCLUDE_HEADER);
+    out.push(EXCLUDE_HEADER.as_bytes());
     out.extend_from_slice(&block);
-    out.push(&pattern);
+    out.push(pattern.as_bytes());
     // Close the block with a blank line, always -- including when planr's
     // rules are the last thing in the file, which is the usual case. Without
     // it, the ordinary way to add a rule by hand (`echo '/mydir/' >>
     // .git/info/exclude`) appends *into* planr's block, and planr then
     // treats that line as its own: it declines to write a duplicate and a
     // later `close` deletes the user's rule.
-    if !after.first().is_some_and(|l| l.trim().is_empty()) {
-        out.push("");
+    if !after.first().is_some_and(|l| l.trim_ascii().is_empty()) {
+        out.push(b"");
     }
     out.extend_from_slice(&after);
     write_lines(&path, &out)?;
@@ -380,13 +400,58 @@ pub fn exclude_add(target: &Path, cwd: &Path) -> Result<bool, String> {
 }
 
 /// Join `lines` with newlines and write them, always newline-terminated.
-fn write_lines(path: &Path, lines: &[&str]) -> Result<(), String> {
-    let mut out = lines.join("\n");
+fn write_lines(path: &Path, lines: &[&[u8]]) -> Result<(), String> {
+    let mut out: Vec<u8> = lines.join(&b'\n');
     if !out.is_empty() {
-        out.push('\n');
+        out.push(b'\n');
     }
     std::fs::write(path, out).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
+
+/// Read an exclude file that is about to be rewritten.
+///
+/// Two things this must not do, because the caller writes the file back.
+///
+/// It must not read the file as text. `.git/info/exclude` is a list of paths,
+/// and on Unix a path is bytes: one Latin-1 byte anywhere in it -- a
+/// `/caf\xe9/` rule the user wrote years ago -- failed `read_to_string`
+/// outright. Every line planr does not own is handed back to `write_lines`
+/// exactly as it came in, so the file survives whatever encoding it is in.
+///
+/// And it must not turn a failed read into an empty file. Paired with
+/// `unwrap_or_default`, that failure read as "there is nothing here", and the
+/// rewrite replaced the user's whole exclude file with planr's block alone --
+/// exit 0, no warning, and the file is untracked, so git cannot put it back.
+/// Only "not there" is an empty file. Anything else is an error, and the
+/// caller must not overwrite what it could not read.
+fn read_exclude_file(path: &Path) -> Result<Vec<u8>, String> {
+    match std::fs::read(path) {
+        Ok(content) => Ok(content),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+    }
+}
+
+/// Split a file into lines the way `str::lines` does, but over bytes.
+///
+/// The `\r` of a CRLF line stays on the line rather than being dropped: the
+/// callers compare with `trim_ascii`, so it does not affect what planr
+/// recognizes, and what planr does not own is written back byte for byte.
+fn split_lines(content: &[u8]) -> Vec<&[u8]> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+    let body = match content.split_last() {
+        Some((b'\n', rest)) => rest,
+        _ => content,
+    };
+    body.split(|b| *b == b'\n').collect()
+}
+
+/// The lines before planr's block, the patterns planr owns, and the lines
+/// after -- each kept as raw bytes, so what planr does not own is written
+/// back exactly as it came in.
+type PlanrBlock<'a> = (Vec<&'a [u8]>, Vec<&'a [u8]>, Vec<&'a [u8]>);
 
 /// Split an exclude file into the lines before planr's header, the patterns
 /// planr owns, and everything after.
@@ -394,15 +459,18 @@ fn write_lines(path: &Path, lines: &[&str]) -> Result<(), String> {
 /// planr's block runs from its header to the first blank line, comment, or
 /// end of file. Anything outside it belongs to the user or another tool and
 /// is never rewritten.
-fn split_planr_block(existing: &str) -> (Vec<&str>, Vec<&str>, Vec<&str>) {
-    let lines: Vec<&str> = existing.lines().collect();
-    let Some(header) = lines.iter().position(|l| l.trim() == EXCLUDE_HEADER) else {
+fn split_planr_block(existing: &[u8]) -> PlanrBlock<'_> {
+    let lines: Vec<&[u8]> = split_lines(existing);
+    let Some(header) = lines
+        .iter()
+        .position(|l| l.trim_ascii() == EXCLUDE_HEADER.as_bytes())
+    else {
         return (lines, Vec::new(), Vec::new());
     };
     let mut end = header + 1;
     while end < lines.len() {
-        let t = lines[end].trim();
-        if t.is_empty() || t.starts_with('#') {
+        let t = lines[end].trim_ascii();
+        if t.is_empty() || t.starts_with(b"#") {
             break;
         }
         end += 1;
@@ -440,28 +508,33 @@ pub fn exclude_remove(target: &Path, cwd: &Path) -> Result<(), String> {
         return Ok(());
     }
     let path = exclude_file(cwd)?;
-    let Ok(existing) = std::fs::read_to_string(&path) else {
-        return Ok(());
-    };
+    // A file that is not there holds no rule to remove, which `split_planr_block`
+    // reaches on its own. A read that failed for any other reason is not that
+    // answer: reporting it is what makes `drop_exclude` say the rule is still
+    // sitting there.
+    let existing = read_exclude_file(&path)?;
     let (before, block, after) = split_planr_block(&existing);
     // Only planr's own block is rewritten. A matching line outside it is the
     // user's, and deleting it would unhide something they meant to keep
     // hidden.
-    if !block.iter().any(|l| l.trim() == pattern) {
+    if !block.iter().any(|l| l.trim_ascii() == pattern.as_bytes()) {
         return Ok(());
     }
-    let kept: Vec<&str> = block.into_iter().filter(|l| l.trim() != pattern).collect();
+    let kept: Vec<&[u8]> = block
+        .into_iter()
+        .filter(|l| l.trim_ascii() != pattern.as_bytes())
+        .collect();
 
-    let mut out: Vec<&str> = before;
+    let mut out: Vec<&[u8]> = before;
     if !kept.is_empty() {
-        out.push(EXCLUDE_HEADER);
+        out.push(EXCLUDE_HEADER.as_bytes());
         out.extend_from_slice(&kept);
     } else {
         // The header introduces nothing now, so it goes too -- along with the
         // blank line that separated it. Judging that by "no anchored rule
         // anywhere in the file" would strand the header forever in any repo
         // holding an unrelated `/target` rule.
-        while out.last().is_some_and(|l| l.trim().is_empty()) {
+        while out.last().is_some_and(|l| l.trim_ascii().is_empty()) {
             out.pop();
         }
     }
@@ -552,30 +625,37 @@ pub fn exclude_prune(cwd: &Path) {
         Ok(p) => p,
         Err(e) => return warn_prune_failed(&e),
     };
-    let existing = match std::fs::read_to_string(&path) {
+    // No exclude file is not a failure: there is nothing to prune, and that
+    // much the code did establish -- an empty read reaches `kept.len() ==
+    // block.len()` below and writes nothing. Any other read error means rules
+    // may be sitting there unread.
+    let existing = match read_exclude_file(&path) {
         Ok(c) => c,
-        // No exclude file is not a failure: there is nothing to prune, and
-        // that much the code did establish. Any other read error means rules
-        // may be sitting there unread.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) => return warn_prune_failed(&format!("cannot read {}: {e}", path.display())),
+        Err(e) => return warn_prune_failed(&e),
     };
     let (before, block, after) = split_planr_block(&existing);
-    let kept: Vec<&str> = block
+    let kept: Vec<&[u8]> = block
         .iter()
         .copied()
-        .filter(|l| needed.contains(l.trim()))
+        .filter(|l| match std::str::from_utf8(l.trim_ascii()) {
+            Ok(line) => needed.contains(line),
+            // planr never writes a rule it cannot express as UTF-8 --
+            // `exclude_pattern` refuses those -- so a line that is not UTF-8
+            // is somebody else's, wherever in the file it landed, and pruning
+            // is not the place to discover that.
+            Err(_) => true,
+        })
         .collect();
     if kept.len() == block.len() {
         return;
     }
 
-    let mut out: Vec<&str> = before;
+    let mut out: Vec<&[u8]> = before;
     if !kept.is_empty() {
-        out.push(EXCLUDE_HEADER);
+        out.push(EXCLUDE_HEADER.as_bytes());
         out.extend_from_slice(&kept);
     } else {
-        while out.last().is_some_and(|l| l.trim().is_empty()) {
+        while out.last().is_some_and(|l| l.trim_ascii().is_empty()) {
             out.pop();
         }
     }
@@ -647,6 +727,49 @@ fn another_worktree_needs(pattern: &str, target: &Path, cwd: &Path) -> bool {
 }
 
 const EXCLUDE_HEADER: &str = "# planr worktrees -- checkouts, not backlog content";
+
+/// Step out of a directory that is about to be deleted, and answer where to
+/// work from instead.
+///
+/// Removing a worktree the process is standing in leaves it standing in a
+/// path that no longer resolves, and everything after that fails at `chdir`
+/// before git is even reached -- not with an error about the worktree, but
+/// with "No such file or directory" from whatever ran next. `close` run from
+/// inside the task's own worktree hit exactly that: the ignore rule for a
+/// custom worktree path could not be dropped and outlived the directory it
+/// hid, and the "all tasks under this story are done" hint was computed from
+/// a failed `git ls-tree` and silently dropped. Neither symptom named the
+/// cause, and one of them named nothing at all.
+///
+/// So the caller moves first, while both directories still exist. `refuge`
+/// must be somewhere that outlives the removal and belongs to the same
+/// repository -- the worktree holding trunk, for `close`. The returned path
+/// is what the caller must use as its working directory from then on; when
+/// the process was standing elsewhere all along, that is simply `cwd`.
+pub fn step_out_of(doomed: &Path, refuge: &Path, cwd: &Path) -> PathBuf {
+    let here = canonicalize_existing(&normalize(cwd));
+    let doomed_abs = canonicalize_existing(&normalize(doomed));
+    if !here.starts_with(&doomed_abs) {
+        return cwd.to_path_buf();
+    }
+    match std::env::set_current_dir(refuge) {
+        Ok(()) => refuge.to_path_buf(),
+        // Nothing else can be done about it, and the caller is mid-cleanup on
+        // a command that has already succeeded -- but the failures that
+        // follow will read as unrelated git errors, so say where they come
+        // from.
+        Err(e) => {
+            eprintln!(
+                "warning: could not leave {} for {} before removing it ({e}); \
+                 the cleanup that follows runs from a directory that is about \
+                 to be deleted and may fail",
+                cwd.display(),
+                refuge.display()
+            );
+            cwd.to_path_buf()
+        }
+    }
+}
 
 /// `git worktree remove <path> [--force]`.
 pub fn worktree_remove(path: &Path, force: bool) -> Result<(), String> {
@@ -920,6 +1043,145 @@ mod tests {
                 after.trim_end(),
                 before.trim_end(),
                 "the file must come back exactly as it was"
+            );
+        });
+    }
+
+    /// A user's exclude file need not be UTF-8. `.git/info/exclude` is a
+    /// list of paths and on Unix a path is bytes, so a `/caf\xe9/` rule
+    /// written years ago under Latin-1 is an ordinary thing to find there.
+    /// Reading it as text failed, `unwrap_or_default` turned that failure
+    /// into "the file is empty", and the rewrite replaced every rule the
+    /// user had with planr's block alone -- exit 0, no warning, and the file
+    /// is untracked, so git could not put it back.
+    ///
+    /// Every writer is checked, not just the one the report named: `claim`
+    /// adds, `close` removes, and `abandon` prunes, and all three rewrite
+    /// the whole file from the same split.
+    #[test]
+    fn test_exclude_writers_preserve_a_non_utf8_file() {
+        with_temp_repo(|_tmp, repo| {
+            let excl = repo.join(".git/info/exclude");
+            let users: &[u8] = b"/build/\n/caf\xe9/\n/secrets.txt\n";
+            fs::write(&excl, users).unwrap();
+            let target = repo.join("wt");
+
+            assert!(exclude_add(&target, repo).unwrap(), "the rule is written");
+            let after = fs::read(&excl).unwrap();
+            assert!(
+                after.starts_with(users),
+                "the user's rules must come back byte for byte: {after:?}"
+            );
+            assert!(
+                after.windows(5).any(|w| w == b"/wt/\n"),
+                "and planr's rule is there too: {after:?}"
+            );
+
+            // Trailing blank lines are the one thing a round trip may leave
+            // behind -- the separator planr wrote in -- which is what the
+            // UTF-8 round-trip test above allows for too. Every byte the
+            // user wrote has to come back.
+            exclude_remove(&target, repo).unwrap();
+            assert_eq!(
+                fs::read(&excl).unwrap().trim_ascii_end(),
+                users.trim_ascii_end(),
+                "removing planr's rule must leave the user's rules untouched"
+            );
+
+            // And the third writer. Nothing planr owns is needed any more, so
+            // the prune has real work to do -- and must still not touch the
+            // line it cannot even decode.
+            exclude_add(&target, repo).unwrap();
+            exclude_prune(repo);
+            assert_eq!(
+                fs::read(&excl).unwrap().trim_ascii_end(),
+                users.trim_ascii_end(),
+                "the prune must keep every rule that is not planr's"
+            );
+        });
+    }
+
+    /// The other half of the same fix: only "not there" is an empty exclude
+    /// file. `unwrap_or_default` made every other read failure look like one,
+    /// and the rewrite that followed took the file with it.
+    ///
+    /// What this pins is that a failed read is reported *as* a failed read
+    /// and the file is left alone. It is deliberately not the destructive
+    /// case -- a directory where the file should be fails the write too, so
+    /// the old code did stop, just one step later and blaming the wrong
+    /// operation. The read failure that actually destroyed a file is the
+    /// non-UTF-8 one above, where the write would have succeeded. This
+    /// construction is used because `EISDIR` comes back for every user, root
+    /// included, unlike a mode of `0o000`, which root reads straight through.
+    #[test]
+    fn test_exclude_add_refuses_a_file_it_could_not_read() {
+        with_temp_repo(|_tmp, repo| {
+            let excl = repo.join(".git/info/exclude");
+            fs::remove_file(&excl).ok();
+            fs::create_dir(&excl).unwrap();
+            fs::write(excl.join("marker"), "still here\n").unwrap();
+
+            let err = exclude_add(&repo.join("wt"), repo).unwrap_err();
+            assert!(
+                err.contains("cannot read"),
+                "a failed read must be reported, not read as an empty file: {err}"
+            );
+            assert!(
+                excl.join("marker").exists(),
+                "and nothing may be written over what could not be read"
+            );
+        });
+    }
+
+    /// `str::lines` over bytes, and the cases that decide whether a rewrite
+    /// gains or loses a newline: no trailing newline, a trailing blank line,
+    /// an empty file, and CRLF -- whose `\r` stays on the line, because
+    /// every comparison goes through `trim_ascii` and everything planr does
+    /// not own is written back as it came in.
+    #[test]
+    fn test_split_lines_matches_str_lines() {
+        assert_eq!(split_lines(b""), Vec::<&[u8]>::new());
+        assert_eq!(split_lines(b"\n"), vec![b"".as_slice()]);
+        assert_eq!(split_lines(b"a"), vec![b"a".as_slice()]);
+        assert_eq!(split_lines(b"a\n"), vec![b"a".as_slice()]);
+        assert_eq!(
+            split_lines(b"a\n\n"),
+            vec![b"a".as_slice(), b"".as_slice()],
+            "a trailing blank line is a line"
+        );
+        assert_eq!(
+            split_lines(b"a\r\nb\r\n"),
+            vec![b"a\r".as_slice(), b"b\r".as_slice()]
+        );
+        // A line that is not UTF-8 is a line like any other.
+        assert_eq!(split_lines(b"/caf\xe9/\n"), vec![b"/caf\xe9/".as_slice()]);
+    }
+
+    /// `step_out_of` moves the process only when the process is actually
+    /// standing in the doomed directory. The cases that must leave it where
+    /// it is are checked here, because they are the ones a prefix test gets
+    /// wrong: a sibling whose path is a *string* prefix of the doomed one
+    /// (`wt2` under `wt`) is not inside it, and neither is the parent that
+    /// holds it. The case that does chdir is process-global, so it is
+    /// checked end to end in the e2e suite rather than in a threaded test
+    /// runner.
+    #[test]
+    fn test_step_out_of_leaves_an_outside_cwd_alone() {
+        with_temp_repo(|_tmp, repo| {
+            let doomed = repo.join("wt");
+            fs::create_dir_all(&doomed).unwrap();
+            let sibling = repo.join("wt2");
+            fs::create_dir_all(&sibling).unwrap();
+
+            assert_eq!(
+                step_out_of(&doomed, repo, &sibling),
+                sibling,
+                "`wt2` is not inside `wt`, whatever their names share"
+            );
+            assert_eq!(
+                step_out_of(&doomed, repo, repo),
+                repo,
+                "the directory that holds the worktree outlives it"
             );
         });
     }

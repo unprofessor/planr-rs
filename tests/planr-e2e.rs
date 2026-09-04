@@ -1402,6 +1402,13 @@ fn read_exclude(dir: &Path) -> String {
     std::fs::read_to_string(dir.join(".git/info/exclude")).unwrap_or_default()
 }
 
+/// The same file as bytes. `.git/info/exclude` is a list of paths, and on
+/// Unix a path is bytes -- a file holding one the reader cannot decode is
+/// exactly the case worth asserting about, and `read_exclude` cannot see it.
+fn read_exclude_bytes(dir: &Path) -> Vec<u8> {
+    std::fs::read(dir.join(".git/info/exclude")).unwrap_or_default()
+}
+
 /// Ask git itself whether `path` is ignored *from within `dir`*.
 ///
 /// Reading the exclude file only tells you what was written; git anchors a
@@ -2789,10 +2796,6 @@ fn test_e2e_new_and_board_agree_from_a_subdirectory() {
         !sub.join(".plan").exists(),
         "and the printed path must not have made a second backlog under `sub`"
     );
-    assert!(
-        !sub.join(".plan").exists(),
-        "no second backlog under the subdirectory"
-    );
 
     let (out, err) = planr_ok_both(&sub, &["board"]);
     assert!(
@@ -3241,11 +3244,39 @@ fn test_e2e_an_unreadable_plan_directory_is_not_a_clean_bill_of_health() {
 
 /// The same fact one level down: one unreadable `tasks/` hides every task in
 /// the backlog just as quietly as an unreadable `.plan` hides all of it.
+///
+/// Two ways in, because the obvious one does not reach every runner. A mode
+/// of `0o000` does not stop root from reading the directory, so under root
+/// -- which is where CI often runs -- the chmod half has nothing to check
+/// and used to return early, leaving the whole test passing vacuously in
+/// exactly the environment least likely to notice. A plain file where the
+/// kind directory should be is the same defect by another route, and no
+/// privilege lets `read_dir` open a regular file, so that half runs and
+/// asserts for everyone.
 #[cfg(unix)]
 #[test]
 fn test_e2e_an_unreadable_kind_directory_is_reported() {
     use std::os::unix::fs::PermissionsExt;
 
+    // A plain file where `tasks/` should be. This half holds for every user.
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    let tasks = td.path().join(".plan/tasks");
+    std::fs::remove_dir_all(&tasks).unwrap();
+    std::fs::write(&tasks, "not a directory\n").unwrap();
+    let (out, err) = planr_ok_both(td.path(), &["lint"]);
+    assert!(
+        err.contains(".plan/tasks"),
+        "the directory whose tickets went missing must be named: {err:?}"
+    );
+    assert!(
+        !out.contains("error"),
+        "the tickets that were read are still reported on: {out}"
+    );
+
+    // And the case the warning was written for: a directory the caller may
+    // not open. Skipped under root, where the mode does not bite -- the half
+    // above is what keeps the test honest there.
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
     let tasks = td.path().join(".plan/tasks");
@@ -3253,16 +3284,12 @@ fn test_e2e_an_unreadable_kind_directory_is_reported() {
     let readable_anyway = std::fs::read_dir(&tasks).is_ok();
     let (_, err) = planr_ok_both(td.path(), &["lint"]);
     std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    if readable_anyway {
-        // Running as root: the permissions did not stop the read, so there is
-        // nothing to warn about and nothing this test can check.
-        return;
+    if !readable_anyway {
+        assert!(
+            err.contains(".plan/tasks"),
+            "the directory whose tickets went missing must be named: {err:?}"
+        );
     }
-    assert!(
-        err.contains(".plan/tasks"),
-        "the directory whose tickets went missing must be named: {err:?}"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3285,14 +3312,315 @@ fn test_e2e_lint_says_so_when_a_ref_holds_no_backlog() {
         "nothing was read, so nothing to report: {out}"
     );
     assert!(
-        err.contains("no tickets under 'typo' at 'main'"),
+        err.contains("nothing under 'typo' at 'main'"),
         "lint must not certify a ref it read nothing from: {err:?}"
     );
 
     // The real plan directory at the same ref is not warned about.
     let (_, clean_err) = planr_ok_both(td.path(), &["lint", "main"]);
     assert!(
-        !clean_err.contains("no tickets under"),
+        clean_err.is_empty(),
         "a backlog that was read must not be reported as absent: {clean_err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: rewriting the exclude file without destroying it
+// ---------------------------------------------------------------------------
+
+/// Take a claimed task to `review` inside its worktree and commit it, so
+/// `close` will merge.
+fn approve_in_worktree(wt: &Path, root: &Path, slug: &str) {
+    let task_file = format!(".plan/tasks/{}", find_task_slug(root, slug));
+    let content = std::fs::read_to_string(wt.join(&task_file)).unwrap();
+    std::fs::write(
+        wt.join(&task_file),
+        content.replace("status: in_progress", "status: review")
+            + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-01\n",
+    )
+    .unwrap();
+    git_must(wt, &["add", "-A"]);
+    git_must(wt, &["commit", "-m", &format!("review: {slug}")]);
+}
+
+/// planr rewrites `.git/info/exclude` whole, from a split of what it read --
+/// so what it could not read, it destroyed. The file is a list of paths, and
+/// on Unix a path is bytes: one Latin-1 byte in a `/caf\xe9/` rule made the
+/// text read fail, `unwrap_or_default` turned that into "the file is empty",
+/// and `claim` wrote back planr's block alone. Exit 0, no warning, every
+/// other rule gone -- and the file is untracked, so git cannot put it back.
+///
+/// Both writers are checked here, not just the one the report reached
+/// through. `close` rewrites the same file from the same split, so a claim
+/// that preserved the file and a close that did not would leave the user
+/// exactly where they started, one command later.
+#[cfg(unix)]
+#[test]
+fn test_e2e_a_non_utf8_exclude_file_survives_claim_and_close() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    // A rule naming a directory whose name is not UTF-8, which is an ordinary
+    // thing to find in a repository older than the encoding was settled.
+    let users: &[u8] = b"/build/\n/caf\xe9/\n/secrets.txt\n";
+    std::fs::write(td.path().join(".git/info/exclude"), users).unwrap();
+    // Something for the rules to bite on, so the test can ask git whether
+    // they still work rather than only whether the bytes are still there.
+    std::fs::create_dir_all(td.path().join("build")).unwrap();
+    std::fs::write(td.path().join("secrets.txt"), "hunter2\n").unwrap();
+
+    let wt = td
+        .path()
+        .join(planr_ok(td.path(), &["claim", "t1", "--worktree", "wt-t1"]));
+    let after = read_exclude_bytes(td.path());
+    assert!(
+        after.starts_with(users),
+        "claim must give back every rule it did not write: {after:?}"
+    );
+    assert!(
+        after.windows(8).any(|w| w == b"/wt-t1/\n"),
+        "and it still has to write its own: {after:?}"
+    );
+    // Not just present in the file -- still doing their job.
+    assert!(
+        git_ignored(td.path(), "build"),
+        "the user's rules must still be the rules git evaluates"
+    );
+    assert!(git_ignored(td.path(), "wt-t1"), "and so must planr's");
+
+    approve_in_worktree(&wt, td.path(), "t1");
+    planr_ok(td.path(), &["close", "task", "t1"]);
+
+    let after = read_exclude_bytes(td.path());
+    assert_eq!(
+        after.trim_ascii_end(),
+        users.trim_ascii_end(),
+        "close must take back its own rule and nothing else: {after:?}"
+    );
+    assert!(
+        git_ignored(td.path(), "build"),
+        "the user's rules outlive the whole lifecycle"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: closing from inside the worktree being removed
+// ---------------------------------------------------------------------------
+
+/// `close` ran the rest of its cleanup from inside the directory it had just
+/// deleted. A worker closes their own task from their own worktree -- it is
+/// the ordinary way to run the command -- and the process was then standing
+/// in a path that no longer resolved, so every git run after the removal
+/// failed at `chdir`, before git was even reached.
+///
+/// Two victims, neither of which named the cause. The ignore rule for the
+/// worktree could not be dropped, so a rule hiding a path that no longer
+/// existed outlived it, silently hiding whatever was created there next. And
+/// the "all tasks under this story are done" hint was computed from a failed
+/// listing and dropped, so the close that finished a story said nothing
+/// about it.
+///
+/// Every way of standing inside is covered, because it is the standing that
+/// matters and not the exact directory: the worktree's own root, a
+/// subdirectory of it, and the default `.plan/worktrees/` path -- where the
+/// shared rule is meant to survive, so only the hint shows the damage.
+#[test]
+fn test_e2e_close_from_inside_the_worktree_finishes_its_cleanup() {
+    for (case, flags, subdir, gone, kept) in [
+        (
+            "the worktree's own root",
+            vec!["claim", "t1", "--worktree", "wt-t1"],
+            "",
+            Some("/wt-t1/"),
+            None,
+        ),
+        (
+            "a subdirectory of the worktree",
+            vec!["claim", "t1", "--worktree", "wt-t1"],
+            "deep/deeper",
+            Some("/wt-t1/"),
+            None,
+        ),
+        (
+            "the default worktree path",
+            vec!["claim", "t1"],
+            "",
+            None,
+            Some("/.plan/worktrees/"),
+        ),
+    ] {
+        let td = tempfile::tempdir().unwrap();
+        seed_lint_repo(td.path());
+        let wt = td.path().join(planr_ok(td.path(), &flags));
+        approve_in_worktree(&wt, td.path(), "t1");
+
+        let from = if subdir.is_empty() {
+            wt.clone()
+        } else {
+            let deep = wt.join(subdir);
+            std::fs::create_dir_all(&deep).unwrap();
+            deep
+        };
+        let (out, err) = planr_ok_both(&from, &["close", "task", "t1"]);
+
+        assert!(
+            out.contains("merged plan/t1"),
+            "[{case}] the close itself must still land: {out}"
+        );
+        // t1 is the only task under s1, so closing it finishes the story --
+        // and the caller has to be told, whichever directory they ran from.
+        assert!(
+            out.contains("all tasks under story 's1' are done"),
+            "[{case}] the sibling hint was computed from a failed listing \
+             and dropped: stdout={out:?} stderr={err:?}"
+        );
+
+        let excl = read_exclude(td.path());
+        if let Some(gone) = gone {
+            assert!(
+                !excl.lines().any(|l| l.trim() == gone),
+                "[{case}] the rule for the removed worktree survived it: {excl:?}"
+            );
+            // And the path is visible to git again, which is what the rule
+            // being gone is for.
+            std::fs::create_dir_all(td.path().join("wt-t1")).unwrap();
+            std::fs::write(td.path().join("wt-t1/new.txt"), "new\n").unwrap();
+            assert!(
+                !git_ignored(td.path(), "wt-t1"),
+                "[{case}] the old path must no longer be hidden: {excl:?}"
+            );
+        }
+        if let Some(kept) = kept {
+            assert!(
+                excl.lines().any(|l| l.trim() == kept),
+                "[{case}] the shared default rule covers a parent and must \
+                 survive: {excl:?}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: a path the caller typed comes back as one place
+// ---------------------------------------------------------------------------
+
+/// The path `claim` prints is what the caller pastes into their next
+/// command, and it was not the path planr had used itself: `--worktree
+/// ../out` from `sub/` printed `/repo/sub/../out` while the ignore rule was
+/// written for `/out`, because the rule is anchored after normalizing. It
+/// opened, so nothing broke -- it just handed back a path with the caller's
+/// `..` still in it and disagreed with planr's own reading of it.
+///
+/// Every form that carries a `.` or `..` is checked, including the absolute
+/// one: typing a path out in full is no reason to be handed `..` back.
+#[test]
+fn test_e2e_claim_prints_the_path_it_resolved() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
+    planr_ok(td.path(), &["new", "task", "t3", "Task Three", "s1"]);
+    git_must(td.path(), &["add", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "more tasks"]);
+    let sub = td.path().join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let abs_with_dots = format!("{}/sub/../abs", td.path().display());
+
+    for (slug, typed, expected) in [
+        ("t1", "../out".to_string(), td.path().join("out")),
+        ("t2", abs_with_dots, td.path().join("abs")),
+        ("t3", "./a/../b".to_string(), sub.join("b")),
+    ] {
+        let printed = planr_ok(&sub, &["claim", slug, "--worktree", &typed]);
+        assert!(
+            !Path::new(&printed)
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir)),
+            "'{typed}' came back with the caller's `..` still in it: {printed}"
+        );
+        assert_eq!(
+            Path::new(&printed),
+            expected,
+            "'{typed}' must print the one place planr resolved it to"
+        );
+        assert!(
+            Path::new(&printed).is_dir(),
+            "and the worktree must be there: {printed}"
+        );
+        // The rule planr wrote and the path it printed have to be the same
+        // place: that is the disagreement the normalization removes.
+        let rel = expected.strip_prefix(td.path()).unwrap();
+        assert!(
+            git_ignored(td.path(), rel.to_str().unwrap()),
+            "the printed worktree must be the one that is hidden: {}",
+            read_exclude(td.path())
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: ref-mode lint on a backlog with no tickets in it yet
+// ---------------------------------------------------------------------------
+
+/// The missing-backlog warning must not fire on a backlog that is there.
+/// `lint <ref>` warned that there was no backlog at the ref, and told the
+/// caller to check `--plan-dir` and the ref, whenever it read no tickets --
+/// and a repository that has scaffolded `.plan/{epics,stories,tasks}` and
+/// written no tickets yet reads exactly that way. Both the plan directory
+/// and the ref were correct, working-tree `lint` and `board` were silent on
+/// the identical state, and the warning named a cause it had not
+/// established.
+///
+/// What it must keep saying is checked alongside it, since the fix is a
+/// narrowing: a plan directory that really is not in the commit, a typo'd
+/// `--plan-dir`, and a ref that does not resolve at all.
+#[test]
+fn test_e2e_lint_does_not_call_an_empty_backlog_absent() {
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    for kind in ["epics", "stories", "tasks"] {
+        std::fs::write(td.path().join(format!(".plan/{kind}/.gitkeep")), "").unwrap();
+    }
+    git_must(td.path(), &["add", "-A", "-f", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "scaffold the backlog"]);
+
+    let (_, err) = planr_ok_both(td.path(), &["lint", "main"]);
+    assert!(
+        err.is_empty(),
+        "the backlog is there and holds no tickets yet -- nothing to warn \
+         about, and working-tree lint says nothing either: {err:?}"
+    );
+    // The claim that they agree, made rather than assumed.
+    let (_, wt_err) = planr_ok_both(td.path(), &["lint"]);
+    assert!(wt_err.is_empty(), "working-tree lint is silent: {wt_err:?}");
+
+    // A typo'd plan directory is still a plan directory that is not there.
+    let (_, err) = planr_ok_both(td.path(), &["-D", "typo", "lint", "main"]);
+    assert!(
+        err.contains("nothing under 'typo' at 'main'"),
+        "lint must not certify a ref it read nothing from: {err:?}"
+    );
+
+    // A ref that does not resolve is planr failing to read, not a finding
+    // about the backlog -- and the two must not be reported as the same
+    // thing.
+    let (_, err) = planr_ok_both(td.path(), &["lint", "nosuchref"]);
+    assert!(
+        err.contains("could not read '.plan' at 'nosuchref'"),
+        "a ref that does not resolve has to be named as the reason: {err:?}"
+    );
+
+    // And a commit made before the backlog existed still has no backlog in
+    // it -- the same repository, one ref earlier.
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    git_must(td.path(), &["checkout", "-q", "--orphan", "before"]);
+    git_must(td.path(), &["rm", "-rq", "--cached", "."]);
+    std::fs::remove_dir_all(td.path().join(".plan")).unwrap();
+    std::fs::write(td.path().join("README.md"), "# before the backlog\n").unwrap();
+    git_must(td.path(), &["add", "README.md"]);
+    git_must(td.path(), &["commit", "-m", "before the backlog"]);
+    let (_, err) = planr_ok_both(td.path(), &["lint", "before"]);
+    assert!(
+        err.contains("nothing under '.plan' at 'before'"),
+        "a ref that predates the backlog has none to lint: {err:?}"
     );
 }

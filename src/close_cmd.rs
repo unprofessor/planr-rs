@@ -236,48 +236,66 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
                             wt.display()
                         );
                     }
-                    Ok(_) => match git::worktree_remove(wt, false) {
-                        Ok(()) => {
-                            // The shared default rule covers a parent directory,
-                            // so it does not match here and survives.
-                            git::drop_exclude(wt, cwd);
-                        }
-                        // A stale record: the directory is gone *and* git has
-                        // forgotten it, so there is nothing left to hide and
-                        // keeping the rule would hide whatever is created at that
-                        // path next.
-                        //
-                        // Both halves are load-bearing. `try_exists().unwrap_or
-                        // (true)` keeps an I/O error from reading as "the
-                        // directory is gone". And the record has to be checked
-                        // too: a *locked* worktree whose directory was deleted
-                        // fails removal while staying registered, so judging by
-                        // the directory alone dropped the rule, let the branch
-                        // delete below fail silently, and reported unqualified
-                        // success while `board` still listed the task in flight.
-                        Err(_)
-                            if !wt.try_exists().unwrap_or(true)
-                                && git::find_worktree_for_branch(&branch).is_none() =>
-                        {
-                            git::drop_exclude(wt, cwd);
-                        }
-                        Err(e) => {
-                            // The merge succeeded, so this is not a failure of the
-                            // close -- but it is not nothing either. The worktree
-                            // survives, `git branch -d` below will refuse to
-                            // delete a branch checked out in it, and `planr board`
-                            // will keep listing the task as in flight. Silence
-                            // here made `close` report unqualified success while
-                            // the board contradicted it.
-                            eprintln!(
+                    Ok(_) => {
+                        // Nothing below may run from inside the directory
+                        // about to be deleted. `close` from inside the task's
+                        // own worktree -- what a worker does, and what the
+                        // nested-worktree handling above exists for -- left
+                        // the process standing in a path that no longer
+                        // resolves, and every git run after this failed at
+                        // `chdir`: the rule was never dropped (a permanent
+                        // ignore rule for a custom worktree path, and a
+                        // warning quoting an error about the wrong thing),
+                        // and the sibling-task hint below was computed from a
+                        // failed listing and silently dropped. The trunk
+                        // worktree is the one place guaranteed to outlive
+                        // this: the nested check above has already
+                        // established that no worktree lives under `wt`, so
+                        // `trunk_dir` is not one of them.
+                        let cwd = &git::step_out_of(wt, &trunk_dir, cwd);
+                        match git::worktree_remove(wt, false) {
+                            Ok(()) => {
+                                // The shared default rule covers a parent directory,
+                                // so it does not match here and survives.
+                                git::drop_exclude(wt, cwd);
+                            }
+                            // A stale record: the directory is gone *and* git has
+                            // forgotten it, so there is nothing left to hide and
+                            // keeping the rule would hide whatever is created at that
+                            // path next.
+                            //
+                            // Both halves are load-bearing. `try_exists().unwrap_or
+                            // (true)` keeps an I/O error from reading as "the
+                            // directory is gone". And the record has to be checked
+                            // too: a *locked* worktree whose directory was deleted
+                            // fails removal while staying registered, so judging by
+                            // the directory alone dropped the rule, let the branch
+                            // delete below fail silently, and reported unqualified
+                            // success while `board` still listed the task in flight.
+                            Err(_)
+                                if !wt.try_exists().unwrap_or(true)
+                                    && git::find_worktree_for_branch(&branch).is_none() =>
+                            {
+                                git::drop_exclude(wt, cwd);
+                            }
+                            Err(e) => {
+                                // The merge succeeded, so this is not a failure of the
+                                // close -- but it is not nothing either. The worktree
+                                // survives, `git branch -d` below will refuse to
+                                // delete a branch checked out in it, and `planr board`
+                                // will keep listing the task as in flight. Silence
+                                // here made `close` report unqualified success while
+                                // the board contradicted it.
+                                eprintln!(
                             "warning: merged, but the worktree at {} could not be removed ({e}); \
                              it and branch {branch} remain -- `git worktree remove --force {}` \
                              to finish cleaning up",
                             wt.display(),
                             wt.display()
                         );
+                            }
                         }
-                    },
+                    }
                 }
             }
             let _ = git::branch_delete(&branch, false, &trunk_dir);

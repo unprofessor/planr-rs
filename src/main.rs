@@ -274,6 +274,42 @@ fn warn_if_plan_dir_missing(plan_dir: &str) {
     }
 }
 
+/// Say so when the ref a `lint` was pointed at holds no backlog to lint.
+///
+/// `warn_if_plan_dir_missing` one mode over, and for the same reason: `lint`
+/// prints nothing for a clean backlog, so a typo'd `--plan-dir` -- or a ref
+/// that predates the backlog -- produced an empty read and a clean bill of
+/// health, exit code included, on a backlog it had never opened.
+///
+/// What it must not do is say that of a backlog that is there. Zero tickets
+/// is not zero backlog: `.plan/{epics,stories,tasks}/.gitkeep` committed and
+/// no tickets written yet is the ordinary state of a repository that has
+/// just scaffolded one, and working-tree mode is silent about it because the
+/// directory it looks for is right there. Ref mode named a cause it had not
+/// established -- the plan directory and the ref were both called suspect
+/// when neither was. So ask the ref the same question the filesystem is
+/// asked: is anything there under that path? Only an empty answer is "no
+/// backlog", and only a failed one is "planr could not tell".
+fn warn_if_ref_holds_no_plan_dir(ref_: &str, plan_dir: &str) {
+    match git::ls_tree(ref_, plan_dir) {
+        // Something is committed under the plan directory at that ref, so
+        // the backlog is there and simply holds no tickets yet.
+        Ok(entries) if !entries.is_empty() => {}
+        Ok(_) => eprintln!(
+            "warning: nothing under '{plan_dir}' at '{ref_}' -- there is no backlog at \
+             that ref to lint; check --plan-dir and the ref"
+        ),
+        // A ref that does not resolve, or a git that would not run. Either
+        // way the empty report is planr failing to read, not a finding about
+        // the backlog.
+        Err(e) => eprintln!(
+            "warning: could not read '{plan_dir}' at '{ref_}' ({e}) -- planr read no \
+             backlog there, which is not the same as there being none; check --plan-dir \
+             and the ref"
+        ),
+    }
+}
+
 /// The first error a directory listing produced, if any.
 ///
 /// Opening a directory can succeed and then fail entry by entry, so a listing
@@ -290,13 +326,23 @@ fn first_read_error(entries: std::fs::ReadDir) -> Option<std::io::Error> {
 /// first. `claim --worktree ../scratch` means the caller's `..`, not the
 /// root's, and silently redirecting it is worse than the subdirectory bug
 /// that made entering the root necessary.
+///
+/// Pinning it is not enough on its own: joining leaves the `..` in place, so
+/// `claim --worktree ../out` from `sub/` printed `/repo/sub/../out`. That
+/// path opens, but it is the string the caller pastes, and it is not the one
+/// planr itself used -- the ignore rule was written for `/out`, because
+/// `resolve_against` normalizes before anchoring. So normalize here, once,
+/// and let the directory git creates, the rule that hides it, and the path
+/// printed back all mean the same place. An absolute path gets the same
+/// treatment for the same reason: typing it out in full is no reason to be
+/// handed `..` back.
 fn resolve_from_invocation_dir(path: &str) -> String {
     let p = std::path::Path::new(path);
     if p.is_absolute() {
-        return path.to_string();
+        return git::normalize(p).to_string_lossy().to_string();
     }
     match std::env::current_dir() {
-        Ok(dir) => dir.join(p).to_string_lossy().to_string(),
+        Ok(dir) => git::normalize(&dir.join(p)).to_string_lossy().to_string(),
         // Nothing to resolve against. The path stays as typed, which is what
         // planr did before it entered the root at all.
         Err(e) => {
@@ -384,17 +430,8 @@ fn main() {
             let report = match r#ref {
                 Some(ref_) if !ref_.is_empty() => {
                     let report = lint::lint_ref(&ref_, &cli.plan_dir);
-                    // The same certification the missing-directory warning
-                    // exists to prevent, one mode over: in ref mode there is
-                    // no directory to look at, so a typo'd --plan-dir or a
-                    // ref that predates the backlog produced an empty read
-                    // and a clean bill of health, exit code included.
                     if report.tickets_read == 0 {
-                        eprintln!(
-                            "warning: no tickets under '{}' at '{}' -- there is no backlog \
-                             at that ref to lint; check --plan-dir and the ref",
-                            cli.plan_dir, ref_
-                        );
+                        warn_if_ref_holds_no_plan_dir(&ref_, &cli.plan_dir);
                     }
                     report
                 }
