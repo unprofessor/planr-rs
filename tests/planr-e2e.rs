@@ -21,16 +21,8 @@ fn init_repo(dir: &Path) {
         .arg(dir)
         .ok()
         .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "e2e@test"])
-        .current_dir(dir)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "E2E Test"])
-        .current_dir(dir)
-        .ok()
-        .unwrap();
+    git_must(dir, &["config", "user.email", "e2e@test"]);
+    git_must(dir, &["config", "user.name", "E2E Test"]);
 
     // Create .plan dirs with a placeholder so git tracks them
     for d in &[".plan/epics", ".plan/stories", ".plan/tasks"] {
@@ -104,6 +96,62 @@ fn planr_ok_both(dir: &Path, args: &[&str]) -> (String, String) {
     )
 }
 
+/// Run git in `dir` and require it to succeed.
+fn git_must(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn write_file(dir: &Path, rel: &str, body: &str) {
+    let path = dir.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, body).unwrap();
+}
+
+fn git_stdout(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+/// Read `.git/info/exclude`, or "" when it does not exist.
+fn read_exclude(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join(".git/info/exclude")).unwrap_or_default()
+}
+
+/// The same file as bytes. `.git/info/exclude` is a list of paths, and on
+/// Unix a path is bytes -- a file holding one the reader cannot decode is
+/// exactly the case worth asserting about, and `read_exclude` cannot see it.
+fn read_exclude_bytes(dir: &Path) -> Vec<u8> {
+    std::fs::read(dir.join(".git/info/exclude")).unwrap_or_default()
+}
+
+/// Ask git itself whether `path` is ignored *from within `dir`*.
+///
+/// Reading the exclude file only tells you what was written; git anchors a
+/// leading-slash pattern to whichever working tree it is evaluating, so only
+/// `check-ignore` run in the right tree answers the question that matters.
+fn git_ignored(dir: &Path, path: &str) -> bool {
+    Command::new("git")
+        .args(["check-ignore", "-q", path])
+        .current_dir(dir)
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
 // ---------------------------------------------------------------------------
 // Scenario: new-ticket guards
 // ---------------------------------------------------------------------------
@@ -173,16 +221,8 @@ fn test_e2e_happy_path() {
     assert!(t1.contains(".plan/tasks/"));
 
     // Commit the backlog
-    Command::new("git")
-        .args(["add", ".plan"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "seed"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "seed"]);
 
     // Verify the task file has aliases
     let content = std::fs::read_to_string(td.path().join(&t1)).unwrap();
@@ -201,16 +241,8 @@ fn seed_lint_repo(dir: &Path) {
     planr_ok(dir, &["new", "task", "t1", "Task One", "s1"]);
 
     // Commit the clean backlog for ref-mode lint
-    Command::new("git")
-        .args(["add", ".plan"])
-        .current_dir(dir)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "clean backlog"])
-        .current_dir(dir)
-        .ok()
-        .unwrap();
+    git_must(dir, &["add", ".plan"]);
+    git_must(dir, &["commit", "-m", "clean backlog"]);
 }
 
 #[test]
@@ -459,16 +491,8 @@ fn test_e2e_board_does_not_call_a_committed_ticket_missing() {
         body.replace("title: Task One", "title: Task One: broken"),
     )
     .unwrap();
-    Command::new("git")
-        .args(["commit", "-am", "break t1"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["branch", "plan/t1"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["commit", "-am", "break t1"]);
+    git_must(td.path(), &["branch", "plan/t1"]);
 
     let (out, err) = planr_ok_both(td.path(), &["board"]);
     assert!(
@@ -506,15 +530,6 @@ fn board_header(dir: &Path, args: &[&str]) -> String {
         .next()
         .unwrap_or_default()
         .to_string()
-}
-
-fn git_stdout(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
 #[test]
@@ -577,16 +592,8 @@ fn test_e2e_abandon_task_skips_review_and_blocks_dependents() {
         dependent.replace("depends_on: []", "depends_on: [t1]"),
     )
     .unwrap();
-    Command::new("git")
-        .args(["add", ".plan"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "add dependent"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "add dependent"]);
 
     let msg = "OBE — no longer needed";
     let out = planr_ok(td.path(), &["abandon", "task", "t1", msg]);
@@ -768,16 +775,8 @@ fn test_e2e_close_lifecycle_from_secondary_worktree() {
     let review_content = content.replace("status: in_progress", "status: review")
         + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
     std::fs::write(wt_abs.join(&task_file), review_content).unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt_abs)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "review: t1"])
-        .current_dir(&wt_abs)
-        .ok()
-        .unwrap();
+    git_must(&wt_abs, &["add", &task_file]);
+    git_must(&wt_abs, &["commit", "-m", "review: t1"]);
 
     // Leader drives the whole close chain from a separate parked worktree.
     let lead = td.path().join("wt-lead");
@@ -843,16 +842,8 @@ fn test_e2e_claim_close_task() {
     std::fs::write(wt_abs.join(&task_file), review_content).unwrap();
 
     // Commit the review flip
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt_abs)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "review: t1"])
-        .current_dir(&wt_abs)
-        .ok()
-        .unwrap();
+    git_must(&wt_abs, &["add", &task_file]);
+    git_must(&wt_abs, &["commit", "-m", "review: t1"]);
 
     // Now close task t1
     let close_out = planr_ok(td.path(), &["close", "task", "t1"]);
@@ -1056,11 +1047,7 @@ fn assert_trunk_undisturbed(dir: &Path, case: &str) {
 
     // The leader's normal flow must not stage the worktree as a gitlink.
     planr_ok(dir, &["new", "task", "t9", "Task Nine", "s1"]);
-    Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(dir)
-        .ok()
-        .unwrap();
+    git_must(dir, &["add", "-A"]);
     let staged = Command::new("git")
         .args(["ls-files", "-s"])
         .current_dir(dir)
@@ -1100,11 +1087,10 @@ fn test_e2e_reclaim_after_worktree_removed_resumes() {
     seed_lint_repo(td.path());
 
     planr_ok(td.path(), &["claim", "t1"]);
-    Command::new("git")
-        .args(["worktree", "remove", ".plan/worktrees/wt-t1", "--force"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(
+        td.path(),
+        &["worktree", "remove", ".plan/worktrees/wt-t1", "--force"],
+    );
 
     let out = planr_ok(td.path(), &["claim", "t1"]);
     assert!(
@@ -1157,16 +1143,8 @@ fn test_e2e_close_drops_the_stale_ignore_rule() {
                 + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-01\n",
         )
         .unwrap();
-        Command::new("git")
-            .args(["add", "-A"])
-            .current_dir(&wt)
-            .ok()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "review: t1"])
-            .current_dir(&wt)
-            .ok()
-            .unwrap();
+        git_must(&wt, &["add", "-A"]);
+        git_must(&wt, &["commit", "-m", "review: t1"]);
 
         planr_ok(td.path(), &["close", "task", "t1"]);
 
@@ -1397,33 +1375,6 @@ fn test_e2e_lint_cycle_real() {
 // Scenario: review findings on the claim/close ignore-rule path
 // ---------------------------------------------------------------------------
 
-/// Read `.git/info/exclude`, or "" when it does not exist.
-fn read_exclude(dir: &Path) -> String {
-    std::fs::read_to_string(dir.join(".git/info/exclude")).unwrap_or_default()
-}
-
-/// The same file as bytes. `.git/info/exclude` is a list of paths, and on
-/// Unix a path is bytes -- a file holding one the reader cannot decode is
-/// exactly the case worth asserting about, and `read_exclude` cannot see it.
-fn read_exclude_bytes(dir: &Path) -> Vec<u8> {
-    std::fs::read(dir.join(".git/info/exclude")).unwrap_or_default()
-}
-
-/// Ask git itself whether `path` is ignored *from within `dir`*.
-///
-/// Reading the exclude file only tells you what was written; git anchors a
-/// leading-slash pattern to whichever working tree it is evaluating, so only
-/// `check-ignore` run in the right tree answers the question that matters.
-fn git_ignored(dir: &Path, path: &str) -> bool {
-    Command::new("git")
-        .args(["check-ignore", "-q", path])
-        .current_dir(dir)
-        .output()
-        .unwrap()
-        .status
-        .success()
-}
-
 /// Every path out of the prune leaves the rules in place, which is right --
 /// but silence is not. What stays behind hides whatever is created at that
 /// path and leaves no trace in `git status`, so unless the prune says it
@@ -1484,16 +1435,8 @@ fn test_e2e_failed_claim_writes_no_ignore_rule() {
     // A tracked directory that already exists: worktree add must refuse it.
     std::fs::create_dir_all(td.path().join("realsrc")).unwrap();
     std::fs::write(td.path().join("realsrc/keep.txt"), "tracked\n").unwrap();
-    Command::new("git")
-        .args(["add", "realsrc"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "add realsrc"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", "realsrc"]);
+    git_must(td.path(), &["commit", "-m", "add realsrc"]);
 
     let err = planr_err(td.path(), &["claim", "t1", "--worktree", "realsrc"]);
     assert!(!err.is_empty(), "claim should have failed");
@@ -1536,16 +1479,8 @@ fn test_e2e_close_keeps_ignore_rule_when_worktree_removal_fails() {
     let reviewed = content.replace("status: in_progress", "status: review")
         + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
     std::fs::write(wt.join(&task_file), reviewed).unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "review: t1"])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
+    git_must(&wt, &["add", &task_file]);
+    git_must(&wt, &["commit", "-m", "review: t1"]);
 
     // An untracked file makes a non-forced worktree removal refuse.
     std::fs::write(wt.join("build.log"), "noise\n").unwrap();
@@ -1627,23 +1562,14 @@ fn test_e2e_claim_resume_does_not_revert_review() {
     let reviewed = content.replace("status: in_progress", "status: review")
         + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
     std::fs::write(wt.join(&task_file), reviewed).unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "review: t1"])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
+    git_must(&wt, &["add", &task_file]);
+    git_must(&wt, &["commit", "-m", "review: t1"]);
 
     // Drop the worktree the supported way, then re-claim it.
-    Command::new("git")
-        .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(
+        td.path(),
+        &["worktree", "remove", "--force", wt.to_str().unwrap()],
+    );
     planr_ok(td.path(), &["claim", "t1"]);
 
     let after = std::fs::read_to_string(wt.join(&task_file)).unwrap();
@@ -1666,16 +1592,8 @@ fn test_e2e_exclude_rule_hides_a_nested_worktree_where_it_lives() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
     planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
-    Command::new("git")
-        .args(["add", ".plan"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "add t2"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "add t2"]);
 
     // Claim t1 from the main tree, then claim t2 from inside t1's worktree.
     planr_ok(td.path(), &["claim", "t1"]);
@@ -1715,11 +1633,10 @@ fn test_e2e_claim_from_a_sibling_worktree_is_hidden() {
     // the panic path, an explicit cleanup call after the asserts would not.
     let outside = tempfile::tempdir().unwrap();
     let worker = outside.path().join("worker");
-    Command::new("git")
-        .args(["worktree", "add", worker.to_str().unwrap(), "-b", "worker"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(
+        td.path(),
+        &["worktree", "add", worker.to_str().unwrap(), "-b", "worker"],
+    );
 
     planr_ok(&worker, &["claim", "t1"]);
 
@@ -1832,21 +1749,12 @@ fn test_e2e_claim_refuses_a_terminal_branch() {
         content.replace("status: in_progress", "status: abandoned"),
     )
     .unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "abandon on branch"])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(&wt, &["add", &task_file]);
+    git_must(&wt, &["commit", "-m", "abandon on branch"]);
+    git_must(
+        td.path(),
+        &["worktree", "remove", "--force", wt.to_str().unwrap()],
+    );
 
     let err = planr_err(td.path(), &["claim", "t1"]);
     assert!(
@@ -1872,21 +1780,12 @@ fn test_e2e_terminal_branch_refusal_leaves_no_worktree() {
         content.replace("status: in_progress", "status: done"),
     )
     .unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "done on branch"])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(&wt, &["add", &task_file]);
+    git_must(&wt, &["commit", "-m", "done on branch"]);
+    git_must(
+        td.path(),
+        &["worktree", "remove", "--force", wt.to_str().unwrap()],
+    );
 
     let first = planr_err(td.path(), &["claim", "t1"]);
     assert!(
@@ -1928,16 +1827,8 @@ fn test_e2e_close_keeps_a_user_written_ignore_rule() {
     let reviewed = content.replace("status: in_progress", "status: review")
         + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
     std::fs::write(wt.join(&task_file), reviewed).unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "review: t1"])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
+    git_must(&wt, &["add", &task_file]);
+    git_must(&wt, &["commit", "-m", "review: t1"]);
 
     planr_ok(td.path(), &["close", "task", "t1"]);
 
@@ -1969,16 +1860,8 @@ fn test_e2e_close_drops_its_header_alongside_a_foreign_rule() {
     let reviewed = content.replace("status: in_progress", "status: review")
         + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
     std::fs::write(wt.join(&task_file), reviewed).unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "review: t1"])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
+    git_must(&wt, &["add", &task_file]);
+    git_must(&wt, &["commit", "-m", "review: t1"]);
 
     planr_ok(td.path(), &["close", "task", "t1"]);
 
@@ -2012,16 +1895,8 @@ fn test_e2e_claim_refuses_a_task_trunk_calls_done() {
             content.replace("status: todo", &format!("status: {status}")),
         )
         .unwrap();
-        Command::new("git")
-            .args(["add", &task_file])
-            .current_dir(td.path())
-            .ok()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "advance t1"])
-            .current_dir(td.path())
-            .ok()
-            .unwrap();
+        git_must(td.path(), &["add", &task_file]);
+        git_must(td.path(), &["commit", "-m", "advance t1"]);
 
         let err = planr_err(td.path(), &["claim", "t1"]);
         assert!(
@@ -2083,16 +1958,8 @@ fn test_e2e_failed_claim_keeps_the_shared_default_rule() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
     planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
-    Command::new("git")
-        .args(["add", ".plan"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "add t2"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "add t2"]);
 
     // t1 claims successfully and establishes the shared rule.
     planr_ok(td.path(), &["claim", "t1"]);
@@ -2137,16 +2004,8 @@ fn test_e2e_failed_claim_keeps_the_shared_rule_other_claims_rely_on() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
     planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
-    Command::new("git")
-        .args(["add", ".plan"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "add t2"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "add t2"]);
 
     // t2 claims first and lives under the shared rule.
     planr_ok(td.path(), &["claim", "t2"]);
@@ -2233,16 +2092,8 @@ fn test_e2e_claim_refuses_a_quoted_terminal_status() {
     let path = td.path().join(&task_file);
     let content = std::fs::read_to_string(&path).unwrap();
     std::fs::write(&path, content.replace("status: todo", "status: \"done\"")).unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "quoted done"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", &task_file]);
+    git_must(td.path(), &["commit", "-m", "quoted done"]);
 
     // Precondition: the rest of the tool reads this as `done`.
     let board = planr_ok(td.path(), &["board"]);
@@ -2283,21 +2134,12 @@ fn test_e2e_claim_resume_does_not_revert_blocked() {
         content.replace("status: in_progress", "status: blocked"),
     )
     .unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "blocked on branch"])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(&wt, &["add", &task_file]);
+    git_must(&wt, &["commit", "-m", "blocked on branch"]);
+    git_must(
+        td.path(),
+        &["worktree", "remove", "--force", wt.to_str().unwrap()],
+    );
 
     planr_ok(td.path(), &["claim", "t1"]);
 
@@ -2319,16 +2161,8 @@ fn test_e2e_claim_refuses_a_blocked_task_on_trunk() {
     let path = td.path().join(&task_file);
     let content = std::fs::read_to_string(&path).unwrap();
     std::fs::write(&path, content.replace("status: todo", "status: blocked")).unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "block t1"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", &task_file]);
+    git_must(td.path(), &["commit", "-m", "block t1"]);
 
     let err = planr_err(td.path(), &["claim", "t1"]);
     assert!(err.contains("blocked"), "expected the reason: {err}");
@@ -2372,16 +2206,8 @@ fn test_e2e_close_keeps_a_rule_appended_after_planrs_block() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
     planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
-    Command::new("git")
-        .args(["add", ".plan"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "add t2"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "add t2"]);
 
     // planr establishes its block first...
     planr_ok(td.path(), &["claim", "t1", "--worktree", "build"]);
@@ -2402,16 +2228,8 @@ fn test_e2e_close_keeps_a_rule_appended_after_planrs_block() {
     let reviewed = content.replace("status: in_progress", "status: review")
         + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
     std::fs::write(wt.join(&task_file), reviewed).unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "review: t2"])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
+    git_must(&wt, &["add", &task_file]);
+    git_must(&wt, &["commit", "-m", "review: t2"]);
     planr_ok(td.path(), &["close", "task", "t2"]);
 
     std::fs::create_dir_all(td.path().join("mydir")).unwrap();
@@ -2434,16 +2252,8 @@ fn test_e2e_blocked_refusal_names_a_real_remedy() {
     let path = td.path().join(&task_file);
     let content = std::fs::read_to_string(&path).unwrap();
     std::fs::write(&path, content.replace("status: todo", "status: blocked")).unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "block t1"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", &task_file]);
+    git_must(td.path(), &["commit", "-m", "block t1"]);
 
     let err = planr_err(td.path(), &["claim", "t1"]);
     assert!(
@@ -2509,23 +2319,11 @@ fn test_e2e_close_warns_when_a_locked_worktree_survives() {
     let reviewed = content.replace("status: in_progress", "status: review")
         + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
     std::fs::write(wt.join(&task_file), reviewed).unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "review: t1"])
-        .current_dir(&wt)
-        .ok()
-        .unwrap();
+    git_must(&wt, &["add", &task_file]);
+    git_must(&wt, &["commit", "-m", "review: t1"]);
 
     // Locked, but still present: the merge succeeds and the removal refuses.
-    Command::new("git")
-        .args(["worktree", "lock", wt.to_str().unwrap()])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["worktree", "lock", wt.to_str().unwrap()]);
 
     let out = planr(td.path(), &["close", "task", "t1"]);
     assert!(out.status.success(), "close should still report the merge");
@@ -2562,16 +2360,8 @@ fn test_e2e_close_does_not_delete_a_nested_worktree() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
     planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
-    Command::new("git")
-        .args(["add", ".plan"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "add t2"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "add t2"]);
 
     planr_ok(td.path(), &["claim", "t1"]);
     let wt1 = td.path().join(".plan/worktrees/wt-t1");
@@ -2588,16 +2378,8 @@ fn test_e2e_close_does_not_delete_a_nested_worktree() {
     let reviewed = content.replace("status: in_progress", "status: review")
         + "\n\n## Review\n\nverdict: approved\nreviewer: test\ndate: 2026-09-05\n";
     std::fs::write(wt1.join(&task_file), reviewed).unwrap();
-    Command::new("git")
-        .args(["add", &task_file])
-        .current_dir(&wt1)
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "review: t1"])
-        .current_dir(&wt1)
-        .ok()
-        .unwrap();
+    git_must(&wt1, &["add", &task_file]);
+    git_must(&wt1, &["commit", "-m", "review: t1"]);
 
     let out = planr(td.path(), &["close", "task", "t1"]);
     assert!(out.status.success(), "close should still merge");
@@ -2675,16 +2457,8 @@ fn test_e2e_abandon_prunes_the_stale_ignore_rule() {
     let td = tempfile::tempdir().unwrap();
     seed_lint_repo(td.path());
     planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
-    Command::new("git")
-        .args(["add", ".plan"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "add t2"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["add", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "add t2"]);
 
     planr_ok(td.path(), &["claim", "t1", "--worktree", "wt-t1"]);
     planr_ok(td.path(), &["claim", "t2", "--worktree", "wt-t2"]);
@@ -2696,16 +2470,8 @@ fn test_e2e_abandon_prunes_the_stale_ignore_rule() {
 
     // What abandon demands before it will run: the branch and the worktree
     // gone. Doing that by hand is the only way, and it is what loses the path.
-    Command::new("git")
-        .args(["worktree", "remove", "--force", "wt-t1"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
-    Command::new("git")
-        .args(["branch", "-D", "plan/t1"])
-        .current_dir(td.path())
-        .ok()
-        .unwrap();
+    git_must(td.path(), &["worktree", "remove", "--force", "wt-t1"]);
+    git_must(td.path(), &["branch", "-D", "plan/t1"]);
 
     planr_ok(td.path(), &["abandon", "task", "t1", "wont-do -- OBE"]);
 
@@ -2742,26 +2508,6 @@ fn test_e2e_abandon_prunes_the_stale_ignore_rule() {
 // ---------------------------------------------------------------------------
 // Scenario: the plan directory is the repository's, wherever planr is run
 // ---------------------------------------------------------------------------
-
-/// Run git in `dir` and require it to succeed.
-fn git_must(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-fn write_file(dir: &Path, rel: &str, body: &str) {
-    let path = dir.join(rel);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, body).unwrap();
-}
 
 /// `new` writes the plan directory and `board` reads it, so from the same
 /// subdirectory they have to be talking about the same one. They were not:
