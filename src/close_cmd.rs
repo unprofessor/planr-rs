@@ -18,6 +18,13 @@ use std::path::Path;
 
 /// Find child tickets of a given parent on trunk by scanning files in a
 /// plan subdirectory and reading the `parent:` field.
+///
+/// Every read is fatal. The close gates decide whether a parent has
+/// unfinished children from this list, and a list cut short by a listing
+/// that failed or a blob that would not `show` looks exactly like a parent
+/// whose children are all done -- so a ticket planr could not open would
+/// close the ticket above it. A child planr cannot read has no status, and
+/// saying so is the only honest answer.
 fn find_children_on_trunk(
     parent_slug: &str,
     kind_dir: &str, // e.g. "tasks" or "stories"
@@ -25,13 +32,10 @@ fn find_children_on_trunk(
     plan_dir: &str,
 ) -> Result<Vec<ParsedTicket>, String> {
     let dir = format!("{plan_dir}/{kind_dir}");
-    let files = git::ls_tree_md(trunk, &dir).unwrap_or_default();
+    let files = git::ls_tree_md(trunk, &dir)?;
     let mut children = Vec::new();
     for f in &files {
-        let blob = match git::show_ref(trunk, f) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
+        let blob = git::show_ref(trunk, f)?;
         let ticket = parse_ticket(&blob);
         if ticket.parent.as_deref() == Some(parent_slug) {
             children.push(ticket);
@@ -300,7 +304,9 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
             }
             let _ = git::branch_delete(&branch, false, &trunk_dir);
 
-            // Check if parent story can also be closed
+            // Check if parent story can also be closed. This is a hint,
+            // not a gate: a read that fails here costs the caller one line
+            // of advice, and the close it would advise has its own gate.
             if let Some(ref pslug) = parent_story {
                 let siblings =
                     find_children_on_trunk(pslug, "tasks", trunk, plan_dir).unwrap_or_default();
@@ -419,7 +425,8 @@ pub fn close_story(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Resul
     let _lock = PlanrLock::exclusive(cwd).map_err(|e| format!("lock error: {e}"))?;
     flip_and_commit_kind(slug, "stories", trunk, plan_dir, cwd)?;
 
-    // Check if parent epic can also be closed
+    // Check if parent epic can also be closed. A hint, not a gate -- see
+    // the same call in `close_task`.
     if let Some(ref pslug) = parent_epic {
         let siblings =
             find_children_on_trunk(pslug, "stories", trunk, plan_dir).unwrap_or_default();

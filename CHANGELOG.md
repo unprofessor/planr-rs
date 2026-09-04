@@ -20,6 +20,21 @@
 
 ### Fixed
 
+- **`planr close story` and `planr close epic` no longer close a parent
+  whose children they could not read.** The gate that refuses a close over
+  unfinished children built its list of children by listing the plan
+  subdirectory and reading each ticket, and it dropped both failures on the
+  floor: a listing that failed became an empty listing, and a ticket whose
+  blob would not `show` -- a damaged object, a packfile planr cannot open,
+  a permissions problem -- was skipped. A short list reads exactly like a
+  complete one in which everything is done, so a story whose only task planr
+  could not open was closed with that task still `todo`, and the epic above
+  it went the same way. Both reads are now fatal to the close: planr reports
+  what it could not read and leaves the parent open. The informational hint
+  that suggests closing the parent next still tolerates a failed read --
+  losing one line of advice is not worth failing a command that has already
+  done its work.
+
 - **planr keeps the ignore rules it did not write, whatever encoding they
   are in.** `.git/info/exclude` is a list of paths, and on Unix a path is
   bytes -- a `/caf\xe9/` rule written years ago under Latin-1 is an ordinary

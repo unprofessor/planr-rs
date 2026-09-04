@@ -1294,6 +1294,58 @@ fn test_e2e_close_epic_refuses_open_stories() {
     );
 }
 
+/// A child ticket planr cannot read is not a child that is done.
+///
+/// `find_children_on_trunk` swallows nothing now, but it used to: a failed
+/// `ls-tree` came back as an empty listing and a child whose blob would not
+/// `show` was skipped. Both gates that call it read a short list the way
+/// they read a complete one -- no unfinished children, so close the parent.
+/// A story whose only task is unreadable closed with that task still `todo`,
+/// and the epic above it followed. The gate fails closed instead: the read
+/// failure is the answer, not a clean bill of health for tickets nothing
+/// opened.
+#[test]
+fn test_e2e_close_refuses_a_parent_whose_child_it_cannot_read() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    let task_file = format!(".plan/tasks/{}", find_task_slug(td.path(), "t1"));
+    let story_file = format!(
+        ".plan/stories/{}",
+        find_ticket_filename(td.path(), "stories", "s1")
+    );
+    let epic_file = format!(
+        ".plan/epics/{}",
+        find_ticket_filename(td.path(), "epics", "e1")
+    );
+
+    // The tree still names the task, so the story's gate finds a child and
+    // cannot open it.
+    destroy_blob(td.path(), "main", &task_file);
+    let err = planr_err(td.path(), &["close", "story", "s1"]);
+    assert!(
+        !err.contains("unfinished"),
+        "a child that will not read has no status to report: {err}"
+    );
+    let story = git_stdout(td.path(), &["show", &format!("main:{story_file}")]);
+    assert!(
+        story.contains("status: todo"),
+        "the story must not close over a task planr could not read: {story}"
+    );
+
+    // Same shape one level up: the epic's only story is now unreadable too.
+    destroy_blob(td.path(), "main", &story_file);
+    let err = planr_err(td.path(), &["close", "epic", "e1"]);
+    assert!(
+        !err.contains("unfinished"),
+        "a child that will not read has no status to report: {err}"
+    );
+    let epic = git_stdout(td.path(), &["show", &format!("main:{epic_file}")]);
+    assert!(
+        epic.contains("status: todo"),
+        "the epic must not close over a story planr could not read: {epic}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Scenario: informational lint on new-ticket
 // ---------------------------------------------------------------------------
