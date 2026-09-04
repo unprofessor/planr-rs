@@ -164,31 +164,19 @@ enum Command {
 /// A relative `--plan-dir` (the default `.plan`) is relative to the
 /// repository, but every reader opens it relative to the process directory
 /// and passes it to git as a pathspec, which git resolves the same way. Run
-/// from a subdirectory, every command that touches the plan directory
-/// therefore looked at the wrong one -- and each half of planr was wrong
-/// about it in its own way. `board` rendered empty tables and warned that
-/// every in-flight branch had no task on trunk; `lint` reported a clean
-/// backlog it had never opened; `new` created a second backlog under the
-/// subdirectory and printed the path; `claim`, `close` and `review` refused,
-/// naming a file as absent from trunk while it sat committed at the root.
-///
-/// Fixing the readers alone, then the readers and `new`, only moved the
-/// disagreement: `new` and `board` agreed on where the backlog was and
-/// `claim` did not, so `planr claim <slug>` from a subdirectory failed with
-/// "no task file for slug '<slug>' on main" about a file that was on main.
-/// Every command enters the root, so there is one answer to where the backlog
-/// is and every command gives it.
+/// from a subdirectory, each command would otherwise find a different backlog
+/// or none of one. Every command enters the root, so there is one answer to
+/// where the backlog is and every command gives it.
 ///
 /// The one thing that must not move with it is a path the caller typed:
 /// `claim --worktree <relative path>` means relative to where they are
-/// standing, and entering the root first would silently redirect it. `main`
-/// resolves that against the invocation directory before calling this, which
-/// is the only reason `claim` was exempted before.
+/// standing, and `main` pins it before calling this -- see
+/// `resolve_from_invocation_dir`.
 ///
 /// Outside a git repository there is no root to enter; the working-tree
-/// readers still work relative to the current directory, as before. Any other
-/// failure to ask git is worth a word, because what follows is a report about
-/// a backlog read from wherever the process happened to start.
+/// readers still work relative to the current directory. Any other failure
+/// to ask git is worth a word -- what follows is a report about a backlog
+/// read from wherever the process started.
 fn enter_repo_root() {
     let root = match git::toplevel_or_none() {
         Ok(Some(root)) => root,
@@ -211,24 +199,20 @@ fn enter_repo_root() {
 
 /// Say so when the plan directory a command is about to read cannot be read.
 ///
-/// `lint` prints nothing at all for a clean backlog, so a typo'd
-/// `--plan-dir` -- or a run in a clone that has no backlog yet -- was
-/// byte-identical to a clean bill of health, exit code included: it certified
-/// a backlog it had never opened. Neither case is an error, since planr is
-/// meant to be usable in a repository before `planr new` has ever made a
-/// backlog, but a directory that is not readable is a fact neither command
-/// can establish any other way.
+/// `lint` prints nothing at all for a clean backlog, so a typo'd `--plan-dir`
+/// -- or a run in a clone that has no backlog yet -- is byte-identical to a
+/// clean bill of health, exit code included. Neither is an error, since planr
+/// is usable before `planr new` has made a backlog, but a directory that
+/// cannot be read is a fact neither command can establish any other way.
 ///
 /// "Not there" is only the commonest of several ways to read nothing, and
-/// `Path::exists` answers true for the rest of them: a directory whose
-/// permissions forbid opening it, and a plain file sitting where the backlog
-/// should be, both read as zero tickets and both certified a clean backlog in
-/// total silence. The readers below treat every I/O error as an empty
-/// directory, which is the fail-open direction, so the error has to be
-/// reported here or nowhere. Each kind subdirectory is checked the same way:
-/// one unreadable `tasks/` hides every task in the backlog just as quietly.
-/// A subdirectory that is simply absent is ordinary -- a backlog may hold
-/// only epics -- so only the plan directory itself is worth a word for that.
+/// `Path::exists` answers true for the rest: a directory whose permissions
+/// forbid opening it, and a plain file sitting where the backlog should be,
+/// both yield zero tickets. The readers below treat every I/O error as an
+/// empty directory, so the error has to be reported here or nowhere. Each
+/// kind subdirectory is checked the same way -- one unreadable `tasks/` hides
+/// every task -- while one that is simply absent is ordinary, since a backlog
+/// may hold only epics.
 ///
 /// Working-tree mode only -- in ref mode the plan directory is a pathspec in
 /// a commit, and an empty read there is git's answer, not the filesystem's.
@@ -280,27 +264,19 @@ fn warn_if_plan_dir_missing(plan_dir: &str) {
 /// Say so when a `lint <ref>` reported on less backlog than it was pointed at.
 ///
 /// `warn_if_plan_dir_missing` one mode over, and for the same reason: `lint`
-/// prints nothing for a clean backlog, so a typo'd `--plan-dir` -- or a ref
-/// that predates the backlog -- produced an empty read and a clean bill of
-/// health, exit code included, on a backlog it had never opened.
+/// prints nothing for a clean backlog, so an empty read is byte-identical to
+/// a clean bill of health, exit code included.
 ///
 /// What it must not do is say that of a backlog that is there. Zero tickets
 /// is not zero backlog: `.plan/{epics,stories,tasks}/.gitkeep` committed and
-/// no tickets written yet is the ordinary state of a repository that has
-/// just scaffolded one, and working-tree mode is silent about it because the
-/// directory it looks for is right there. Ref mode named a cause it had not
-/// established -- the plan directory and the ref were both called suspect
-/// when neither was. So ask the ref the same question the filesystem is
-/// asked: is anything there under that path? Only an empty answer is "no
-/// backlog", and only a failed one is "planr could not tell".
+/// no tickets yet is the ordinary state of a freshly scaffolded repository.
+/// So ask the ref what the filesystem is asked: is anything under that path?
+/// Only an empty answer is "no backlog", only a failed one "planr cannot tell".
 ///
-/// That question, though, is not the whole of what the caller needs to hear.
-/// `lint_ref` skips a ticket file whose blob it cannot show, so a backlog of
-/// `.md` files planr opened none of also renders as no output and exit 0 --
-/// and the plan directory is populated, so the question above says nothing
-/// about it. The counts the report carries do: files found against files
-/// read. Say which of the two happened rather than folding them into one
-/// message, because they call for different things of the reader.
+/// That is not the whole of it. `lint_ref` skips a ticket file whose blob it
+/// cannot show, so a populated plan directory planr opened none of also
+/// renders as no output and exit 0. The counts tell the two apart: say which
+/// happened, since they call for different things of the reader.
 fn warn_if_ref_backlog_unread(ref_: &str, plan_dir: &str, report: &lint::LintReport) {
     // Part of the backlog was linted and part of it was not. The findings
     // below are real; it is their silence that cannot be trusted.
@@ -348,8 +324,8 @@ fn warn_if_ref_backlog_unread(ref_: &str, plan_dir: &str, report: &lint::LintRep
 /// The first error a directory listing produced, if any.
 ///
 /// Opening a directory can succeed and then fail entry by entry, so a listing
-/// that was cut short reads as a short listing unless the errors are looked
-/// at. The readers discard them.
+/// cut short looks like a short listing unless the errors are looked at. The
+/// readers discard them.
 fn first_read_error(entries: std::fs::ReadDir) -> Option<std::io::Error> {
     entries.filter_map(|e| e.err()).next()
 }
@@ -358,19 +334,16 @@ fn first_read_error(entries: std::fs::ReadDir) -> Option<std::io::Error> {
 ///
 /// Entering the repository root moves that directory out from under every
 /// relative path in the command line, so any such path has to be pinned
-/// first. `claim --worktree ../scratch` means the caller's `..`, not the
-/// root's, and silently redirecting it is worse than the subdirectory bug
-/// that made entering the root necessary.
+/// first: `claim --worktree ../scratch` means the caller's `..`, not the
+/// root's.
 ///
-/// Pinning it is not enough on its own: joining leaves the `..` in place, so
-/// `claim --worktree ../out` from `sub/` printed `/repo/sub/../out`. That
-/// path opens, but it is the string the caller pastes, and it is not the one
-/// planr itself used -- the ignore rule was written for `/out`, because
-/// `resolve_against` normalizes before anchoring. So normalize here, once,
-/// and let the directory git creates, the rule that hides it, and the path
-/// printed back all mean the same place. An absolute path gets the same
-/// treatment for the same reason: typing it out in full is no reason to be
-/// handed `..` back.
+/// Pinning is not enough on its own: joining leaves the `..` in place, and
+/// `/repo/sub/../out` opens but is not the path planr itself used -- the
+/// ignore rule is written for `/out`, because `resolve_against` normalizes
+/// before anchoring. So normalize here, once, and let the directory git
+/// creates, the rule that hides it, and the path printed back all mean the
+/// same place. An absolute path gets the same treatment: typing it out in
+/// full is no reason to be handed `..` back.
 fn resolve_from_invocation_dir(path: &str) -> String {
     let p = std::path::Path::new(path);
     if p.is_absolute() {
@@ -380,8 +353,7 @@ fn resolve_from_invocation_dir(path: &str) -> String {
         Ok(dir) => exclude::normalize(&dir.join(p))
             .to_string_lossy()
             .to_string(),
-        // Nothing to resolve against. The path stays as typed, which is what
-        // planr did before it entered the root at all.
+        // Nothing to resolve against. The path stays as typed.
         Err(e) => {
             eprintln!(
                 "warning: could not read the current directory ({e}); using '{path}' as \
@@ -509,9 +481,8 @@ fn main() {
                 Ok(relative_path) => {
                     // Absolute, because the path is printed for the caller to
                     // use and the caller is not necessarily standing at the
-                    // repository root. `$EDITOR $(planr new ...)` run from a
-                    // subdirectory took the repo-relative path at face value
-                    // and created a stray file under the subdirectory.
+                    // repository root: `$EDITOR $(planr new ...)` from a
+                    // subdirectory would otherwise create a stray file there.
                     println!("{}", cwd.join(&relative_path).display());
                     // Informational lint findings on stderr (never fails)
                     let findings = new_cmd::lint_findings(&cli.plan_dir);
@@ -531,8 +502,8 @@ fn main() {
             let trunk = trunk_override.as_deref().unwrap_or(&cli.trunk);
             // Only an explicit --no-worktree skips the worktree. An omitted
             // --worktree means the default path, same as passing the flag
-            // with no value -- otherwise a bare `claim` would silently do
-            // nothing at all (no branch, no status flip, no commit).
+            // with no value -- otherwise a bare `claim` does nothing: no
+            // branch, no status flip, no commit.
             let wt = if no_worktree {
                 None
             } else {

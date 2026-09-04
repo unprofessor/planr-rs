@@ -279,11 +279,10 @@ pub fn claim_task(
 
     // 2b. Trunk must record work that has not started. Anything else means
     // the claim would do nothing: the flip below refuses to move a status
-    // that is already at or past in_progress, so the call would create a
-    // worktree, skip the flip, and exit 0 -- the silent success this PR
-    // exists to remove. The branch-side guard cannot cover this, because
-    // `close` deletes the branch, so a task closed and then claimed again has
-    // no branch left to check.
+    // already at or past in_progress, so the call would create a worktree,
+    // skip the flip, and exit 0. The branch-side guard cannot cover this,
+    // because `close` deletes the branch, so a task closed and then claimed
+    // again has no branch left to check.
     let info = read_task_on_ref(trunk, &task_file)?;
     if info.status == "abandoned" {
         return Err(format!(
@@ -382,11 +381,8 @@ pub fn claim_task(
         // prune` is repo-global, so claiming this task would also forget any
         // worktree that merely happens to be unreachable right now -- an
         // unmounted volume, a network path, a home directory not yet
-        // decrypted -- orphaning it as a side effect of an unrelated claim.
-        // Say so. The directory being absent cannot be told apart from a
-        // volume that is merely unmounted, so this is the operator's one
-        // chance to notice that a worktree they still care about was
-        // forgotten -- and it is otherwise invisible.
+        // decrypted. Warn: an absent directory cannot be told apart from an
+        // unmounted volume, so this is the operator's one chance to notice.
         eprintln!(
             "warning: {branch} had a registered worktree at {} whose directory is \
              not there; dropping that record and re-claiming. If that path lives \

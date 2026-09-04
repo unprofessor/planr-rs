@@ -1,10 +1,9 @@
 //! One walk over `<plan-dir>/{epics,stories,tasks}`, for every reader of it.
 //!
-//! `board` and `lint` each want the same thing -- every ticket file under the
-//! three kind directories, either at a git ref or in the working tree -- and
-//! each used to walk it themselves. Four copies of one loop drifted: they
-//! spelled the extension test two different ways, and only `lint` counted the
-//! files it found. One walk, one set of answers.
+//! `board` and `lint` want the same thing -- every ticket file under the three
+//! kind directories, either at a git ref or in the working tree. One walk, so
+//! they cannot disagree about the extension test or about how many files were
+//! found. Do not add a second.
 
 /// Where a backlog read gets its tickets.
 pub enum Source<'a> {

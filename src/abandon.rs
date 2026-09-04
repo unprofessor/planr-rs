@@ -121,10 +121,8 @@ pub fn abandon_ticket(
 
     // Abandon refuses until the branch and worktree are cleaned up by hand, so
     // it never learns which path the worktree had and cannot remove that one
-    // rule by name. Nothing else would either -- `close` never runs for an
-    // abandoned task -- so the rule would outlive everything that referred to
-    // it and go on hiding whatever is created at that path. Prune whatever no
-    // live worktree still justifies.
+    // rule by name, and no `close` ever runs for an abandoned task. Prune what
+    // no live worktree still justifies -- see `exclude::exclude_prune`.
     exclude::exclude_prune(cwd);
 
     Ok(format!("abandoned {kind} {slug}"))

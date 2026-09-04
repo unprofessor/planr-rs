@@ -60,11 +60,11 @@ pub struct ParsedTicket {
     /// Raw body text (everything after the frontmatter block).
     pub raw: String,
     /// serde_yaml's message when the frontmatter block failed to parse. Every
-    /// field above then reads as absent, so consumers must report this rather
-    /// than the fields it swallowed.
+    /// field above is then absent, so consumers must report this rather than
+    /// the fields it swallowed.
     pub frontmatter_error: Option<String>,
-    /// True when `id` above was not read from the file at all -- it was
-    /// synthesised from the filename because the frontmatter carried none.
+    /// True when `id` above was not read from the file, but synthesized from
+    /// the filename because the frontmatter carried none.
     ///
     /// The slug is then a guess, however good a one: it is the name of a file
     /// that may sit next to another file claiming the same slug for real. A

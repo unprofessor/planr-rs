@@ -148,25 +148,18 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
             // Cleanup: tolerant worktree remove + branch delete
             if let Some(ref wt) = wt_path {
                 // The ignore rule may only go once the worktree it hides is
-                // actually gone. `worktree remove` without --force refuses
-                // whenever the worktree holds untracked or modified files --
-                // a stray build artifact or log is enough -- and dropping the
-                // rule anyway would leave the worktree in place and unhidden,
-                // which is the gitlink corruption the rule exists to prevent.
-                // A stale rule is the lesser harm, and the next close of that
-                // path clears it. (The exact conditions under which the rule
-                // may go are on the arms below, which is where they are
-                // enforced.)
+                // gone. `worktree remove` without --force refuses whenever the
+                // worktree holds untracked or modified files -- a stray build
+                // artifact is enough -- and dropping the rule anyway leaves a
+                // live worktree unhidden, which is the gitlink corruption the
+                // rule exists to prevent. A stale rule is the lesser harm, and
+                // the next close of that path clears it. The arms below are
+                // where the conditions for dropping it are enforced.
                 //
                 // First, though: never remove a worktree that holds another
-                // one. `git worktree remove` decides it is safe by asking
-                // `git status --porcelain`, which does not list ignored paths
-                // -- and planr's own rule hides `<plan-dir>/worktrees/` inside
-                // every working tree. A worker that claims from inside its own
-                // worktree nests one there by default, so git's safety check
-                // cannot see it and deletes it recursively, uncommitted work
-                // and all. Without the rule git refuses; with it, closing the
-                // parent destroys the child in silence.
+                // one -- git's own safety check cannot see a nested worktree
+                // and deletes it recursively, uncommitted work and all. See
+                // `exclude::worktrees_under`.
                 match exclude::worktrees_under(wt, cwd) {
                     Ok(nested) if !nested.is_empty() => {
                         let paths: Vec<String> =
@@ -195,18 +188,9 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
                     }
                     Ok(_) => {
                         // Nothing below may run from inside the directory
-                        // about to be deleted. `close` from inside the task's
-                        // own worktree -- what a worker does, and what the
-                        // nested-worktree handling above exists for -- left
-                        // the process standing in a path that no longer
-                        // resolves, and every git run after this failed at
-                        // `chdir`: the rule was never dropped (a permanent
-                        // ignore rule for a custom worktree path, and a
-                        // warning quoting an error about the wrong thing),
-                        // and the sibling-task hint below was computed from a
-                        // failed listing and silently dropped. The trunk
-                        // worktree is the one place guaranteed to outlive
-                        // this: the nested check above has already
+                        // about to be deleted -- see `exclude::step_out_of`.
+                        // The trunk worktree is the one place guaranteed to
+                        // outlive this: the nested check above has already
                         // established that no worktree lives under `wt`, so
                         // `trunk_dir` is not one of them.
                         let cwd = &exclude::step_out_of(wt, &trunk_dir, cwd);
@@ -236,13 +220,12 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
                                 exclude::drop_exclude(wt, cwd);
                             }
                             Err(e) => {
-                                // The merge succeeded, so this is not a failure of the
-                                // close -- but it is not nothing either. The worktree
-                                // survives, `git branch -d` below will refuse to
-                                // delete a branch checked out in it, and `planr board`
-                                // will keep listing the task as in flight. Silence
-                                // here made `close` report unqualified success while
-                                // the board contradicted it.
+                                // The merge succeeded, so this is not a failure
+                                // of the close -- but it is not nothing. The
+                                // worktree survives, `git branch -d` below
+                                // refuses to delete a branch checked out in it,
+                                // and `planr board` keeps listing the task as
+                                // in flight.
                                 eprintln!(
                             "warning: merged, but the worktree at {} could not be removed ({e}); \
                              it and branch {branch} remain -- `git worktree remove --force {}` \

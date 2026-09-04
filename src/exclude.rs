@@ -11,9 +11,8 @@
 //! own header block and nothing else, and everything outside that block is
 //! written back byte for byte. That is why the read/modify/write path works
 //! over `&[u8]` rather than `String`: a rule naming a path that is not valid
-//! UTF-8 is an ordinary thing to find, and reading the file as text turned
-//! one into an empty file and threw the user's rules away. Do not put
-//! `String` back into it.
+//! UTF-8 is an ordinary thing to find, and reading the file as text destroys
+//! it. Do not put `String` back into it.
 
 use crate::git::{git_common_dir, git_in};
 use std::path::{Path, PathBuf};
@@ -21,12 +20,10 @@ use std::path::{Path, PathBuf};
 /// Strip `.` and resolve `..` lexically. The target may not exist yet, so
 /// `canonicalize` is not available to do it.
 ///
-/// This is the one reading planr gives a path the caller typed, and every
-/// use of that path has to agree with it: the directory git is told to make
-/// the worktree in, the anchored rule written to hide it, and the path
-/// printed back for the caller to `cd` into. Resolving the rule one way and
-/// printing the path another is how `claim --worktree ../out` came to print
-/// `/repo/sub/../out`.
+/// This is the one reading planr gives a path the caller typed, and every use
+/// of that path has to agree with it: the directory git is told to make the
+/// worktree in, the anchored rule written to hide it, and the path printed
+/// back for the caller to `cd` into.
 pub fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
@@ -69,43 +66,31 @@ fn canonicalize_existing(p: &Path) -> PathBuf {
     }
 }
 
-/// The root of the working tree that contains `target`.
+/// The root of the working tree that contains `target`, by longest-prefix
+/// match over `git worktree list`.
 ///
 /// `.git/info/exclude` is shared by every worktree of the clone, but git
-/// anchors a leading-slash pattern to *whichever working tree it is currently
-/// evaluating* -- one shared `/target/` rule hides `target` at the top of the
-/// main tree and at the top of every linked worktree alike. So the anchor that
-/// makes a rule fire is the tree the directory actually sits in, found by
-/// longest-prefix match over `git worktree list`. Anchoring to the invoking
-/// worktree is wrong when a caller names a path in another tree; anchoring to
-/// the main worktree is worse, because a target inside a linked worktree
-/// shares no prefix with it and would get no rule at all.
+/// anchors a leading-slash pattern to whichever working tree it is currently
+/// evaluating. The anchor that makes a rule fire is therefore the tree the
+/// directory sits in: the invoking worktree is the wrong answer for a path in
+/// another tree, and the main worktree is worse, since a target inside a
+/// linked worktree shares no prefix with it and gets no rule.
 ///
-/// One consequence is unavoidable: a same-named path at the same depth in a
-/// sibling worktree is hidden too. A shared exclude file cannot express "this
-/// worktree only", and over-hiding is the safe direction -- the alternative is
-/// a gitlink committed onto trunk.
+/// A same-named path at the same depth in a sibling worktree is hidden too. A
+/// shared exclude file cannot say "this worktree only", and over-hiding is the
+/// safe direction: the alternative is a gitlink committed onto trunk. The
+/// user guide spells out the reach of that for an explicit `--worktree` path.
 ///
-/// Note the reach of that, though, because it is wider than planr's own
-/// directories. `claim x --worktree scratch` run inside one worktree writes
-/// `/scratch/`, which also hides a `scratch/` at the top of trunk and of every
-/// sibling -- a path that need not have anything to do with planr. An explicit
-/// relative `--worktree` name is worth choosing with that in mind; the default
-/// location does not have the problem, since nothing else is called
-/// `<plan-dir>/worktrees/`.
-///
-/// `Err` when git could not be asked. That is deliberately distinct from
-/// `Ok(None)`: "the target is outside every working tree, so no rule is
-/// needed" and "we do not know where the target is" call for opposite
-/// behaviour, and collapsing them turned a failed lookup into a claim that
-/// reported success while leaving an in-repo worktree unhidden.
+/// Load-bearing: `Err` must stay distinct from `Ok(None)`. "The target is
+/// outside every working tree, so no rule is needed" and "planr cannot tell
+/// where the target is" call for opposite behavior, and collapsing them fails
+/// open -- a claim that reports success over an in-repo worktree left unhidden.
 fn containing_worktree_root(target: &Path, cwd: &Path) -> Result<Option<PathBuf>, String> {
     Ok(worktree_roots(cwd)?
         .into_iter()
-        // Strictly above the target. The rule is written after the worktree
-        // exists, so the target is itself a registered worktree by then --
-        // matching it against itself would yield an empty relative path and
-        // no rule at all.
+        // Strictly above the target: by the time a rule is written the target
+        // is a registered worktree itself, and matching it against itself
+        // yields an empty relative path and no rule.
         .filter(|root| target.starts_with(root) && target != root.as_path())
         // Worktrees nest (planr's default location puts one inside the tree
         // that claimed it), so the deepest match is the containing one.
@@ -114,9 +99,8 @@ fn containing_worktree_root(target: &Path, cwd: &Path) -> Result<Option<PathBuf>
 
 /// The canonical root of every registered worktree.
 ///
-/// One helper so that every question asked of the worktree list resolves
-/// paths the same way; the callers disagreed before, one dropping records
-/// whose directory no longer exists and the other keeping them.
+/// One helper, so that every question asked of the worktree list resolves
+/// paths the same way. Ask it here rather than parsing the porcelain again.
 fn worktree_roots(cwd: &Path) -> Result<Vec<PathBuf>, String> {
     let out = git_in(cwd, &["worktree", "list", "--porcelain"])?;
     Ok(out
@@ -128,16 +112,14 @@ fn worktree_roots(cwd: &Path) -> Result<Vec<PathBuf>, String> {
 
 /// Resolve `target` to a canonical absolute path, relative to `cwd`.
 ///
-/// One helper so that every question asked about a target resolves it the
-/// same way: `another_worktree_needs` used to skip the `cwd` join, so a
-/// relative target -- which `claim` does build for the default location --
-/// would have been resolved against the process directory instead and the
-/// "is any live worktree under this?" check compared the wrong paths.
+/// The counterpart of `worktree_roots`: every question asked about a target
+/// resolves it here, so both sides of a comparison are canonical. A relative
+/// target is ordinary -- `claim` builds one for the default location.
 ///
-/// A `cwd` that cannot be canonicalized is an error, not a fallback. Leaving
-/// `base` relative made `abs` relative too, so it matched no canonical
-/// worktree root and the pattern came back as `Ok(None)` -- "no rule needed"
-/// -- which is the fail-open the `Err`/`Ok(None)` split exists to prevent.
+/// A `cwd` that cannot be canonicalized is an error, not a fallback. A
+/// relative `base` leaves `abs` relative, it then matches no canonical
+/// worktree root, and the pattern comes back `Ok(None)` -- "no rule needed",
+/// the fail-open the `Err`/`Ok(None)` split exists to prevent.
 fn resolve_against(target: &Path, cwd: &Path) -> Result<PathBuf, String> {
     let abs = if target.is_absolute() {
         target.to_path_buf()
@@ -164,13 +146,10 @@ fn exclude_pattern(target: &Path, cwd: &Path) -> Result<Option<String>, String> 
         return Ok(None);
     };
     // A gitignore file is line-oriented, so a path that is not one line of
-    // valid UTF-8 cannot be expressed as a rule at all. Writing it anyway
-    // split the pattern across lines: the worktree stayed visible (staged as
-    // a gitlink on the next `git add -A`), the claim reported success, and
-    // neither fragment could ever be removed, because removal matches the
-    // recomputed pattern. `/wt` and `evil/` would then hide unrelated paths
-    // across every worktree, permanently. Refuse instead -- an error the
-    // caller can act on, not a rule that quietly does the wrong thing.
+    // valid UTF-8 cannot be expressed as a rule. Refuse rather than write a
+    // broken one: a pattern split across lines hides unrelated paths in every
+    // worktree and can never be removed again, because removal matches the
+    // recomputed pattern.
     let Some(rel) = rel.to_str() else {
         return Err(format!(
             "cannot hide {}: the path is not valid UTF-8, so no ignore rule \
@@ -187,11 +166,9 @@ fn exclude_pattern(target: &Path, cwd: &Path) -> Result<Option<String>, String> 
     }
     let rel = rel.to_string();
     // Separator normalization is Windows-only. On Unix a backslash is an
-    // ordinary filename character, so rewriting it split `wt\1` into `wt/1`:
-    // git then looked for a `1` inside a `wt` directory, the real worktree
-    // stayed visible, and `git add` staged it as a gitlink -- the same failure
-    // the glob escaping below exists to prevent. `glob_escape` handles the
-    // backslash itself.
+    // ordinary filename character: rewriting `wt\1` to `wt/1` would point the
+    // rule at a `1` inside a `wt` directory and leave the worktree visible.
+    // `glob_escape` handles the backslash itself.
     #[cfg(windows)]
     let rel = rel.replace('\\', "/");
     Ok((!rel.is_empty()).then(|| format!("/{}/", glob_escape(&rel))))
@@ -223,22 +200,17 @@ fn exclude_file(cwd: &Path) -> Result<PathBuf, String> {
 
 /// Ignore `target` in this clone only, via `.git/info/exclude`.
 ///
-/// Used for worktrees that land inside the working tree. Such a worktree is
-/// an embedded repo, so without a rule `git add` stages it as a `160000`
-/// gitlink -- a bogus submodule that rides through every merge and that a
-/// fresh clone cannot resolve -- and the tree reads dirty until someone runs
-/// `git rm --cached`. Hiding an embedded repo takes a pattern in an
-/// ancestor's ignore rules; a `.gitignore` inside it cannot work, since git
-/// detects the gitlink from the `.git` file, not the directory contents.
+/// A worktree inside the working tree is an embedded repo: without a rule
+/// `git add` stages it as a `160000` gitlink, a bogus submodule that rides
+/// through every merge and that a fresh clone cannot resolve. Hiding it takes
+/// a pattern in an ancestor's ignore rules -- git detects the gitlink from the
+/// `.git` file, so a `.gitignore` inside the worktree cannot work. The rule is
+/// local rather than tracked because a worktree is local to this clone.
 ///
-/// The rule is local rather than a tracked `.gitignore` because a worktree
-/// is local: it exists in this clone alone. That also leaves nothing new in
-/// the working tree for anyone to notice or commit.
-/// Returns whether a rule was actually written -- `false` when none was
-/// needed or planr already had one. The caller needs that to know whether
-/// rolling back may remove it: the shared default rule is written once and
-/// reused by every later claim, so removing it on behalf of a claim that
-/// merely found it would unhide every other worktree under it.
+/// Returns whether a rule was written -- `false` when none was needed or planr
+/// already had one. A rollback may only remove a rule this call wrote: the
+/// shared default rule is reused by every later claim, so removing it for a
+/// claim that merely found it unhides every other worktree under it.
 pub fn exclude_add(target: &Path, cwd: &Path) -> Result<bool, String> {
     // Rewriting the file is a read-modify-write, and claims run concurrently
     // by design. Without this, two claims can both read the pre-rule file and
@@ -328,17 +300,16 @@ fn write_planr_block<'a>(
 /// Two things this must not do, because the caller writes the file back.
 ///
 /// It must not read the file as text. `.git/info/exclude` is a list of paths,
-/// and on Unix a path is bytes: one Latin-1 byte anywhere in it -- a
-/// `/caf\xe9/` rule the user wrote years ago -- failed `read_to_string`
-/// outright. Every line planr does not own is handed back to `write_lines`
-/// exactly as it came in, so the file survives whatever encoding it is in.
+/// and on Unix a path is bytes: one Latin-1 byte -- a `/caf\xe9/` rule --
+/// fails `read_to_string` outright. Every line planr does not own goes back
+/// to `write_lines` as it came in, whatever encoding the file is in.
 ///
 /// And it must not turn a failed read into an empty file. Paired with
-/// `unwrap_or_default`, that failure read as "there is nothing here", and the
-/// rewrite replaced the user's whole exclude file with planr's block alone --
-/// exit 0, no warning, and the file is untracked, so git cannot put it back.
-/// Only "not there" is an empty file. Anything else is an error, and the
-/// caller must not overwrite what it could not read.
+/// `unwrap_or_default` a failed read is indistinguishable from an empty one,
+/// and the rewrite then replaces the user's untracked exclude file with
+/// planr's block alone, past any hope of git restoring it. Only "not there"
+/// is an empty file. Anything else is an error, and the caller must not
+/// overwrite what it could not read.
 fn read_exclude_file(path: &Path) -> Result<Vec<u8>, String> {
     match std::fs::read(path) {
         Ok(content) => Ok(content),
@@ -462,29 +433,23 @@ pub fn worktrees_under(path: &Path, cwd: &Path) -> Result<Vec<PathBuf>, String> 
 /// Drop every rule in planr's block that no live worktree needs.
 ///
 /// `exclude_remove` needs the path a rule was written for, and by the time a
-/// worktree is gone that path is no longer known -- `abandon`, for one,
-/// refuses until the worktree and branch have been cleaned up by hand, so it
-/// never sees them. The rule then outlives everything that referred to it and
-/// silently hides whatever is created at that path next.
+/// worktree is gone that path is no longer known -- `abandon` refuses until
+/// the worktree and branch have been cleaned up by hand, so it never sees
+/// them. The rule then outlives everything that referred to it.
 ///
 /// This asks the question the other way round: build the set of patterns the
-/// live worktrees actually justify -- each worktree's own pattern, and every
-/// ancestor of it up to its containing tree, which is what covers the shared
+/// live worktrees justify -- each worktree's own pattern, and every ancestor
+/// of it up to its containing tree, which is what covers the shared
 /// `<plan-dir>/worktrees/` parent -- and drop anything else planr owns. Only
 /// planr's own block is touched; a rule the user wrote is not planr's to
 /// prune.
 ///
-/// Every way this can fail leaves the rules in place, which is the safe
-/// direction -- a rule kept too long is tidiness, a rule dropped too early
-/// unhides a live worktree. That includes the per-tree loop: a tree whose
-/// pattern cannot be worked out contributes nothing to `needed`, so carrying
-/// on would drop the very rule that hides it, which is the outcome the rest
-/// of this file fails closed against. Keeping them quietly is not safe
-/// either: what stays behind hides whatever is created at that path and
-/// leaves no trace in `git status`, so nothing else would ever point at it.
-/// Say so on stderr, naming what could not be done and why, and let the
-/// command that asked for the prune carry on -- the prune is never what it
-/// was asked to do.
+/// Every way this can fail keeps every rule, the per-tree loop included: a
+/// tree whose pattern cannot be worked out contributes nothing to `needed`,
+/// so carrying on would drop the rule that hides it. Do not widen that
+/// recovery. A rule kept too long is untidy; one dropped too early unhides a
+/// live worktree. Warn on stderr and let the caller carry on -- the prune is
+/// never what it was asked to do.
 pub fn exclude_prune(cwd: &Path) {
     let _lock = match crate::lock::PlanrLock::exclude(cwd) {
         Ok(l) => l,
@@ -499,9 +464,8 @@ pub fn exclude_prune(cwd: &Path) {
     let mut needed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for root in &roots {
         // `Ok(None)` is an answer: nothing sits above this tree, so no rule
-        // hides it and none is needed. `Err` is not an answer, and treating
-        // it as one dropped the rules that tree justifies -- the fail-open
-        // this whole path exists to avoid.
+        // hides it and none is needed. `Err` is not an answer -- treating it
+        // as one drops the rules that tree justifies.
         let tree = match containing_worktree_root(root, cwd) {
             Ok(Some(tree)) => tree,
             Ok(None) => continue,
@@ -525,8 +489,7 @@ pub fn exclude_prune(cwd: &Path) {
         Ok(p) => p,
         Err(e) => return warn_prune_failed(&e),
     };
-    // No exclude file is not a failure: there is nothing to prune, and that
-    // much the code did establish -- an empty read reaches `kept.len() ==
+    // No exclude file is not a failure: an empty read reaches `kept.len() ==
     // block.len()` below and writes nothing. Any other read error means rules
     // may be sitting there unread.
     let existing = match read_exclude_file(&path) {
@@ -539,10 +502,9 @@ pub fn exclude_prune(cwd: &Path) {
         .copied()
         .filter(|l| match std::str::from_utf8(l.trim_ascii()) {
             Ok(line) => needed.contains(line),
-            // planr never writes a rule it cannot express as UTF-8 --
-            // `exclude_pattern` refuses those -- so a line that is not UTF-8
-            // is somebody else's, wherever in the file it landed, and pruning
-            // is not the place to discover that.
+            // `exclude_pattern` refuses a rule it cannot express as UTF-8, so
+            // a line that is not UTF-8 is somebody else's, wherever in the
+            // file it landed. Keep it.
             Err(_) => true,
         })
         .collect();
@@ -568,11 +530,9 @@ fn warn_prune_failed(reason: &str) {
 /// Drop the ignore rule for `target`, reporting a failure rather than
 /// swallowing it.
 ///
-/// Every caller is on a cleanup path where the removal is not what the
-/// command was asked to do, so a failure must not abort it. It must not be
-/// silent either: what is left behind is a rule that hides anything later
-/// created at that path, and it is invisible in `git status`, so nothing else
-/// would ever point at it.
+/// Every caller is on a cleanup path where the removal is not what the command
+/// was asked to do, so a failure must not abort it -- and must not be silent
+/// either, since a rule left behind is invisible in `git status`.
 pub fn drop_exclude(target: &Path, cwd: &Path) {
     if let Err(e) = exclude_remove(target, cwd) {
         eprintln!(
@@ -589,10 +549,8 @@ pub fn drop_exclude(target: &Path, cwd: &Path) {
 /// Two ways it can. A worktree elsewhere may resolve to the same pattern,
 /// since patterns are anchored per containing worktree. And a worktree may
 /// live *under* the directory the rule hides: planr's default location is a
-/// shared parent that one rule covers for every task ever claimed there, so
-/// the rule is load-bearing for worktrees whose own pattern is nothing like
-/// it. Missing the second case drops the shared rule while other claims are
-/// still relying on it, leaving their worktrees visible.
+/// shared parent that one rule covers for every task claimed there, so the
+/// rule is load-bearing for worktrees whose own pattern is nothing like it.
 fn another_worktree_needs(pattern: &str, target: &Path, cwd: &Path) -> bool {
     let Ok(roots) = worktree_roots(cwd) else {
         // Fail closed. Not knowing the answer must not read as "nobody needs
@@ -623,13 +581,8 @@ const EXCLUDE_HEADER: &str = "# planr worktrees -- checkouts, not backlog conten
 ///
 /// Removing a worktree the process is standing in leaves it standing in a
 /// path that no longer resolves, and everything after that fails at `chdir`
-/// before git is even reached -- not with an error about the worktree, but
-/// with "No such file or directory" from whatever ran next. `close` run from
-/// inside the task's own worktree hit exactly that: the ignore rule for a
-/// custom worktree path could not be dropped and outlived the directory it
-/// hid, and the "all tasks under this story are done" hint was computed from
-/// a failed `git ls-tree` and silently dropped. Neither symptom named the
-/// cause, and one of them named nothing at all.
+/// before git is reached -- not with an error about the worktree, but with
+/// "No such file or directory" from whatever ran next.
 ///
 /// So the caller moves first, while both directories still exist. `refuge`
 /// must be somewhere that outlives the removal and belongs to the same
@@ -644,10 +597,9 @@ pub fn step_out_of(doomed: &Path, refuge: &Path, cwd: &Path) -> PathBuf {
     }
     match std::env::set_current_dir(refuge) {
         Ok(()) => refuge.to_path_buf(),
-        // Nothing else can be done about it, and the caller is mid-cleanup on
-        // a command that has already succeeded -- but the failures that
-        // follow will read as unrelated git errors, so say where they come
-        // from.
+        // The caller is mid-cleanup on a command that has already succeeded,
+        // so this cannot abort. The failures that follow look like unrelated
+        // git errors, so say where they come from.
         Err(e) => {
             eprintln!(
                 "warning: could not leave {} for {} before removing it ({e}); \
@@ -675,8 +627,7 @@ mod tests {
                 Some("/wt/".to_string())
             );
             // Outside every working tree: no rule is needed. This must stay
-            // distinct from an error -- collapsing the two turned a failed
-            // lookup into a claim that reported success having hidden nothing.
+            // distinct from an error; collapsing the two fails open.
             assert_eq!(
                 exclude_pattern(&tmp.path().join("elsewhere"), repo).unwrap(),
                 None
@@ -716,17 +667,11 @@ mod tests {
         });
     }
 
-    /// A user's exclude file need not be UTF-8. `.git/info/exclude` is a
-    /// list of paths and on Unix a path is bytes, so a `/caf\xe9/` rule
-    /// written years ago under Latin-1 is an ordinary thing to find there.
-    /// Reading it as text failed, `unwrap_or_default` turned that failure
-    /// into "the file is empty", and the rewrite replaced every rule the
-    /// user had with planr's block alone -- exit 0, no warning, and the file
-    /// is untracked, so git could not put it back.
-    ///
-    /// Every writer is checked, not just the one the report named: `claim`
-    /// adds, `close` removes, and `abandon` prunes, and all three rewrite
-    /// the whole file from the same split.
+    /// Every writer preserves an exclude file that is not UTF-8: `claim`
+    /// adds, `close` removes, and `abandon` prunes, and all three rewrite the
+    /// whole file from the same split. A `/caf\xe9/` rule written under
+    /// Latin-1 is an ordinary thing to find in a list of Unix paths, and
+    /// every byte of it has to come back.
     #[test]
     fn test_exclude_writers_preserve_a_non_utf8_file() {
         with_temp_repo(|_tmp, repo| {
