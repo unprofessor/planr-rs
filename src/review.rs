@@ -25,7 +25,7 @@ pub fn generate_review_brief(slug: &str, trunk: &str, plan_dir: &str) -> Result<
         .ok_or_else(|| format!("no task file for '{slug}' on {branch}"))?;
 
     // Locate worktree for this branch
-    let worktree_path = find_worktree_path(&branch);
+    let worktree_path = git::find_worktree_for_branch(&branch).map(|p| p.display().to_string());
 
     // Read the task file from the branch
     let blob = git::show_ref(&branch, task_file)?;
@@ -86,21 +86,4 @@ self-validation; re-check everything yourself.\n\
     out.push('\n');
 
     Ok(out)
-}
-
-/// Parse `worktree list --porcelain` to find the worktree path for a branch.
-fn find_worktree_path(branch: &str) -> Option<String> {
-    let lines = git::worktree_list().ok()?;
-    let branch_ref = format!("refs/heads/{branch}");
-    let mut current_wt: Option<String> = None;
-
-    for line in &lines {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            current_wt = Some(path.to_string());
-        } else if line.strip_prefix("branch ") == Some(&branch_ref) {
-            return current_wt;
-        }
-    }
-
-    None
 }
