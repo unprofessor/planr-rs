@@ -8,6 +8,7 @@
 //! the existing body.
 
 use crate::close_cmd::find_ticket_by_slug;
+use crate::frontmatter::{local_date_string, split_fm};
 use crate::git;
 use crate::lock::PlanrLock;
 use crate::ticket::parse_ticket;
@@ -67,29 +68,6 @@ fn abandon_frontmatter(content: &str, message: &str, date: &str) -> Result<Strin
     }
 
     Ok(format!("---\n{}\n---\n{}", out.join("\n"), body))
-}
-
-struct FmSplit<'a> {
-    fm_lines: Vec<&'a str>,
-    rest: &'a str,
-}
-
-fn split_fm(blob: &str) -> Option<FmSplit<'_>> {
-    if !blob.starts_with("---\n") {
-        return None;
-    }
-    let end = blob[4..].find("\n---\n")?;
-    let fm_end = 4 + end;
-    let fm_str = &blob[4..fm_end];
-    let rest = &blob[fm_end + 5..];
-    let fm_lines: Vec<&str> = fm_str.lines().collect();
-    Some(FmSplit { fm_lines, rest })
-}
-
-/// Return the local date in YYYY-MM-DD form.
-fn local_date_string() -> String {
-    let now = jiff::Zoned::now();
-    format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day())
 }
 
 /// Abandon a ticket on trunk without a review or merge.

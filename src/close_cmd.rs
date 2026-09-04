@@ -6,6 +6,7 @@
 //! - `close story <slug>` -- trunk-local: child-task gate -> done flip -> commit
 //! - `close epic <slug>` -- trunk-local: child-story gate -> done flip -> commit
 
+use crate::frontmatter::{flip_frontmatter, local_date_string};
 use crate::git;
 use crate::lock::PlanrLock;
 use crate::parse::extract_last_review_verdict;
@@ -53,61 +54,6 @@ fn find_task_file_on_branch(branch: &str, slug: &str, plan_dir: &str) -> Result<
         .into_iter()
         .find(|f| re.is_match(f))
         .ok_or_else(|| format!("no task file for '{slug}' on {branch}"))
-}
-
-/// Local date string (YYYY-MM-DD).
-fn local_date_string() -> String {
-    let now = jiff::Zoned::now();
-    format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day())
-}
-
-/// Frontmatter-scoped flip: status + updated, with insert-if-absent
-/// (same pattern as claim.rs).
-fn flip_frontmatter(content: &str, new_status: &str, date: &str) -> Result<String, String> {
-    let sf = split_fm(content).ok_or_else(|| "no frontmatter".to_string())?;
-    let mut has_status = false;
-    let mut has_updated = false;
-    let mut out: Vec<String> = Vec::with_capacity(sf.fm_lines.len() + 2);
-
-    for line in &sf.fm_lines {
-        if line.starts_with("status:") {
-            out.push(format!("status: {new_status}"));
-            has_status = true;
-        } else if line.starts_with("updated:") {
-            out.push(format!("updated: {date}"));
-            has_updated = true;
-        } else {
-            out.push(line.to_string());
-        }
-    }
-    // TS order: check hasStatus first (unshift), then hasUpdated (unshift puts
-    // updated ABOVE status).
-    if !has_status {
-        out.insert(0, format!("status: {new_status}"));
-    }
-    if !has_updated {
-        out.insert(0, format!("updated: {date}"));
-    }
-
-    let fm_str = out.join("\n");
-    Ok(format!("---\n{fm_str}\n---\n{}", sf.rest))
-}
-
-struct FmSplit<'a> {
-    fm_lines: Vec<&'a str>,
-    rest: &'a str,
-}
-
-fn split_fm(blob: &str) -> Option<FmSplit<'_>> {
-    if !blob.starts_with("---\n") {
-        return None;
-    }
-    let end = blob[4..].find("\n---\n")?;
-    let fm_end = 4 + end;
-    let fm_str = &blob[4..fm_end];
-    let rest = &blob[fm_end + 5..];
-    let fm_lines: Vec<&str> = fm_str.lines().collect();
-    Some(FmSplit { fm_lines, rest })
 }
 
 // ---------------------------------------------------------------------------
@@ -526,59 +472,4 @@ fn flip_and_commit_kind(
     git::commit_in(&format!("plan: close {kind_dir} {slug}"), &trunk_dir)?;
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ---- frontmatter helpers ----
-
-    #[test]
-    fn test_split_fm_simple() {
-        let blob = "---\nid: x\nstatus: todo\n---\nbody";
-        let sf = split_fm(blob).unwrap();
-        assert_eq!(sf.fm_lines[0], "id: x");
-        assert_eq!(sf.fm_lines[1], "status: todo");
-        assert_eq!(sf.rest, "body");
-    }
-
-    #[test]
-    fn test_split_fm_no_fm() {
-        assert!(split_fm("no frontmatter").is_none());
-    }
-
-    #[test]
-    fn test_flip_frontmatter_replaces() {
-        let content = "---\nid: x\nstatus: review\nupdated: 2026-01-01\n---\nbody\n";
-        let result = flip_frontmatter(content, "done", "2026-08-05").unwrap();
-        assert!(result.contains("status: done"));
-        assert!(result.contains("updated: 2026-08-05"));
-        assert!(result.contains("id: x"));
-        assert!(result.ends_with("body\n"));
-    }
-
-    #[test]
-    fn test_flip_frontmatter_inserts_if_absent() {
-        let content = "---\nid: x\n---\nbody\n";
-        let result = flip_frontmatter(content, "done", "2026-08-05").unwrap();
-        let sep = result.find("\n---\n").unwrap();
-        let fm_part = &result[4..sep];
-        assert!(fm_part.contains("status: done"));
-        assert!(fm_part.contains("updated: 2026-08-05"));
-    }
-
-    // ---- local_date_string ----
-
-    #[test]
-    fn test_local_date_string_format() {
-        let s = local_date_string();
-        assert_eq!(s.len(), 10);
-        assert_eq!(&s[4..5], "-");
-        assert_eq!(&s[7..8], "-");
-    }
 }

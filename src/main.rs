@@ -10,6 +10,7 @@ mod abandon;
 mod board;
 mod claim;
 mod close_cmd;
+mod frontmatter;
 mod git;
 mod lint;
 mod lock;
