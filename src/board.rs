@@ -653,23 +653,39 @@ fn name_from_file(mut ticket: ParsedTicket, file: &str) -> ParsedTicket {
     ticket
 }
 
+/// A backlog read: the tickets planr parsed, and how many ticket files it
+/// found to parse.
+pub struct TrunkTickets {
+    pub tickets: Vec<ParsedTicket>,
+    /// Ticket files found, whether or not they could be read.
+    ///
+    /// A board built from part of a backlog renders the same way one built
+    /// from all of it does, and the count of files found is the only thing
+    /// that separates them. Keep it covering everything the walk returned;
+    /// `tickets.len()` is how many of those planr actually opened.
+    pub ticket_files: usize,
+}
+
 /// Parse whatever the backlog walk managed to read.
-fn parse_backlog(found: Vec<crate::backlog::TicketFile>) -> Vec<ParsedTicket> {
-    let mut results = Vec::new();
+fn parse_backlog(found: Vec<crate::backlog::TicketFile>) -> TrunkTickets {
+    let ticket_files = found.len();
+    let mut tickets = Vec::new();
     for tf in found {
-        // A file the walk could not read has no ticket in it to parse. The
-        // count of what was found lives with the caller of the walk; this
-        // step only turns content into tickets.
+        // A file the walk could not read has no ticket in it to parse. It
+        // still counts as found -- see `unread_warning`.
         let Some(blob) = tf.blob else {
             continue;
         };
-        results.push(name_from_file(crate::ticket::parse_ticket(&blob), &tf.file));
+        tickets.push(name_from_file(crate::ticket::parse_ticket(&blob), &tf.file));
     }
-    results
+    TrunkTickets {
+        tickets,
+        ticket_files,
+    }
 }
 
 /// Gather trunk tickets from a git ref using the git wrappers.
-pub fn read_ref_tickets(ref_: &str, plan_dir: &str) -> Vec<ParsedTicket> {
+pub fn read_ref_tickets(ref_: &str, plan_dir: &str) -> TrunkTickets {
     parse_backlog(crate::backlog::read_backlog(
         crate::backlog::Source::Ref(ref_),
         plan_dir,
@@ -677,10 +693,49 @@ pub fn read_ref_tickets(ref_: &str, plan_dir: &str) -> Vec<ParsedTicket> {
 }
 
 /// Gather trunk tickets from the local working tree.
-pub fn read_working_tree_tickets(plan_dir: &str) -> Vec<ParsedTicket> {
+pub fn read_working_tree_tickets(plan_dir: &str) -> TrunkTickets {
     parse_backlog(crate::backlog::read_backlog(
         crate::backlog::Source::WorkingTree,
         plan_dir,
+    ))
+}
+
+/// Say that the board was built from fewer tickets than the ref holds.
+///
+/// The reader skips a ticket file whose blob it cannot show, so a backlog of
+/// ordinary `.md` tickets that planr opened none of renders as an empty
+/// board -- the same shape as a backlog that holds nothing. The two counts
+/// are what separate them, and the caller cannot see the difference without
+/// being told. `lint <ref>` says this already; the board owes its reader the
+/// same.
+///
+/// Say which of the two happened rather than folding them into one message,
+/// because they call for different things of the reader: a partial board is
+/// right about what it shows and silent about the rest, while an empty one
+/// establishes nothing at all.
+///
+/// Nothing found is not a failed read. A repository that has scaffolded
+/// `<plan-dir>/{epics,stories,tasks}` and written no tickets yet finds zero
+/// ticket files and fails to read none of them, and warning about that state
+/// is the false positive this must not become. Do not widen the guard to
+/// cover an empty backlog.
+pub fn unread_warning(read: &TrunkTickets, ref_: &str, plan_dir: &str) -> Option<String> {
+    let tickets_read = read.tickets.len();
+    if tickets_read >= read.ticket_files {
+        return None;
+    }
+    if tickets_read > 0 {
+        return Some(format!(
+            "warning: planr read {} of the {} ticket file(s) under '{plan_dir}' at \
+             '{ref_}' -- what it could not read is missing from this board",
+            tickets_read, read.ticket_files
+        ));
+    }
+    Some(format!(
+        "warning: planr read none of the {} ticket file(s) under '{plan_dir}' at \
+         '{ref_}' -- this board is empty because nothing opened, which is not the \
+         same as there being nothing to show",
+        read.ticket_files
     ))
 }
 

@@ -434,13 +434,23 @@ fn main() {
     match command {
         Command::Board { r#ref } => {
             let source = board::source_status_line(r#ref.as_deref());
-            let tickets = match r#ref {
-                Some(ref_) if !ref_.is_empty() => board::read_ref_tickets(&ref_, &cli.plan_dir),
+            let read = match r#ref {
+                Some(ref_) if !ref_.is_empty() => {
+                    let read = board::read_ref_tickets(&ref_, &cli.plan_dir);
+                    // A board built from files planr never opened states a
+                    // total it did not read. Say so before the board itself,
+                    // so the reader has it before the numbers.
+                    if let Some(w) = board::unread_warning(&read, &ref_, &cli.plan_dir) {
+                        eprintln!("{w}");
+                    }
+                    read
+                }
                 _ => {
                     warn_if_plan_dir_missing(&cli.plan_dir);
                     board::read_working_tree_tickets(&cli.plan_dir)
                 }
             };
+            let tickets = read.tickets;
             let branches = board::read_in_flight_branches(&cli.plan_dir);
             // Warnings go to stderr so the board on stdout stays a clean,
             // parseable document.

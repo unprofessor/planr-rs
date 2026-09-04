@@ -267,3 +267,87 @@ fn test_e2e_board_reports_in_flight_branches_from_trunk() {
         "marker legend missing: {board}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Scenario: ref-mode board that could not read the tickets it found
+// ---------------------------------------------------------------------------
+
+/// `planr board <ref>` must not present a total it computed from files it
+/// never opened.
+///
+/// The reader skips a ticket file whose blob it cannot show, so a backlog of
+/// ordinary `.md` tickets that planr opened none of renders as an empty
+/// board -- indistinguishable from a backlog that holds nothing. `lint
+/// <ref>` was fixed to separate those two; the board printed the same lie
+/// one command over.
+///
+/// The three states are pinned together because the fix has to separate them
+/// and not merely fire more often: none of the tickets read, some of them
+/// read, and a scaffolded `.gitkeep` backlog that holds no tickets at all.
+/// The last must stay silent -- there is nothing there that planr failed to
+/// read, and saying otherwise is the false positive this warning must not
+/// become.
+#[test]
+fn test_e2e_board_ref_says_when_it_could_not_read_the_tickets() {
+    // ---- none of them read ----
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    planr_ok(td.path(), &["new", "epic", "e1", "E1"]);
+    planr_ok(td.path(), &["new", "story", "s1", "S1", "e1"]);
+    planr_ok(td.path(), &["new", "task", "foo", "Foo", "s1"]);
+    git_must(td.path(), &["add", "-A", "-f", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "a backlog"]);
+    for f in [
+        ".plan/epics/01-e1.md",
+        ".plan/stories/01-s1.md",
+        ".plan/tasks/01-foo.md",
+    ] {
+        destroy_blob(td.path(), "main", f);
+    }
+
+    let (out, err) = planr_ok_both(td.path(), &["board", "main"]);
+    assert!(
+        err.contains("read none of the 3 ticket file(s) under '.plan' at 'main'"),
+        "an empty board built from nothing must say so: {err:?}"
+    );
+    // The warning goes to stderr; the board on stdout stays a clean,
+    // parseable document.
+    assert!(
+        !out.contains("read none of"),
+        "the warning belongs on stderr, not in the board: {out:?}"
+    );
+
+    // ---- some of them read ----
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    planr_ok(td.path(), &["new", "epic", "e1", "E1"]);
+    planr_ok(td.path(), &["new", "story", "s1", "S1", "e1"]);
+    planr_ok(td.path(), &["new", "task", "foo", "Foo", "s1"]);
+    git_must(td.path(), &["add", "-A", "-f", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "a backlog"]);
+    destroy_blob(td.path(), "main", ".plan/tasks/01-foo.md");
+
+    let (out, err) = planr_ok_both(td.path(), &["board", "main"]);
+    assert!(
+        err.contains("read 2 of the 3 ticket file(s) under '.plan' at 'main'"),
+        "a board built from part of a backlog must say which part: {err:?}"
+    );
+    assert!(
+        !out.contains("read 2 of"),
+        "the warning belongs on stderr, not in the board: {out:?}"
+    );
+
+    // ---- a backlog that holds no tickets is still not a failed read ----
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    for kind in ["epics", "stories", "tasks"] {
+        std::fs::write(td.path().join(format!(".plan/{kind}/.gitkeep")), "").unwrap();
+    }
+    git_must(td.path(), &["add", "-A", "-f", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "scaffold the backlog"]);
+    let (_, err) = planr_ok_both(td.path(), &["board", "main"]);
+    assert!(
+        err.is_empty(),
+        "nothing was found and nothing failed to read: {err:?}"
+    );
+}

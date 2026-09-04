@@ -20,6 +20,18 @@
 
 ### Fixed
 
+- **`planr board <ref>` no longer presents a total it computed from ticket
+  files it never opened.** The reader skipped a ticket file whose blob it
+  could not `show` -- a damaged object, a packfile planr cannot open, a
+  permissions problem -- so a backlog planr opened none of rendered as an
+  empty board, indistinguishable from a backlog that holds nothing. The
+  board now counts the ticket files it found as well as the ones it read,
+  and says on stderr when the second number is smaller, naming which of the
+  two happened: a board built from part of a backlog, or one that
+  established nothing at all. `planr lint <ref>` already said this; the
+  board said nothing. A backlog that is there and holds no tickets yet is
+  still silent, in both commands.
+
 - **`planr close story` and `planr close epic` no longer close a parent
   whose children they could not read.** The gate that refuses a close over
   unfinished children built its list of children by listing the plan
