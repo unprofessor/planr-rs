@@ -274,7 +274,7 @@ fn warn_if_plan_dir_missing(plan_dir: &str) {
     }
 }
 
-/// Say so when the ref a `lint` was pointed at holds no backlog to lint.
+/// Say so when a `lint <ref>` reported on less backlog than it was pointed at.
 ///
 /// `warn_if_plan_dir_missing` one mode over, and for the same reason: `lint`
 /// prints nothing for a clean backlog, so a typo'd `--plan-dir` -- or a ref
@@ -290,7 +290,39 @@ fn warn_if_plan_dir_missing(plan_dir: &str) {
 /// when neither was. So ask the ref the same question the filesystem is
 /// asked: is anything there under that path? Only an empty answer is "no
 /// backlog", and only a failed one is "planr could not tell".
-fn warn_if_ref_holds_no_plan_dir(ref_: &str, plan_dir: &str) {
+///
+/// That question, though, is not the whole of what the caller needs to hear.
+/// `lint_ref` skips a ticket file whose blob it cannot show, so a backlog of
+/// `.md` files planr opened none of also renders as no output and exit 0 --
+/// and the plan directory is populated, so the question above says nothing
+/// about it. The counts the report carries do: files found against files
+/// read. Say which of the two happened rather than folding them into one
+/// message, because they call for different things of the reader.
+fn warn_if_ref_backlog_unread(ref_: &str, plan_dir: &str, report: &lint::LintReport) {
+    // Part of the backlog was linted and part of it was not. The findings
+    // below are real; it is their silence that cannot be trusted.
+    if report.tickets_read > 0 {
+        if report.tickets_read < report.ticket_files {
+            eprintln!(
+                "warning: planr read {} of the {} ticket file(s) under '{plan_dir}' at \
+                 '{ref_}' -- what it could not read is missing from this run",
+                report.tickets_read, report.ticket_files
+            );
+        }
+        return;
+    }
+    // Ticket files are there and not one of them opened. Name that, and not
+    // the plan directory or the ref, which this has just established are
+    // both fine.
+    if report.ticket_files > 0 {
+        eprintln!(
+            "warning: planr read none of the {} ticket file(s) under '{plan_dir}' at \
+             '{ref_}' -- this run checked nothing, which is not the same as finding \
+             nothing wrong",
+            report.ticket_files
+        );
+        return;
+    }
     match git::ls_tree(ref_, plan_dir) {
         // Something is committed under the plan directory at that ref, so
         // the backlog is there and simply holds no tickets yet.
@@ -430,9 +462,7 @@ fn main() {
             let report = match r#ref {
                 Some(ref_) if !ref_.is_empty() => {
                     let report = lint::lint_ref(&ref_, &cli.plan_dir);
-                    if report.tickets_read == 0 {
-                        warn_if_ref_holds_no_plan_dir(&ref_, &cli.plan_dir);
-                    }
+                    warn_if_ref_backlog_unread(&ref_, &cli.plan_dir, &report);
                     report
                 }
                 _ => {

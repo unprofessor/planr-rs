@@ -1133,13 +1133,14 @@ mod tests {
         });
     }
 
-    /// `str::lines` over bytes, and the cases that decide whether a rewrite
-    /// gains or loses a newline: no trailing newline, a trailing blank line,
-    /// an empty file, and CRLF -- whose `\r` stays on the line, because
-    /// every comparison goes through `trim_ascii` and everything planr does
-    /// not own is written back as it came in.
+    /// Line splitting over bytes, and the cases that decide whether a
+    /// rewrite gains or loses a newline: no trailing newline, a trailing
+    /// blank line, an empty file, and CRLF. The last is where this parts
+    /// company with `str::lines`, which drops the `\r`: here the `\r` stays
+    /// on the line, because every comparison goes through `trim_ascii` and
+    /// everything planr does not own is written back as it came in.
     #[test]
-    fn test_split_lines_matches_str_lines() {
+    fn test_split_lines_keeps_every_byte_of_a_line() {
         assert_eq!(split_lines(b""), Vec::<&[u8]>::new());
         assert_eq!(split_lines(b"\n"), vec![b"".as_slice()]);
         assert_eq!(split_lines(b"a"), vec![b"a".as_slice()]);

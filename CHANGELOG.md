@@ -59,6 +59,20 @@
   reported as its own thing, quoting git, rather than as a finding about the
   backlog.
 
+- **`planr lint <ref>` says when it could not read the tickets it found.**
+  Narrowing the missing-backlog warning to a plan directory that is empty at
+  the ref left nothing to say about a plan directory full of tickets planr
+  opened none of: the reader skips a ticket file whose blob it cannot show,
+  so a backlog damaged past reading rendered the way a clean one does -- no
+  output, exit 0, and a clean bill of health on tickets nothing had looked
+  at. The report now carries the count of ticket files found alongside the
+  count read, and ref mode says which of the two happened: that planr read
+  none of the ticket files it found under the plan directory, or that it
+  read some of them and what it could not read is missing from the run.
+  Neither message blames the plan directory or the ref, which a populated
+  listing has just cleared. A backlog holding no ticket files at all is
+  still silent.
+
 - **`planr claim` prints the worktree path it resolved.** `claim --worktree
   ../out` run from a subdirectory printed `/repo/sub/../out`. It opens, but
   it is the path the caller pastes into their next command, and it was not

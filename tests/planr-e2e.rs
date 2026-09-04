@@ -3624,3 +3624,129 @@ fn test_e2e_lint_does_not_call_an_empty_backlog_absent() {
         "a ref that predates the backlog has none to lint: {err:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Scenario: ref-mode lint that could not read the tickets it found
+// ---------------------------------------------------------------------------
+
+/// Delete the loose object behind `<ref>:<path>`.
+///
+/// The tree still names the file, so `git ls-tree` lists it and `git show`
+/// cannot produce it -- a backlog planr can see and cannot open. Corrupt
+/// enough to be worth saying out loud, and cheaper to build than the
+/// permissions and packfile damage that produce the same read in the wild.
+fn destroy_blob(dir: &Path, ref_: &str, path: &str) {
+    let out = Command::new("git")
+        .args(["rev-parse", &format!("{ref_}:{path}")])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git rev-parse {ref_}:{path} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let oid = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    let obj = dir.join(".git/objects").join(&oid[..2]).join(&oid[2..]);
+    std::fs::remove_file(&obj).unwrap_or_else(|e| panic!("could not remove {obj:?}: {e}"));
+}
+
+/// `lint <ref>` must not certify a backlog whose tickets it could not read.
+///
+/// `lint_ref` skips a ticket file whose blob it cannot show, so a backlog of
+/// perfectly ordinary `.md` tickets that planr opened none of renders the
+/// way a clean one does: no output, exit 0. The plan directory is populated
+/// and the ref resolves, so the missing-backlog warning has nothing to say
+/// about it -- correctly, since neither is at fault. What is at fault is the
+/// read, and the counts the report carries are what name it.
+///
+/// The four states are pinned together because the fix has to separate them
+/// and not merely fire more often: none of the tickets read, some of them
+/// read, a scaffolded `.gitkeep` backlog that holds no tickets at all, and
+/// files under the plan directory that are not ticket files. The last two
+/// must stay silent -- working-tree `lint` reads them the same way, and
+/// planr cannot tell a placeholder from a mis-saved ticket without guessing.
+#[test]
+fn test_e2e_lint_ref_says_when_it_could_not_read_the_tickets() {
+    // ---- none of them read ----
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    planr_ok(td.path(), &["new", "epic", "e1", "E1"]);
+    planr_ok(td.path(), &["new", "story", "s1", "S1", "e1"]);
+    planr_ok(td.path(), &["new", "task", "foo", "Foo", "s1"]);
+    git_must(td.path(), &["add", "-A", "-f", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "a backlog"]);
+    for f in [
+        ".plan/epics/01-e1.md",
+        ".plan/stories/01-s1.md",
+        ".plan/tasks/01-foo.md",
+    ] {
+        destroy_blob(td.path(), "main", f);
+    }
+
+    let (_, err) = planr_ok_both(td.path(), &["lint", "main"]);
+    assert!(
+        err.contains("read none of the 3 ticket file(s) under '.plan' at 'main'"),
+        "an empty report built from nothing must say so: {err:?}"
+    );
+    // The cause it established, and not one it did not: the plan directory
+    // is right there and the ref resolves.
+    assert!(
+        !err.contains("nothing under"),
+        "the backlog is there -- only the read failed: {err:?}"
+    );
+
+    // ---- some of them read ----
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    planr_ok(td.path(), &["new", "epic", "e1", "E1"]);
+    planr_ok(td.path(), &["new", "story", "s1", "S1", "e1"]);
+    planr_ok(td.path(), &["new", "task", "foo", "Foo", "s1"]);
+    git_must(td.path(), &["add", "-A", "-f", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "a backlog"]);
+    destroy_blob(td.path(), "main", ".plan/tasks/01-foo.md");
+
+    let (_, err) = planr_ok_both(td.path(), &["lint", "main"]);
+    assert!(
+        err.contains("read 2 of the 3 ticket file(s) under '.plan' at 'main'"),
+        "a report built from part of a backlog must say which part: {err:?}"
+    );
+
+    // ---- a backlog that holds no tickets is still not a failed read ----
+    let td = tempfile::tempdir().unwrap();
+    init_repo(td.path());
+    for kind in ["epics", "stories", "tasks"] {
+        std::fs::write(td.path().join(format!(".plan/{kind}/.gitkeep")), "").unwrap();
+    }
+    git_must(td.path(), &["add", "-A", "-f", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "scaffold the backlog"]);
+    let (_, err) = planr_ok_both(td.path(), &["lint", "main"]);
+    assert!(
+        err.is_empty(),
+        "nothing was found and nothing failed to read: {err:?}"
+    );
+
+    // ---- and neither are files planr never reads ----
+    //
+    // Tickets saved under the plan directory with the wrong extension are
+    // not ticket files, no more than the `.gitkeep` above is, and planr
+    // cannot tell one such file from the other without guessing. Both modes
+    // say nothing, and they say it about the same state.
+    write_file(
+        td.path(),
+        ".plan/tasks/01-foo.txt",
+        "---\nid: foo\nkind: task\nstatus: todo\ntitle: Foo\ndepends_on: [nope]\n---\n",
+    );
+    git_must(td.path(), &["add", "-A", "-f", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "the wrong extension"]);
+    let (_, err) = planr_ok_both(td.path(), &["lint", "main"]);
+    assert!(
+        err.is_empty(),
+        "planr found no ticket files and failed to read none: {err:?}"
+    );
+    let (_, wt_err) = planr_ok_both(td.path(), &["lint"]);
+    assert!(
+        wt_err.is_empty(),
+        "working-tree lint reads the identical state the identical way: {wt_err:?}"
+    );
+}

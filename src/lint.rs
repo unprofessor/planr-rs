@@ -51,6 +51,14 @@ pub struct LintReport {
     /// output, exit 0 -- so the count is the only thing that tells the caller
     /// which one it is holding.
     pub tickets_read: usize,
+    /// How many ticket files the reader found before it read any of them.
+    ///
+    /// Both readers skip a ticket file they cannot open, so a backlog that
+    /// holds no tickets and a backlog whose tickets planr could not open
+    /// both come back with `tickets_read` at zero. Only the two counts
+    /// together separate them, and only they can say that a report was built
+    /// from part of a backlog.
+    pub ticket_files: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +444,10 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
         error_count,
         warning_count,
         tickets_read: inputs.len(),
+        // Everything handed over was read, as far as this function can see.
+        // A reader that found more files than it managed to open corrects
+        // the count on its way out.
+        ticket_files: inputs.len(),
     }
 }
 
@@ -463,6 +475,7 @@ pub fn render_report(report: &LintReport) -> String {
 pub fn lint_ref(ref_: &str, plan_dir: &str) -> LintReport {
     let kinds = ["epics", "stories", "tasks"];
     let mut inputs = Vec::new();
+    let mut ticket_files = 0usize;
 
     for kind in &kinds {
         let dir = format!("{plan_dir}/{kind}");
@@ -474,6 +487,7 @@ pub fn lint_ref(ref_: &str, plan_dir: &str) -> LintReport {
             if !f.ends_with(".md") {
                 continue;
             }
+            ticket_files += 1;
             let blob = match git::show_ref(ref_, f) {
                 Ok(b) => b,
                 Err(_) => continue,
@@ -486,13 +500,19 @@ pub fn lint_ref(ref_: &str, plan_dir: &str) -> LintReport {
         }
     }
 
-    check_backlog(&inputs)
+    let mut report = check_backlog(&inputs);
+    // A blob the reader could not show is a ticket that was found and not
+    // read, and the report cannot say so unless the count of files found
+    // survives the read.
+    report.ticket_files = ticket_files;
+    report
 }
 
 /// Run lint in working-tree mode: scan the local filesystem.
 pub fn lint_working_tree(plan_dir: &str) -> LintReport {
     let kinds = ["epics", "stories", "tasks"];
     let mut inputs = Vec::new();
+    let mut ticket_files = 0usize;
 
     for kind in &kinds {
         let dir = format!("{plan_dir}/{kind}");
@@ -512,6 +532,7 @@ pub fn lint_working_tree(plan_dir: &str) -> LintReport {
             if !entry.is_file() {
                 continue;
             }
+            ticket_files += 1;
             let blob = match std::fs::read_to_string(entry) {
                 Ok(b) => b,
                 Err(_) => continue,
@@ -524,7 +545,9 @@ pub fn lint_working_tree(plan_dir: &str) -> LintReport {
         }
     }
 
-    check_backlog(&inputs)
+    let mut report = check_backlog(&inputs);
+    report.ticket_files = ticket_files;
+    report
 }
 
 #[cfg(test)]
@@ -857,6 +880,7 @@ mod tests {
             error_count: 0,
             warning_count: 0,
             tickets_read: 0,
+            ticket_files: 0,
         };
         assert_eq!(render_report(&r), "");
     }
@@ -872,6 +896,7 @@ mod tests {
             error_count: 1,
             warning_count: 0,
             tickets_read: 1,
+            ticket_files: 1,
         };
         let out = render_report(&r);
         assert!(out.contains("error: f.md: err"));
