@@ -123,13 +123,6 @@ pub fn parse_ticket(blob: &str) -> ParsedTicket {
         Kind::from_str(&ks)
     };
     let status = get_str("status");
-    if status.is_empty() {
-        // TS defaults to "todo" when missing -- mirror that.
-        // Note: the actual default is set in parseTicket TS:
-        //    const status = String(front.status ?? "todo") as Status;
-        // If the field is absent, YAML key is missing -> as_str -> None -> "";
-        // Default to "todo" to match TS.
-    }
     let status = if status.is_empty() {
         "todo".to_string()
     } else {

@@ -791,18 +791,6 @@ pub fn branch_delete(branch: &str, force: bool, cwd: &Path) -> Result<(), String
     git_in(cwd, &["branch", flag, branch]).map(|_| ())
 }
 
-/// `git merge --no-ff <branch>`.
-#[allow(dead_code)]
-pub fn merge_no_ff(branch: &str) -> Result<String, String> {
-    git(&["merge", "--no-ff", branch])
-}
-
-/// `git checkout <branch>`.
-#[allow(dead_code)]
-pub fn checkout(branch: &str) -> Result<(), String> {
-    git(&["checkout", branch]).map(|_| ())
-}
-
 /// `git checkout <branch>` run in `cwd`.
 pub fn checkout_in(cwd: &Path, branch: &str) -> Result<(), String> {
     git_in(cwd, &["checkout", branch]).map(|_| ())
@@ -817,16 +805,6 @@ pub fn add_file(file: &str, cwd: &Path) -> Result<(), String> {
 /// `git commit -m <message>` (run in `cwd`, no extra file args).
 pub fn commit_in(message: &str, cwd: &Path) -> Result<(), String> {
     git_in(cwd, &["commit", "-m", message]).map(|_| ())
-}
-
-#[allow(dead_code)]
-pub fn commit(message: &str, files: &[&str]) -> Result<(), String> {
-    let mut args = vec!["commit", "-m", message];
-    if !files.is_empty() {
-        args.push("--");
-        args.extend_from_slice(files);
-    }
-    git(&args).map(|_| ())
 }
 
 /// `git diff <ref1>..<ref2>`.

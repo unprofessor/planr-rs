@@ -79,11 +79,6 @@ fn dir_kind_from_path(file: &str) -> Option<&'static str> {
     }
 }
 
-#[allow(dead_code)]
-fn escape_regex(s: &str) -> String {
-    regex::escape(s)
-}
-
 /// Directory name a kind lives in -- `story` lives in `stories/`, so the
 /// plural cannot be built by appending an `s`.
 fn dir_name_for_kind(kind: &'static str) -> &'static str {
