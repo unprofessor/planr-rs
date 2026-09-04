@@ -753,3 +753,57 @@ fn test_e2e_a_non_utf8_exclude_file_survives_claim_and_close() {
         "the user's rules outlive the whole lifecycle"
     );
 }
+
+/// planr owns the lines inside its own header block and nothing else. The
+/// blank lines above the header and whatever follows the block are the user's
+/// bytes, and `close` hands them back exactly as it found them -- it does not
+/// normalize the file on its way past.
+///
+/// The two shapes pinned here are the ones a tidier would change: two blank
+/// lines above the header, which planr does not collapse to one, and a comment
+/// directly after the block, which planr does not push down with a blank line
+/// of its own. Both are outside the block, so both are the user's to decide.
+///
+/// This is the arbiter for folding `exclude_add`'s separator handling into
+/// `write_planr_block`. `exclude_add` does trim and pad around its block,
+/// because it is placing a header the file may not have had; teaching the
+/// shared writer to do the same would make every `close` rewrite these bytes
+/// too. If that change is ever attempted, this test is what says whether it
+/// is visible to a user. Do not relax it to let such a change through.
+#[test]
+fn test_e2e_close_leaves_the_bytes_outside_planrs_block_alone() {
+    let td = tempfile::tempdir().unwrap();
+    seed_lint_repo(td.path());
+    planr_ok(td.path(), &["new", "task", "t2", "Task Two", "s1"]);
+    git_must(td.path(), &["add", ".plan"]);
+    git_must(td.path(), &["commit", "-m", "add t2"]);
+
+    let wt1 = td
+        .path()
+        .join(planr_ok(td.path(), &["claim", "t1", "--worktree", "wt-t1"]));
+    planr_ok(td.path(), &["claim", "t2", "--worktree", "wt-t2"]);
+
+    // The file as a user who has edited it by hand would leave it: their own
+    // rule, two blank lines, planr's block, then a comment of theirs with no
+    // blank line between. Written whole so the exact bytes are the fixture.
+    let seeded = "/build/\n\n\n\
+         # planr worktrees -- checkouts, not backlog content\n\
+         /wt-t1/\n/wt-t2/\n\
+         # my own rules\n/logs/\n";
+    std::fs::write(td.path().join(".git/info/exclude"), seeded).unwrap();
+
+    approve_in_worktree(&wt1, td.path(), "t1");
+    planr_ok(td.path(), &["close", "task", "t1"]);
+
+    // t2 is still claimed, so planr's block keeps its rule and the header
+    // stays -- the case where `before` and `after` are written back untouched.
+    let expected = "/build/\n\n\n\
+         # planr worktrees -- checkouts, not backlog content\n\
+         /wt-t2/\n\
+         # my own rules\n/logs/\n";
+    assert_eq!(
+        read_exclude(td.path()),
+        expected,
+        "close must take out its own rule and leave every other byte where it was"
+    );
+}
