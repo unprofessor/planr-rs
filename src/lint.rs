@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 
-use crate::git;
 use crate::ticket::{Kind, ParsedTicket};
 
 // ---------------------------------------------------------------------------
@@ -466,83 +465,45 @@ pub fn render_report(report: &LintReport) -> String {
     out
 }
 
-/// Run lint in ref mode: read tickets from a git ref.
-pub fn lint_ref(ref_: &str, plan_dir: &str) -> LintReport {
-    let kinds = ["epics", "stories", "tasks"];
+/// Lint whatever the backlog walk managed to read, and record how much of it
+/// that was.
+///
+/// A blob the reader could not open is a ticket that was found and not read,
+/// and the report cannot say so unless the count of files found survives the
+/// read. Keep `ticket_files` covering everything the walk returned, read or
+/// not; `tickets_read` follows from the inputs.
+fn lint_backlog(found: Vec<crate::backlog::TicketFile>) -> LintReport {
+    let ticket_files = found.len();
     let mut inputs = Vec::new();
-    let mut ticket_files = 0usize;
-
-    for kind in &kinds {
-        let dir = format!("{plan_dir}/{kind}");
-        let files = match git::ls_tree_md(ref_, &dir) {
-            Ok(f) => f,
-            Err(_) => continue,
+    for tf in found {
+        let Some(blob) = tf.blob else {
+            continue;
         };
-        for f in &files {
-            if !f.ends_with(".md") {
-                continue;
-            }
-            ticket_files += 1;
-            let blob = match git::show_ref(ref_, f) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            let ticket = crate::ticket::parse_ticket(&blob);
-            inputs.push(LintInput {
-                file: f.clone(),
-                ticket,
-            });
-        }
+        inputs.push(LintInput {
+            file: tf.file,
+            ticket: crate::ticket::parse_ticket(&blob),
+        });
     }
 
     let mut report = check_backlog(&inputs);
-    // A blob the reader could not show is a ticket that was found and not
-    // read, and the report cannot say so unless the count of files found
-    // survives the read.
     report.ticket_files = ticket_files;
     report
 }
 
+/// Run lint in ref mode: read tickets from a git ref.
+pub fn lint_ref(ref_: &str, plan_dir: &str) -> LintReport {
+    lint_backlog(crate::backlog::read_backlog(
+        crate::backlog::Source::Ref(ref_),
+        plan_dir,
+    ))
+}
+
 /// Run lint in working-tree mode: scan the local filesystem.
 pub fn lint_working_tree(plan_dir: &str) -> LintReport {
-    let kinds = ["epics", "stories", "tasks"];
-    let mut inputs = Vec::new();
-    let mut ticket_files = 0usize;
-
-    for kind in &kinds {
-        let dir = format!("{plan_dir}/{kind}");
-        let dir_path = std::path::Path::new(&dir);
-        if !dir_path.exists() {
-            continue;
-        }
-        let mut entries: Vec<_> = match std::fs::read_dir(dir_path) {
-            Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
-            Err(_) => continue,
-        };
-        entries.sort();
-        for entry in &entries {
-            if !entry.extension().is_some_and(|e| e == "md") {
-                continue;
-            }
-            if !entry.is_file() {
-                continue;
-            }
-            ticket_files += 1;
-            let blob = match std::fs::read_to_string(entry) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            let ticket = crate::ticket::parse_ticket(&blob);
-            inputs.push(LintInput {
-                file: entry.to_string_lossy().to_string(),
-                ticket,
-            });
-        }
-    }
-
-    let mut report = check_backlog(&inputs);
-    report.ticket_files = ticket_files;
-    report
+    lint_backlog(crate::backlog::read_backlog(
+        crate::backlog::Source::WorkingTree,
+        plan_dir,
+    ))
 }
 
 #[cfg(test)]

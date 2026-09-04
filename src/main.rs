@@ -7,6 +7,7 @@ const VERSION: &str = env!("PLANR_VERSION");
 
 // Module skeleton -- filled in by subsequent tasks
 mod abandon;
+mod backlog;
 mod board;
 mod claim;
 mod close_cmd;

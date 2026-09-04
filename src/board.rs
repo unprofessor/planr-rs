@@ -653,65 +653,35 @@ fn name_from_file(mut ticket: ParsedTicket, file: &str) -> ParsedTicket {
     ticket
 }
 
-/// Gather trunk tickets from a git ref using the git wrappers.
-pub fn read_ref_tickets(ref_: &str, plan_dir: &str) -> Vec<ParsedTicket> {
-    let kinds = ["epics", "stories", "tasks"];
+/// Parse whatever the backlog walk managed to read.
+fn parse_backlog(found: Vec<crate::backlog::TicketFile>) -> Vec<ParsedTicket> {
     let mut results = Vec::new();
-
-    for kind in &kinds {
-        let dir = format!("{plan_dir}/{kind}");
-        let files = match crate::git::ls_tree_md(ref_, &dir) {
-            Ok(f) => f,
-            Err(_) => continue,
+    for tf in found {
+        // A file the walk could not read has no ticket in it to parse. The
+        // count of what was found lives with the caller of the walk; this
+        // step only turns content into tickets.
+        let Some(blob) = tf.blob else {
+            continue;
         };
-        for f in &files {
-            if !f.ends_with(".md") {
-                continue;
-            }
-            let blob = match crate::git::show_ref(ref_, f) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            let ticket = name_from_file(crate::ticket::parse_ticket(&blob), f);
-            results.push(ticket);
-        }
+        results.push(name_from_file(crate::ticket::parse_ticket(&blob), &tf.file));
     }
     results
 }
 
+/// Gather trunk tickets from a git ref using the git wrappers.
+pub fn read_ref_tickets(ref_: &str, plan_dir: &str) -> Vec<ParsedTicket> {
+    parse_backlog(crate::backlog::read_backlog(
+        crate::backlog::Source::Ref(ref_),
+        plan_dir,
+    ))
+}
+
 /// Gather trunk tickets from the local working tree.
 pub fn read_working_tree_tickets(plan_dir: &str) -> Vec<ParsedTicket> {
-    let kinds = ["epics", "stories", "tasks"];
-    let mut results = Vec::new();
-
-    for kind in &kinds {
-        let dir = format!("{plan_dir}/{kind}");
-        let dir_path = std::path::Path::new(&dir);
-        if !dir_path.exists() {
-            continue;
-        }
-        let mut entries: Vec<_> = match std::fs::read_dir(dir_path) {
-            Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
-            Err(_) => continue,
-        };
-        entries.sort();
-        for entry in &entries {
-            if entry.extension().is_none_or(|e| e != "md") {
-                continue;
-            }
-            if !entry.is_file() {
-                continue;
-            }
-            let blob = match std::fs::read_to_string(entry) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            let ticket =
-                name_from_file(crate::ticket::parse_ticket(&blob), &entry.to_string_lossy());
-            results.push(ticket);
-        }
-    }
-    results
+    parse_backlog(crate::backlog::read_backlog(
+        crate::backlog::Source::WorkingTree,
+        plan_dir,
+    ))
 }
 
 /// Scan in-flight branches and return their statuses.
