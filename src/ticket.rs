@@ -100,6 +100,24 @@ pub fn slug_from_filename(file: &str) -> String {
     no_md.to_string()
 }
 
+/// The `NN-<slug>.md` file among `files`, if it is there.
+///
+/// A ticket filename carries a sort-hint prefix, so a slug does not name its
+/// file on its own. The match is anchored to a whole final path segment --
+/// `/NN-<slug>.md` at the end -- which is what keeps `t1` from matching
+/// `.plan/tasks/03-not-t1.md`, and `regex::escape` is what keeps a slug
+/// holding a metacharacter literal.
+///
+/// `claim::find_task_file` matches the same files more loosely on purpose;
+/// that is a port decision documented where it lives, not a fourth copy of
+/// this waiting to be folded in.
+pub fn find_by_slug(files: &[String], slug: &str) -> Option<String> {
+    let pattern = format!(r"/[0-9]+-{}\.md$", regex::escape(slug));
+    // The pattern is built from an escaped slug, so it always compiles.
+    let re = regex::Regex::new(&pattern).unwrap();
+    files.iter().find(|f| re.is_match(f)).cloned()
+}
+
 /// Parse a complete ticket blob (frontmatter + body) into a `ParsedTicket`.
 pub fn parse_ticket(blob: &str) -> ParsedTicket {
     let split = split_frontmatter(blob);

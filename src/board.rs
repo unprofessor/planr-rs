@@ -314,6 +314,22 @@ pub fn ticket_warnings(trunk_tickets: &[ParsedTicket]) -> Vec<String> {
     out
 }
 
+/// The slugs of the tasks the ticket tables actually show.
+///
+/// `kind` is what those tables filter on, so a ticket without one is not in
+/// here -- and a branch naming it has no row anywhere for the reader to look
+/// up. The in-flight warnings and the counted summary both have to mean the
+/// same thing by "shown", and they have drifted apart before: counting a
+/// branch the tables do not list adds to `total` for a ticket nobody can
+/// find. One predicate, so they cannot disagree again.
+fn shown_task_slugs(trunk_tickets: &[ParsedTicket]) -> std::collections::HashSet<&str> {
+    trunk_tickets
+        .iter()
+        .filter(|t| t.kind == Some(Kind::Task))
+        .map(|t| t.id.as_str())
+        .collect()
+}
+
 /// Warnings about `plan/*` branches the board could not take a status from.
 ///
 /// No case is an error, and all of them fall back to the trunk status, but
@@ -333,11 +349,7 @@ pub fn ticket_warnings(trunk_tickets: &[ParsedTicket]) -> Vec<String> {
 /// first, once for the second, which is a fact about the read and not about
 /// any one branch.
 pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]) -> Vec<String> {
-    let trunk_task_slugs: std::collections::HashSet<&str> = trunk_tickets
-        .iter()
-        .filter(|t| t.kind == Some(Kind::Task))
-        .map(|t| t.id.as_str())
-        .collect();
+    let trunk_task_slugs = shown_task_slugs(trunk_tickets);
     // Slugs of tickets that are on trunk but that the board could not place,
     // and why. `kind` is what the tables filter on, so a ticket without one
     // is missing from the set above for a reason that has nothing to do with
@@ -489,11 +501,7 @@ fn render_summary(
     // would add to `total` and to a status bucket for a ticket the reader
     // cannot find in any ticket table -- the mirror image of the drop this
     // counting was reworked to fix, and just as confusing to read.
-    let trunk_task_slugs: std::collections::HashSet<&str> = trunk_tickets
-        .iter()
-        .filter(|t| t.kind == Some(Kind::Task))
-        .map(|t| t.id.as_str())
-        .collect();
+    let trunk_task_slugs = shown_task_slugs(trunk_tickets);
     for b in branches {
         if !trunk_task_slugs.contains(b.slug.as_str()) {
             continue;

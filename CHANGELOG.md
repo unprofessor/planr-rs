@@ -12,6 +12,14 @@
 
 ### Changed
 
+- **`planr close` and `planr abandon` now say when it was git that would not
+  answer, rather than blaming a missing ticket file.** Looking up a ticket by
+  slug starts by listing the plan subdirectory, and a listing that failed was
+  treated as a listing that came back empty: the command refused either way --
+  which is the right direction -- but it refused with "no task file for 't1'
+  on plan/t1", sending the reader to look at a file that may be sitting right
+  where they left it. The listing error is now reported as itself.
+
 - **`planr board`** now defaults to the current on-disk working tree
   instead of trunk, matching `planr lint`. Pass a commit-ish to read a
   specific ref (e.g. `planr board main`, `planr board HEAD~2`, or a SHA);

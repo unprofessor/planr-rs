@@ -11,7 +11,7 @@ use crate::frontmatter::{flip_frontmatter, local_date_string};
 use crate::git;
 use crate::lock::PlanrLock;
 use crate::parse::extract_last_review_verdict;
-use crate::ticket::{parse_ticket, ParsedTicket};
+use crate::ticket::{find_by_slug, parse_ticket, ParsedTicket};
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
@@ -46,15 +46,21 @@ fn find_children_on_trunk(
     Ok(children)
 }
 
-/// Find the task file on a branch using NN-regex match.
+/// Find the task file on a branch by slug.
+///
+/// A listing that failed is not an empty listing. Either way there is no file
+/// to close and this refuses -- the direction to fail in -- but "no task file"
+/// sends the caller to look at the branch, when what happened is that git
+/// would not answer. Say which.
 fn find_task_file_on_branch(branch: &str, slug: &str, plan_dir: &str) -> Result<String, String> {
-    let files = git::ls_tree_md(branch, &format!("{plan_dir}/tasks")).unwrap_or_default();
-    let pattern = format!(r"/[0-9]+-{}\.md$", regex::escape(slug));
-    let re = regex::Regex::new(&pattern).unwrap();
-    files
-        .into_iter()
-        .find(|f| re.is_match(f))
-        .ok_or_else(|| format!("no task file for '{slug}' on {branch}"))
+    let dir = format!("{plan_dir}/tasks");
+    let listed = git::ls_tree_md(branch, &dir);
+    let listing_failed = listed.as_ref().err().cloned();
+    let files = listed.unwrap_or_default();
+    find_by_slug(&files, slug).ok_or_else(|| match listing_failed {
+        Some(e) => format!("cannot list {dir} on {branch}: {e}"),
+        None => format!("no task file for '{slug}' on {branch}"),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -251,25 +257,14 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
             }
             let _ = git::branch_delete(&branch, false, &trunk_dir);
 
-            // Check if parent story can also be closed. This is a hint,
-            // not a gate: a read that fails here costs the caller one line
-            // of advice, and the close it would advise has its own gate.
-            if let Some(ref pslug) = parent_story {
-                let siblings =
-                    find_children_on_trunk(pslug, "tasks", trunk, plan_dir).unwrap_or_default();
-                let all_done = siblings.iter().all(|t| t.status == "done");
-                if all_done && !siblings.is_empty() {
-                    Ok(format!(
-                        "merged {branch} into {trunk}; {slug} done\n\
-                         info: all tasks under story '{pslug}' are done. \
-                         you may also close parent story: planr close story {pslug}"
-                    ))
-                } else {
-                    Ok(format!("merged {branch} into {trunk}; {slug} done"))
-                }
-            } else {
-                Ok(format!("merged {branch} into {trunk}; {slug} done"))
-            }
+            Ok(with_parent_hint(
+                format!("merged {branch} into {trunk}; {slug} done"),
+                parent_story.as_deref(),
+                "tasks",
+                "story",
+                trunk,
+                plan_dir,
+            ))
         }
         Err(conflict_msg) => {
             // On conflict the merge was aborted; worktree+branch intact
@@ -353,13 +348,7 @@ pub fn close_story(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Resul
     let parent_epic = ticket.parent.clone();
 
     // Child task gate
-    let children = find_children_on_trunk(slug, "tasks", trunk, plan_dir)?;
-    let unfinished: Vec<String> = children
-        .iter()
-        .filter(|t| t.status != "done")
-        .map(|t| format!("{}({})", t.id, t.status))
-        .collect();
-
+    let unfinished = unfinished_children(slug, "tasks", trunk, plan_dir)?;
     if !unfinished.is_empty() {
         return Err(format!(
             "refuse close: story '{slug}' has unfinished tasks: {}\n\
@@ -372,24 +361,14 @@ pub fn close_story(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Resul
     let _lock = PlanrLock::exclusive(cwd).map_err(|e| format!("lock error: {e}"))?;
     flip_and_commit_kind(slug, "stories", trunk, plan_dir, cwd)?;
 
-    // Check if parent epic can also be closed. A hint, not a gate -- see
-    // the same call in `close_task`.
-    if let Some(ref pslug) = parent_epic {
-        let siblings =
-            find_children_on_trunk(pslug, "stories", trunk, plan_dir).unwrap_or_default();
-        let all_done = siblings.iter().all(|t| t.status == "done");
-        if all_done && !siblings.is_empty() {
-            Ok(format!(
-                "closed story {slug}; all tasks done\n\
-                 info: all stories under epic '{pslug}' are done. \
-                 you may also close parent epic: planr close epic {pslug}"
-            ))
-        } else {
-            Ok(format!("closed story {slug}; all tasks done"))
-        }
-    } else {
-        Ok(format!("closed story {slug}; all tasks done"))
-    }
+    Ok(with_parent_hint(
+        format!("closed story {slug}; all tasks done"),
+        parent_epic.as_deref(),
+        "stories",
+        "epic",
+        trunk,
+        plan_dir,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -398,13 +377,7 @@ pub fn close_story(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Resul
 
 pub fn close_epic(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result<String, String> {
     // Child story gate
-    let children = find_children_on_trunk(slug, "stories", trunk, plan_dir)?;
-    let unfinished: Vec<String> = children
-        .iter()
-        .filter(|t| t.status != "done")
-        .map(|t| format!("{}({})", t.id, t.status))
-        .collect();
-
+    let unfinished = unfinished_children(slug, "stories", trunk, plan_dir)?;
     if !unfinished.is_empty() {
         return Err(format!(
             "refuse close: epic '{slug}' has unfinished stories: {}\n\
@@ -425,7 +398,59 @@ pub fn close_epic(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/// The children of `slug` under `kind_dir` that are not done, as `id(status)`
+/// for a refusal message. An empty list opens the gate.
+///
+/// Every read behind this is fatal, deliberately -- see
+/// `find_children_on_trunk`. A child planr could not open must not read as a
+/// child that is done.
+fn unfinished_children(
+    slug: &str,
+    kind_dir: &str,
+    trunk: &str,
+    plan_dir: &str,
+) -> Result<Vec<String>, String> {
+    Ok(find_children_on_trunk(slug, kind_dir, trunk, plan_dir)?
+        .iter()
+        .filter(|t| t.status != "done")
+        .map(|t| format!("{}({})", t.id, t.status))
+        .collect())
+}
+
+/// Append the "you may also close the parent" line to `done`, when the close
+/// that just happened was the last one the parent was waiting on.
+///
+/// A hint, not a gate: the read behind it is allowed to fail, because the
+/// close it suggests has a gate of its own. A failure costs the caller one
+/// line of advice. `children` is the plural kind of the parent's children,
+/// which is also the directory they live in under the plan directory.
+fn with_parent_hint(
+    done: String,
+    parent: Option<&str>,
+    children: &str,
+    parent_kind: &str,
+    trunk: &str,
+    plan_dir: &str,
+) -> String {
+    let Some(pslug) = parent else { return done };
+    let siblings = find_children_on_trunk(pslug, children, trunk, plan_dir).unwrap_or_default();
+    // No siblings at all is not "all of them are done": there is nothing the
+    // parent was waiting on, so there is nothing to report.
+    if siblings.is_empty() || !siblings.iter().all(|t| t.status == "done") {
+        return done;
+    }
+    format!(
+        "{done}\n\
+         info: all {children} under {parent_kind} '{pslug}' are done. \
+         you may also close parent {parent_kind}: planr close {parent_kind} {pslug}"
+    )
+}
+
 /// Find a ticket file on trunk under a given kind directory by slug.
+///
+/// The listing is allowed to fail and still refuse, as in
+/// `find_task_file_on_branch`, and for the same reason the message
+/// distinguishes the two.
 pub(crate) fn find_ticket_by_slug(
     slug: &str,
     kind_dir: &str,
@@ -433,13 +458,34 @@ pub(crate) fn find_ticket_by_slug(
     plan_dir: &str,
 ) -> Result<String, String> {
     let dir = format!("{plan_dir}/{kind_dir}");
-    let files = git::ls_tree_md(trunk, &dir).unwrap_or_default();
-    let pattern = format!(r"/[0-9]+-{}\.md$", regex::escape(slug));
-    let re = regex::Regex::new(&pattern).unwrap();
-    files
-        .into_iter()
-        .find(|f| re.is_match(f))
-        .ok_or_else(|| format!("no {kind_dir} file for slug '{slug}' on {trunk}"))
+    let listed = git::ls_tree_md(trunk, &dir);
+    let listing_failed = listed.as_ref().err().cloned();
+    let files = listed.unwrap_or_default();
+    find_by_slug(&files, slug).ok_or_else(|| match listing_failed {
+        Some(e) => format!("cannot list {dir} on {trunk}: {e}"),
+        None => format!("no {kind_dir} file for slug '{slug}' on {trunk}"),
+    })
+}
+
+/// Write `content` to `file` inside the trunk working tree and commit it.
+///
+/// `file` is repo-relative, as git named it, so the directory it lands in may
+/// not exist in this working tree yet.
+pub(crate) fn write_and_commit_on_trunk(
+    trunk_dir: &Path,
+    file: &str,
+    content: &str,
+    message: &str,
+) -> Result<(), String> {
+    let fpath = trunk_dir.join(file);
+    let parent = fpath.parent().unwrap_or(trunk_dir);
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("cannot create dir {}: {e}", parent.display()))?;
+    std::fs::write(&fpath, content)
+        .map_err(|e| format!("cannot write {}: {e}", fpath.display()))?;
+
+    git::add_file(file, trunk_dir)?;
+    git::commit_in(message, trunk_dir)
 }
 
 /// Flip a trunk-local ticket to done and commit.
@@ -461,16 +507,10 @@ fn flip_and_commit_kind(
     let date = local_date_string();
     let new_content = flip_frontmatter(&blob, "done", &date)?;
 
-    // The file is available in the trunk working tree.
-    let fpath = trunk_dir.join(&file);
-    let parent = fpath.parent().unwrap_or(&trunk_dir);
-    std::fs::create_dir_all(parent)
-        .map_err(|e| format!("cannot create dir {}: {e}", parent.display()))?;
-    std::fs::write(&fpath, &new_content)
-        .map_err(|e| format!("cannot write {}: {e}", fpath.display()))?;
-
-    git::add_file(&file, &trunk_dir)?;
-    git::commit_in(&format!("plan: close {kind_dir} {slug}"), &trunk_dir)?;
-
-    Ok(())
+    write_and_commit_on_trunk(
+        &trunk_dir,
+        &file,
+        &new_content,
+        &format!("plan: close {kind_dir} {slug}"),
+    )
 }

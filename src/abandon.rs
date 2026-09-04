@@ -7,7 +7,7 @@
 //! branch. The user-supplied message is appended as `## Reason Abandoned` below
 //! the existing body.
 
-use crate::close_cmd::find_ticket_by_slug;
+use crate::close_cmd::{find_ticket_by_slug, write_and_commit_on_trunk};
 use crate::exclude;
 use crate::frontmatter::{local_date_string, split_fm};
 use crate::git;
@@ -112,15 +112,12 @@ pub fn abandon_ticket(
 
     let date = local_date_string();
     let new_content = abandon_frontmatter(&blob, message, &date)?;
-    let fpath = trunk_dir.join(&file);
-    let parent = fpath.parent().unwrap_or(&trunk_dir);
-    std::fs::create_dir_all(parent)
-        .map_err(|e| format!("cannot create dir {}: {e}", parent.display()))?;
-    std::fs::write(&fpath, &new_content)
-        .map_err(|e| format!("cannot write {}: {e}", fpath.display()))?;
-
-    git::add_file(&file, &trunk_dir)?;
-    git::commit_in(&format!("plan: abandon {kind} {slug}"), &trunk_dir)?;
+    write_and_commit_on_trunk(
+        &trunk_dir,
+        &file,
+        &new_content,
+        &format!("plan: abandon {kind} {slug}"),
+    )?;
 
     // Abandon refuses until the branch and worktree are cleaned up by hand, so
     // it never learns which path the worktree had and cannot remove that one
