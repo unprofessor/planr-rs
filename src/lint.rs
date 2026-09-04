@@ -4,7 +4,6 @@
 //! returns issues); the CLI I/O (working tree scan, ref scan) is separate.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use crate::git;
 use crate::ticket::{Kind, ParsedTicket};
@@ -46,6 +45,20 @@ pub struct LintReport {
     pub issues: Vec<LintIssue>,
     pub error_count: usize,
     pub warning_count: usize,
+    /// How many ticket files the report was built from.
+    ///
+    /// A clean report and a report about nothing render identically -- no
+    /// output, exit 0 -- so the count is the only thing that tells the caller
+    /// which one it is holding.
+    pub tickets_read: usize,
+    /// How many ticket files the reader found before it read any of them.
+    ///
+    /// Both readers skip a ticket file they cannot open, so a backlog that
+    /// holds no tickets and a backlog whose tickets planr could not open
+    /// both come back with `tickets_read` at zero. Only the two counts
+    /// together separate them, and only they can say that a report was built
+    /// from part of a backlog.
+    pub ticket_files: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -64,25 +77,6 @@ fn dir_kind_from_path(file: &str) -> Option<&'static str> {
     } else {
         None
     }
-}
-
-/// Extract the slug from a filename: strip the directory, `.md` suffix, and
-/// the `NN-` sort-hint prefix.
-fn slug_from_filename(file: &str) -> String {
-    let base = Path::new(file)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    let no_md = base.strip_suffix(".md").unwrap_or(base);
-    // Strip leading NN- prefix (TS equivalent: replace(/^\d+-/, ''))
-    // e.g. "01-foo" -> "foo", "foo" -> "foo"
-    if let Some(hyphen_at) = no_md.find('-') {
-        let prefix = &no_md[..hyphen_at];
-        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
-            return no_md[hyphen_at + 1..].to_string();
-        }
-    }
-    no_md.to_string()
 }
 
 #[allow(dead_code)]
@@ -132,7 +126,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
         let ticket = &input.ticket;
 
         let dir_kind = dir_kind_from_path(file);
-        let fslug = slug_from_filename(file);
+        let fslug = crate::ticket::slug_from_filename(file);
 
         // Frontmatter that failed to parse reads as every-field-missing, so
         // the per-file checks below would all fire on fields that are in fact
@@ -204,15 +198,7 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
         }
 
         // Validate status
-        let valid_statuses = [
-            "todo",
-            "in_progress",
-            "review",
-            "done",
-            "blocked",
-            "abandoned",
-        ];
-        if !valid_statuses.contains(&ticket.status.as_str()) {
+        if !crate::ticket::VALID_STATUSES.contains(&ticket.status.as_str()) {
             let display = if ticket.status.is_empty() {
                 "<missing>".to_string()
             } else {
@@ -457,6 +443,11 @@ pub fn check_backlog(inputs: &[LintInput]) -> LintReport {
         issues,
         error_count,
         warning_count,
+        tickets_read: inputs.len(),
+        // Everything handed over was read, as far as this function can see.
+        // A reader that found more files than it managed to open corrects
+        // the count on its way out.
+        ticket_files: inputs.len(),
     }
 }
 
@@ -484,6 +475,7 @@ pub fn render_report(report: &LintReport) -> String {
 pub fn lint_ref(ref_: &str, plan_dir: &str) -> LintReport {
     let kinds = ["epics", "stories", "tasks"];
     let mut inputs = Vec::new();
+    let mut ticket_files = 0usize;
 
     for kind in &kinds {
         let dir = format!("{plan_dir}/{kind}");
@@ -495,6 +487,7 @@ pub fn lint_ref(ref_: &str, plan_dir: &str) -> LintReport {
             if !f.ends_with(".md") {
                 continue;
             }
+            ticket_files += 1;
             let blob = match git::show_ref(ref_, f) {
                 Ok(b) => b,
                 Err(_) => continue,
@@ -507,13 +500,19 @@ pub fn lint_ref(ref_: &str, plan_dir: &str) -> LintReport {
         }
     }
 
-    check_backlog(&inputs)
+    let mut report = check_backlog(&inputs);
+    // A blob the reader could not show is a ticket that was found and not
+    // read, and the report cannot say so unless the count of files found
+    // survives the read.
+    report.ticket_files = ticket_files;
+    report
 }
 
 /// Run lint in working-tree mode: scan the local filesystem.
 pub fn lint_working_tree(plan_dir: &str) -> LintReport {
     let kinds = ["epics", "stories", "tasks"];
     let mut inputs = Vec::new();
+    let mut ticket_files = 0usize;
 
     for kind in &kinds {
         let dir = format!("{plan_dir}/{kind}");
@@ -533,6 +532,7 @@ pub fn lint_working_tree(plan_dir: &str) -> LintReport {
             if !entry.is_file() {
                 continue;
             }
+            ticket_files += 1;
             let blob = match std::fs::read_to_string(entry) {
                 Ok(b) => b,
                 Err(_) => continue,
@@ -545,7 +545,9 @@ pub fn lint_working_tree(plan_dir: &str) -> LintReport {
         }
     }
 
-    check_backlog(&inputs)
+    let mut report = check_backlog(&inputs);
+    report.ticket_files = ticket_files;
+    report
 }
 
 #[cfg(test)]
@@ -571,6 +573,8 @@ mod tests {
             links: vec![],
             raw: String::new(),
             frontmatter_error: None,
+            id_from_filename: false,
+            source_file: None,
         }
     }
 
@@ -875,6 +879,8 @@ mod tests {
             issues: vec![],
             error_count: 0,
             warning_count: 0,
+            tickets_read: 0,
+            ticket_files: 0,
         };
         assert_eq!(render_report(&r), "");
     }
@@ -889,6 +895,8 @@ mod tests {
             }],
             error_count: 1,
             warning_count: 0,
+            tickets_read: 1,
+            ticket_files: 1,
         };
         let out = render_report(&r);
         assert!(out.contains("error: f.md: err"));

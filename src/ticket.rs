@@ -6,6 +6,22 @@ use serde_yaml::Value;
 
 use crate::parse::{extract_wiki_links, parse_frontmatter, split_frontmatter};
 
+/// Every status a ticket's frontmatter may carry.
+///
+/// One list, because the commands disagree destructively otherwise: `lint`
+/// rejects what is not here, and `board` decides from it whether a branch
+/// reported something it can display and count. A status added to only one
+/// copy would be flagged as invalid by `lint`, or silently miscounted by
+/// `board`, depending on which copy was missed.
+pub const VALID_STATUSES: [&str; 6] = [
+    "todo",
+    "in_progress",
+    "review",
+    "done",
+    "blocked",
+    "abandoned",
+];
+
 /// Ticket kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
@@ -47,6 +63,41 @@ pub struct ParsedTicket {
     /// field above then reads as absent, so consumers must report this rather
     /// than the fields it swallowed.
     pub frontmatter_error: Option<String>,
+    /// True when `id` above was not read from the file at all -- it was
+    /// synthesised from the filename because the frontmatter carried none.
+    ///
+    /// The slug is then a guess, however good a one: it is the name of a file
+    /// that may sit next to another file claiming the same slug for real. A
+    /// synthesised id is fine to *name* a ticket with, which is why the
+    /// readers fill it in, but it must never be treated as the ticket's own
+    /// identity -- notably, nothing keyed on it may shadow a ticket that
+    /// declared that slug itself.
+    pub id_from_filename: bool,
+    /// The file the ticket was read from, when it was read from one. Warnings
+    /// use it to tell two broken files of the same slug apart.
+    pub source_file: Option<String>,
+}
+
+/// Extract the slug from a ticket filename: strip the directory, the `.md`
+/// suffix, and the `NN-` sort-hint prefix.
+///
+/// The filename is the one piece of a ticket that is still readable when the
+/// frontmatter is not, so both `lint` and `board` fall back to it to name a
+/// file they could not parse.
+pub fn slug_from_filename(file: &str) -> String {
+    let base = std::path::Path::new(file)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let no_md = base.strip_suffix(".md").unwrap_or(base);
+    // Strip a leading NN- prefix: "01-foo" -> "foo", "foo" -> "foo".
+    if let Some(hyphen_at) = no_md.find('-') {
+        let prefix = &no_md[..hyphen_at];
+        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+            return no_md[hyphen_at + 1..].to_string();
+        }
+    }
+    no_md.to_string()
 }
 
 /// Parse a complete ticket blob (frontmatter + body) into a `ParsedTicket`.
@@ -114,6 +165,8 @@ pub fn parse_ticket(blob: &str) -> ParsedTicket {
         links,
         raw: split.body,
         frontmatter_error,
+        id_from_filename: false,
+        source_file: None,
     }
 }
 

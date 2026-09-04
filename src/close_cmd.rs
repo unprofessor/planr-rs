@@ -11,7 +11,6 @@ use crate::lock::PlanrLock;
 use crate::parse::extract_last_review_verdict;
 use crate::ticket::{parse_ticket, ParsedTicket};
 use std::path::Path;
-use std::process::Command;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -191,7 +190,113 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
             // Flip is already on the merged branch commit; the merge brings it to trunk.
             // Cleanup: tolerant worktree remove + branch delete
             if let Some(ref wt) = wt_path {
-                let _ = git::worktree_remove(wt, false);
+                // The ignore rule may only go once the worktree it hides is
+                // actually gone. `worktree remove` without --force refuses
+                // whenever the worktree holds untracked or modified files --
+                // a stray build artifact or log is enough -- and dropping the
+                // rule anyway would leave the worktree in place and unhidden,
+                // which is the gitlink corruption the rule exists to prevent.
+                // A stale rule is the lesser harm, and the next close of that
+                // path clears it. (The exact conditions under which the rule
+                // may go are on the arms below, which is where they are
+                // enforced.)
+                //
+                // First, though: never remove a worktree that holds another
+                // one. `git worktree remove` decides it is safe by asking
+                // `git status --porcelain`, which does not list ignored paths
+                // -- and planr's own rule hides `<plan-dir>/worktrees/` inside
+                // every working tree. A worker that claims from inside its own
+                // worktree nests one there by default, so git's safety check
+                // cannot see it and deletes it recursively, uncommitted work
+                // and all. Without the rule git refuses; with it, closing the
+                // parent destroys the child in silence.
+                match git::worktrees_under(wt, cwd) {
+                    Ok(nested) if !nested.is_empty() => {
+                        let paths: Vec<String> =
+                            nested.iter().map(|p| p.display().to_string()).collect();
+                        eprintln!(
+                            "warning: merged, but the worktree at {} was left in place: \
+                             it holds {} live worktree(s) ({}). Removing it would delete \
+                             them and any uncommitted work in them. Close or remove those \
+                             first, then `git worktree remove {}` and \
+                             `git branch -d {branch}` -- until the worktree goes the \
+                             branch cannot be deleted either, so `planr board` keeps \
+                             listing {slug} in flight",
+                            wt.display(),
+                            nested.len(),
+                            paths.join(", "),
+                            wt.display()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "warning: merged, but the worktree at {} was left in place: \
+                             could not check whether it holds other worktrees ({e}); \
+                             remove it by hand once you have",
+                            wt.display()
+                        );
+                    }
+                    Ok(_) => {
+                        // Nothing below may run from inside the directory
+                        // about to be deleted. `close` from inside the task's
+                        // own worktree -- what a worker does, and what the
+                        // nested-worktree handling above exists for -- left
+                        // the process standing in a path that no longer
+                        // resolves, and every git run after this failed at
+                        // `chdir`: the rule was never dropped (a permanent
+                        // ignore rule for a custom worktree path, and a
+                        // warning quoting an error about the wrong thing),
+                        // and the sibling-task hint below was computed from a
+                        // failed listing and silently dropped. The trunk
+                        // worktree is the one place guaranteed to outlive
+                        // this: the nested check above has already
+                        // established that no worktree lives under `wt`, so
+                        // `trunk_dir` is not one of them.
+                        let cwd = &git::step_out_of(wt, &trunk_dir, cwd);
+                        match git::worktree_remove(wt, false) {
+                            Ok(()) => {
+                                // The shared default rule covers a parent directory,
+                                // so it does not match here and survives.
+                                git::drop_exclude(wt, cwd);
+                            }
+                            // A stale record: the directory is gone *and* git has
+                            // forgotten it, so there is nothing left to hide and
+                            // keeping the rule would hide whatever is created at that
+                            // path next.
+                            //
+                            // Both halves are load-bearing. `try_exists().unwrap_or
+                            // (true)` keeps an I/O error from reading as "the
+                            // directory is gone". And the record has to be checked
+                            // too: a *locked* worktree whose directory was deleted
+                            // fails removal while staying registered, so judging by
+                            // the directory alone dropped the rule, let the branch
+                            // delete below fail silently, and reported unqualified
+                            // success while `board` still listed the task in flight.
+                            Err(_)
+                                if !wt.try_exists().unwrap_or(true)
+                                    && git::find_worktree_for_branch(&branch).is_none() =>
+                            {
+                                git::drop_exclude(wt, cwd);
+                            }
+                            Err(e) => {
+                                // The merge succeeded, so this is not a failure of the
+                                // close -- but it is not nothing either. The worktree
+                                // survives, `git branch -d` below will refuse to
+                                // delete a branch checked out in it, and `planr board`
+                                // will keep listing the task as in flight. Silence
+                                // here made `close` report unqualified success while
+                                // the board contradicted it.
+                                eprintln!(
+                            "warning: merged, but the worktree at {} could not be removed ({e}); \
+                             it and branch {branch} remain -- `git worktree remove --force {}` \
+                             to finish cleaning up",
+                            wt.display(),
+                            wt.display()
+                        );
+                            }
+                        }
+                    }
+                }
             }
             let _ = git::branch_delete(&branch, false, &trunk_dir);
 
@@ -230,7 +335,7 @@ fn try_merge(
     slug: &str,
     cwd: &Path,
 ) -> Result<String, String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = git::git_command();
     cmd.current_dir(cwd);
     cmd.args(["merge", "--no-ff", branch, "-m", message]);
 
@@ -245,7 +350,7 @@ fn try_merge(
         let full_log = format!("{stdout}{stderr}").trim().to_string();
 
         // List conflicted files
-        let conflicted = Command::new("git")
+        let conflicted = git::git_command()
             .current_dir(cwd)
             .args(["diff", "--name-only", "--diff-filter=U"])
             .output()
@@ -260,7 +365,7 @@ fn try_merge(
             .unwrap_or_else(|| "<unknown>".to_string());
 
         // Abort the merge
-        let _ = Command::new("git")
+        let _ = git::git_command()
             .current_dir(cwd)
             .args(["merge", "--abort"])
             .output();
