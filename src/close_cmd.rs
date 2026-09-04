@@ -6,6 +6,7 @@
 //! - `close story <slug>` -- trunk-local: child-task gate -> done flip -> commit
 //! - `close epic <slug>` -- trunk-local: child-story gate -> done flip -> commit
 
+use crate::exclude;
 use crate::frontmatter::{flip_frontmatter, local_date_string};
 use crate::git;
 use crate::lock::PlanrLock;
@@ -160,7 +161,7 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
                 // cannot see it and deletes it recursively, uncommitted work
                 // and all. Without the rule git refuses; with it, closing the
                 // parent destroys the child in silence.
-                match git::worktrees_under(wt, cwd) {
+                match exclude::worktrees_under(wt, cwd) {
                     Ok(nested) if !nested.is_empty() => {
                         let paths: Vec<String> =
                             nested.iter().map(|p| p.display().to_string()).collect();
@@ -202,12 +203,12 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
                         // this: the nested check above has already
                         // established that no worktree lives under `wt`, so
                         // `trunk_dir` is not one of them.
-                        let cwd = &git::step_out_of(wt, &trunk_dir, cwd);
+                        let cwd = &exclude::step_out_of(wt, &trunk_dir, cwd);
                         match git::worktree_remove(wt, false) {
                             Ok(()) => {
                                 // The shared default rule covers a parent directory,
                                 // so it does not match here and survives.
-                                git::drop_exclude(wt, cwd);
+                                exclude::drop_exclude(wt, cwd);
                             }
                             // A stale record: the directory is gone *and* git has
                             // forgotten it, so there is nothing left to hide and
@@ -226,7 +227,7 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
                                 if !wt.try_exists().unwrap_or(true)
                                     && git::find_worktree_for_branch(&branch).is_none() =>
                             {
-                                git::drop_exclude(wt, cwd);
+                                exclude::drop_exclude(wt, cwd);
                             }
                             Err(e) => {
                                 // The merge succeeded, so this is not a failure of the

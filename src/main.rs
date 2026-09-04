@@ -11,6 +11,7 @@ mod backlog;
 mod board;
 mod claim;
 mod close_cmd;
+mod exclude;
 mod frontmatter;
 mod git;
 mod lint;
@@ -373,10 +374,12 @@ fn first_read_error(entries: std::fs::ReadDir) -> Option<std::io::Error> {
 fn resolve_from_invocation_dir(path: &str) -> String {
     let p = std::path::Path::new(path);
     if p.is_absolute() {
-        return git::normalize(p).to_string_lossy().to_string();
+        return exclude::normalize(p).to_string_lossy().to_string();
     }
     match std::env::current_dir() {
-        Ok(dir) => git::normalize(&dir.join(p)).to_string_lossy().to_string(),
+        Ok(dir) => exclude::normalize(&dir.join(p))
+            .to_string_lossy()
+            .to_string(),
         // Nothing to resolve against. The path stays as typed, which is what
         // planr did before it entered the root at all.
         Err(e) => {

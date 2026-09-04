@@ -3,6 +3,7 @@
 //!
 //! Port of `skills/planr/src/claim.ts`.
 
+use crate::exclude;
 use crate::frontmatter::{flip_lines, local_date_string, split_fm};
 use crate::git;
 use crate::lock::PlanrLock;
@@ -116,7 +117,7 @@ fn hide_and_flip(
     cwd: &Path,
     placed: &mut Placed,
 ) -> Result<(), String> {
-    placed.rule_added = git::exclude_add(ignore_target, cwd)?;
+    placed.rule_added = exclude::exclude_add(ignore_target, cwd)?;
     placed.hidden = true;
     flip_to_in_progress(wt_path, task_file, slug)
 }
@@ -161,7 +162,7 @@ fn rollback_claim(
     // ours was one of those until the line above. Removing it first would ask
     // that question while our own worktree still counted as a dependant.
     if placed.rule_added {
-        git::drop_exclude(ignore_target, cwd);
+        exclude::drop_exclude(ignore_target, cwd);
     }
     err
 }
@@ -399,7 +400,7 @@ pub fn claim_task(
         // explicit `--worktree`), and no later `close` would remove it --
         // `close` only ever considers the path the task is holding now. Left
         // behind, it silently hides whatever is created at the old path.
-        git::drop_exclude(&held, cwd);
+        exclude::drop_exclude(&held, cwd);
     }
 
     // A terminal branch is not something to resume. Step 2b refuses an

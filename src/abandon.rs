@@ -8,6 +8,7 @@
 //! the existing body.
 
 use crate::close_cmd::find_ticket_by_slug;
+use crate::exclude;
 use crate::frontmatter::{local_date_string, split_fm};
 use crate::git;
 use crate::lock::PlanrLock;
@@ -127,7 +128,7 @@ pub fn abandon_ticket(
     // abandoned task -- so the rule would outlive everything that referred to
     // it and go on hiding whatever is created at that path. Prune whatever no
     // live worktree still justifies.
-    git::exclude_prune(cwd);
+    exclude::exclude_prune(cwd);
 
     Ok(format!("abandoned {kind} {slug}"))
 }
