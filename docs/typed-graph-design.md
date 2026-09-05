@@ -8,10 +8,19 @@
 > it versions the schema *language*, and moves only when the key set or a
 > primitive's meaning changes, never with a planr release.
 >
-> **Status:** design exploration (pre-1.0). No engine code is written yet, but
-> the schema language is pinned: `schemas/planr/v1/1.0.0/planr.schema.json` is
-> published at `https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json`
-> and validated in CI against a fixture corpus.
+> **Status:** design exploration (pre-1.0). The schema language is pinned:
+> `schemas/planr/v1/1.0.0/planr.schema.json` is published at
+> `https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json` and
+> validated in CI against a fixture corpus. A throwaway engine spike lives
+> behind the `next` cargo feature (`src/next/**`); it is reference material for
+> what the model costs in practice, not a foundation.
+>
+> This document says what the model is **for**.
+> [`semantics.md`](semantics.md) says what it **means** -- the well-formedness
+> rules for a verb, the transition relation for `do`, and the algebra that
+> makes state a fold. Read it before changing `validate()` or the effect
+> vocabulary; the rules there are enforced in `src/next/schema.rs` and pinned
+> by a test that enumerates the whole `base × effect × worktree` space.
 >
 > This captures the reasoning and decisions from the 0.4 brainstorm so they
 > survive the conversation. Open questions are flagged inline and collected in

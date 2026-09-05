@@ -1,0 +1,17 @@
+# `base: own` proves a ref EXISTS when the verb is checked, but `merge`
+# releases that ref as part of the effect -- so the worktree would attach to a
+# branch that no longer exists by the time it is created. A precondition that
+# is true when checked and false when used.
+#
+# Found by enumerating base x effect x worktree rather than by testing: the
+# rule stated as a prohibition on `base` is satisfied here, and only the
+# post-state formulation rejects it. See docs/semantics.md section 2.1.
+kinds: [task]
+verbs:
+  - name: close
+    applies-to: [task]
+    from: in_progress
+    to: done
+    base: own
+    effect: merge
+    worktree: create

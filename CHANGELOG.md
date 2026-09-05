@@ -37,6 +37,15 @@
 
 ### Fixed
 
+- **A verb declaring `worktree: create` alongside `effect: merge` is now
+  rejected.** `base: own` proves the ticket's ref exists when the verb is
+  checked, but `merge` releases that ref as part of the effect -- so the
+  worktree attached to a branch that no longer existed, and the run reported
+  success. The rule is now stated over the post-state ("a ref that outlives the
+  effect") rather than as a prohibition on `base`, in both `src/next/schema.rs`
+  and the published JSON Schema. Found by enumerating the
+  `base × effect × worktree` space while writing `docs/semantics.md`, not by
+  testing.
 - **`planr next do archive` could never run.** The verb is from-less and
   declares `require: { self: { status: terminal } }`, but the absorbing rule
   that stops a from-less verb firing on a finished ticket refused it on

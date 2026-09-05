@@ -308,12 +308,21 @@
           "then": { "properties": { "base": { "const": "home" } } }
         },
         {
-          "$comment": "A worktree needs a ref to attach to, but need not have cut it: `effect: create` cuts one, `base: own` requires an existing one. The second shape is how a yielded ticket is re-dispatched.",
+          "$comment": "A worktree needs a ref that survives the step, not merely one that exists when the verb is checked. `effect: create` cuts one; `base: own` requires an existing one, which is how a yielded ticket is re-dispatched. But `merge` and `ticket-only` RELEASE the ticket's ref as part of the effect, so `base: own` alone is not sufficient -- pairing `worktree: create` with `merge` validates a ref and then deletes it, leaving a worktree pointing at a branch that no longer exists. See docs/semantics.md section 2.1.",
           "if": { "properties": { "worktree": { "const": "create" } }, "required": ["worktree"] },
           "then": {
-            "anyOf": [
-              { "properties": { "effect": { "const": "create" } }, "required": ["effect"] },
-              { "properties": { "base": { "const": "own" } }, "required": ["base"] }
+            "allOf": [
+              {
+                "anyOf": [
+                  { "properties": { "effect": { "const": "create" } }, "required": ["effect"] },
+                  { "properties": { "base": { "const": "own" } }, "required": ["base"] }
+                ]
+              },
+              {
+                "properties": {
+                  "effect": { "not": { "enum": ["merge", "ticket-only"] } }
+                }
+              }
             ]
           }
         }
