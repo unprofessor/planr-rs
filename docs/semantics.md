@@ -5,11 +5,20 @@ is *for*. This says what it *means*.
 
 The point is the forcing function. Writing the rules down makes the case
 analysis exhaustive and the assumptions nameable, and that is where the value
-is -- not in mechanization. Nothing here is machine-checked, and it does not
-need to be. It does need to stay honest: `src/next/schema.rs` enforces the
-well-formedness rules, and a test enumerates the whole product space against
-the table in section 2, so a rule added here without a rule added there fails
-the build.
+is -- not in mechanization.
+
+**The tables in sections 2 and 2.1 are the checked part.** The unit tests in
+`src/next/schema.rs` do not restate them; they *parse them out of this file*
+and drive `Schema::parse` against every cell. Editing a verdict here without
+changing the implementation fails the build, and vice versa -- verified by
+mutating each table and watching the suite go red. A test carrying its own copy
+of a table would agree with this document because the same hand wrote both,
+which is the self-consistency trap
+[round 4 recorded](typed-graph-design.md#method-findings).
+
+Everything outside those tables -- the transition relation, the algebra, the
+assumptions -- is prose, and prose is not checked. Treat section 3 onward as
+claims about the implementation that a reader must verify, not as guarantees.
 
 There is deliberately **no grammar** in the BNF sense. The surface syntax is
 YAML and is given; an EBNF would describe a serialization format, not the
@@ -95,13 +104,16 @@ Every legal cell is inhabited in the reference schema: `close(epic)`, `claim`,
 ```
 
 W-Cut establishes `own(t)`; W-Declare-Own requires it and leaves it in place.
-The other three shapes each fail for a different reason, and the third is the
+The other three shapes each fail for a different reason, and the last is the
 one an enumeration finds and prose does not:
 
-- **W-Declare-Home** never establishes `own(t)`, so there may be nothing to
-  attach to.
-- **W-Retire** releases `own(t)`.
-- **W-Integrate** releases `own(t)` -- *after* validating that it exists.
+| base | effect | `worktree: create` |
+| --- | --- | --- |
+| `home` | `create` | permitted -- W-Cut establishes the ref |
+| `own` | `advance` | permitted -- W-Declare-Own leaves it in place |
+| `home` | `advance` | rejected -- nothing to attach to |
+| `home` | `ticket-only` | rejected -- releases the ref |
+| `own` | `merge` | rejected -- validates the ref, then releases it |
 
 That last case is a precondition that is true when checked and false when used.
 Stated as a prohibition on `base` it is invisible, because `base(v) = own` is

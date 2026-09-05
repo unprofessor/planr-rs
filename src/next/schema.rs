@@ -360,66 +360,132 @@ mod wf {
         )
     }
 
-    /// Section 2: the 2 x 4 `base x effect` space, partitioned 5 legal / 3 not.
-    #[test]
-    fn the_base_by_effect_space_is_partitioned_exactly() {
-        let legal = [
-            ("home", "advance"),     // W-Declare-Home
-            ("home", "create"),      // W-Cut
-            ("home", "ticket-only"), // W-Retire
-            ("own", "advance"),      // W-Declare-Own
-            ("own", "merge"),        // W-Integrate
-        ];
+    /// The document itself, read at compile time so that editing it forces a
+    /// rebuild of these tests.
+    const SEMANTICS: &str = include_str!("../../docs/semantics.md");
 
-        let mut seen = 0;
-        for base in ["home", "own"] {
-            for effect in ["advance", "create", "merge", "ticket-only"] {
-                let accepted = Schema::parse(&verb(base, effect, None)).is_ok();
-                let expected = legal.contains(&(base, effect));
-                assert_eq!(
-                    accepted, expected,
-                    "base '{base}' x effect '{effect}': schema.rs and \
-                     semantics.md section 2 disagree"
-                );
-                seen += 1;
+    /// Split one markdown table row into its cells, stripped of the emphasis
+    /// and code markers the prose uses.
+    fn cells(line: &str) -> Vec<String> {
+        line.trim()
+            .trim_start_matches('|')
+            .trim_end_matches('|')
+            .split('|')
+            .map(|c| c.trim().trim_matches(|ch| ch == '*' || ch == '`').trim())
+            .map(String::from)
+            .collect()
+    }
+
+    /// Section 2's `base x effect` grid, read out of the document: the header
+    /// row supplies the effect names, and each body row a base name.
+    fn base_by_effect_table() -> Vec<(String, String, bool)> {
+        let lines: Vec<&str> = SEMANTICS.lines().collect();
+        // Match on the header's exact cell structure, not on the words it
+        // contains: section 0's notation table names all four effects in
+        // running prose and is otherwise a plausible match.
+        let header = lines
+            .iter()
+            .position(|l| {
+                l.starts_with('|') && cells(l)[1..] == ["advance", "create", "merge", "ticket-only"]
+            })
+            .expect("semantics.md section 2 has no base x effect table");
+
+        let effects = &cells(lines[header])[1..];
+        let mut out = Vec::new();
+        for line in lines[header + 2..]
+            .iter()
+            .take_while(|l| l.starts_with('|'))
+        {
+            let row = cells(line);
+            let base = row[0].clone();
+            for (effect, cell) in effects.iter().zip(&row[1..]) {
+                out.push((base.clone(), effect.clone(), !cell.contains("ill-formed")));
             }
         }
-        assert_eq!(seen, 8, "the product space is 2 x 4");
+        out
+    }
+
+    /// Section 2.1's worktree table: base, effect, and a verdict cell that
+    /// begins with either `permitted` or `rejected`.
+    fn worktree_table() -> Vec<(String, String, bool)> {
+        let lines: Vec<&str> = SEMANTICS.lines().collect();
+        let header = lines
+            .iter()
+            .position(|l| l.starts_with('|') && cells(l) == ["base", "effect", "worktree: create"])
+            .expect("semantics.md section 2.1 has no worktree table");
+
+        lines[header + 2..]
+            .iter()
+            .take_while(|l| l.starts_with('|'))
+            .map(|l| {
+                let row = cells(l);
+                let permitted = match row[2].split_whitespace().next() {
+                    Some("permitted") => true,
+                    Some("rejected") => false,
+                    other => panic!("unreadable verdict {other:?} in the worktree table"),
+                };
+                (row[0].clone(), row[1].clone(), permitted)
+            })
+            .collect()
+    }
+
+    /// Section 2: the 2 x 4 `base x effect` space, partitioned 5 legal / 3 not.
+    ///
+    /// Driven from the table in the document rather than from a copy of it.
+    /// A copy would agree with the document because the same hand wrote both,
+    /// which is the self-consistency trap round 4 recorded: a suite that
+    /// checks only its own fixtures proves nothing about the thing it cites.
+    #[test]
+    fn the_base_by_effect_space_matches_the_document() {
+        let table = base_by_effect_table();
+        assert_eq!(table.len(), 8, "the product space is 2 x 4");
+        assert_eq!(
+            table.iter().filter(|(_, _, legal)| *legal).count(),
+            5,
+            "section 2 claims the space partitions 5 legal / 3 ill-formed"
+        );
+
+        for (base, effect, legal) in table {
+            let accepted = Schema::parse(&verb(&base, &effect, None)).is_ok();
+            assert_eq!(
+                accepted, legal,
+                "base '{base}' x effect '{effect}': schema.rs and \
+                 semantics.md section 2 disagree"
+            );
+        }
     }
 
     /// Section 2.1: `worktree: create` needs a ref that survives the step.
     /// `own x merge` satisfies "there is a ref" and then releases it, which is
     /// the case an enumeration finds and prose does not.
     #[test]
-    fn worktree_create_requires_a_ref_that_outlives_the_effect() {
-        for (base, effect, ok) in [
-            ("home", "create", true),       // W-Cut establishes it
-            ("own", "advance", true),       // W-Declare-Own leaves it in place
-            ("home", "advance", false),     // nothing to attach to
-            ("home", "ticket-only", false), // releases it
-            ("own", "merge", false),        // validates it, THEN releases it
-        ] {
-            let accepted = Schema::parse(&verb(base, effect, Some("create"))).is_ok();
+    fn worktree_create_matches_the_document() {
+        let table = worktree_table();
+        assert!(
+            table.len() >= 5,
+            "section 2.1 should cover every legal base/effect pair"
+        );
+        for (base, effect, permitted) in table {
+            let accepted = Schema::parse(&verb(&base, &effect, Some("create"))).is_ok();
             assert_eq!(
-                accepted, ok,
-                "base '{base}' x effect '{effect}' x worktree 'create'"
+                accepted, permitted,
+                "base '{base}' x effect '{effect}' x worktree 'create': \
+                 schema.rs and semantics.md section 2.1 disagree"
             );
         }
     }
 
-    /// `worktree: remove` carries no side condition, so it is legal wherever
-    /// the base/effect pair is. Pinned so that adding one is a deliberate act.
+    /// Section 2.1 says `worktree: remove` carries no side condition, so it is
+    /// legal wherever the base/effect pair is. Pinned so that adding one is a
+    /// deliberate act rather than a side effect.
     #[test]
     fn worktree_remove_carries_no_side_condition() {
-        for (base, effect) in [
-            ("home", "advance"),
-            ("home", "create"),
-            ("home", "ticket-only"),
-            ("own", "advance"),
-            ("own", "merge"),
-        ] {
+        for (base, effect, legal) in base_by_effect_table() {
+            if !legal {
+                continue;
+            }
             assert!(
-                Schema::parse(&verb(base, effect, Some("remove"))).is_ok(),
+                Schema::parse(&verb(&base, &effect, Some("remove"))).is_ok(),
                 "base '{base}' x effect '{effect}' x worktree 'remove'"
             );
         }
