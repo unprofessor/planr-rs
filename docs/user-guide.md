@@ -1,5 +1,20 @@
 # planr user guide
 
+## Choosing a worktree path
+
+`claim` hides the worktree it creates from git, so that a worktree landing
+inside the working tree is not staged as a gitlink. The rule goes in
+`.git/info/exclude`, which every worktree of the clone shares, and git anchors
+it to whichever working tree it is evaluating. Its reach is therefore wider
+than the one directory it was written for: `claim x --worktree scratch` run
+inside one worktree writes `/scratch/`, which also hides a `scratch/` at the
+top of trunk and of every sibling worktree -- a path that need not have
+anything to do with planr.
+
+Pick an explicit relative `--worktree` name with that in mind. The default
+location has no such problem, since nothing else is called
+`<plan-dir>/worktrees/`.
+
 ## Abandoning a ticket
 
 Use the `abandon` command when a ticket is overtaken by events (OBE) or

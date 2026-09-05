@@ -3,6 +3,8 @@
 //!
 //! Port of `skills/planr/src/claim.ts`.
 
+use crate::exclude;
+use crate::frontmatter::{flip_lines, local_date_string, split_fm};
 use crate::git;
 use crate::lock::PlanrLock;
 use std::path::{Path, PathBuf};
@@ -29,25 +31,6 @@ fn find_task_file<'a>(files: &'a [String], slug: &str) -> Option<&'a str> {
 const CLAIMABLE_STATUS: &str = "todo";
 
 // ---- frontmatter helpers (simplified; assumes valid YAML frontmatter) ----
-
-/// Helper type for the simplified frontmatter parse used in claim.
-struct FmSplit<'a> {
-    fm_lines: Vec<&'a str>,
-    rest: &'a str,
-}
-
-/// Split on `---\n...\n---` -- first block only, no re-entry.
-fn split_frontmatter(blob: &str) -> Option<FmSplit<'_>> {
-    if !blob.starts_with("---\n") {
-        return None;
-    }
-    let end = blob[4..].find("\n---\n")?;
-    let fm_end = 4 + end;
-    let fm_str = &blob[4..fm_end];
-    let rest = &blob[fm_end + 5..];
-    let fm_lines: Vec<&str> = fm_str.lines().collect();
-    Some(FmSplit { fm_lines, rest })
-}
 
 /// Read the `status:` line from frontmatter lines.
 ///
@@ -110,41 +93,6 @@ fn read_deps_from_fm(fm: &[&str]) -> Vec<String> {
     deps
 }
 
-/// Flip `status:` and `updated:` in frontmatter lines, inserting either if
-/// absent. Returns the new frontmatter content and the new full blob.
-///
-/// TS order: unshift updated then unshift status, so updated lands above
-/// status. Real tickets always have both lines, so this is nearly dead code.
-fn flip_status_in_fm(fm: &[&str], rest: &str, new_status: &str, date: &str) -> (String, String) {
-    let mut has_status = false;
-    let mut has_updated = false;
-    let mut out: Vec<String> = Vec::with_capacity(fm.len() + 2);
-
-    for line in fm {
-        if line.starts_with("status:") {
-            out.push(format!("status: {new_status}"));
-            has_status = true;
-        } else if line.starts_with("updated:") {
-            out.push(format!("updated: {date}"));
-            has_updated = true;
-        } else {
-            out.push(line.to_string());
-        }
-    }
-    // Insert in TS order: check hasStatus first and unshift;
-    // then check hasUpdated -- the second unshift puts updated ABOVE status.
-    if !has_status {
-        out.insert(0, format!("status: {new_status}"));
-    }
-    if !has_updated {
-        out.insert(0, format!("updated: {date}"));
-    }
-
-    let fm_str = out.join("\n");
-    let full = format!("---\n{fm_str}\n---\n{rest}");
-    (fm_str, full)
-}
-
 /// What a partially-completed claim left behind, for the rollback to undo.
 #[derive(Default)]
 struct Placed {
@@ -169,7 +117,7 @@ fn hide_and_flip(
     cwd: &Path,
     placed: &mut Placed,
 ) -> Result<(), String> {
-    placed.rule_added = git::exclude_add(ignore_target, cwd)?;
+    placed.rule_added = exclude::exclude_add(ignore_target, cwd)?;
     placed.hidden = true;
     flip_to_in_progress(wt_path, task_file, slug)
 }
@@ -214,7 +162,7 @@ fn rollback_claim(
     // ours was one of those until the line above. Removing it first would ask
     // that question while our own worktree still counted as a dependant.
     if placed.rule_added {
-        git::drop_exclude(ignore_target, cwd);
+        exclude::drop_exclude(ignore_target, cwd);
     }
     err
 }
@@ -224,7 +172,7 @@ fn flip_to_in_progress(wt_path: &Path, task_file: &str, slug: &str) -> Result<()
     let wf_path = wt_path.join(task_file);
     let content = std::fs::read_to_string(&wf_path)
         .map_err(|e| format!("cannot read {}: {e}", wf_path.display()))?;
-    let sf = split_frontmatter(&content).ok_or_else(|| format!("no frontmatter in {task_file}"))?;
+    let sf = split_fm(&content).ok_or_else(|| format!("no frontmatter in {task_file}"))?;
 
     // Flip the status, but never over one that is already set. A resumed
     // claim finds the branch at in_progress, or further along -- a worker can
@@ -238,7 +186,7 @@ fn flip_to_in_progress(wt_path: &Path, task_file: &str, slug: &str) -> Result<()
     }
 
     let date = local_date_string();
-    let (_new_fm, new_content) = flip_status_in_fm(&sf.fm_lines, sf.rest, "in_progress", &date);
+    let new_content = flip_lines(&sf.fm_lines, sf.rest, "in_progress", &date);
     std::fs::write(&wf_path, &new_content)
         .map_err(|e| format!("cannot write {}: {e}", wf_path.display()))?;
     git::add_file(task_file, wt_path)?;
@@ -252,7 +200,7 @@ fn flip_to_in_progress(wt_path: &Path, task_file: &str, slug: &str) -> Result<()
 /// not be treated as one.
 fn status_on_branch(branch: &str, task_file: &str) -> Option<String> {
     let blob = git::show_ref(branch, task_file).ok()?;
-    let sf = split_frontmatter(&blob)?;
+    let sf = split_fm(&blob)?;
     Some(read_status_from_fm(&sf.fm_lines).to_string())
 }
 
@@ -264,7 +212,7 @@ struct DepCheck {
 
 fn read_task_on_ref(ref_: &str, task_file: &str) -> Result<DepCheck, String> {
     let blob = git::show_ref(ref_, task_file)?;
-    let sf = split_frontmatter(&blob).ok_or_else(|| format!("no frontmatter in {task_file}"))?;
+    let sf = split_fm(&blob).ok_or_else(|| format!("no frontmatter in {task_file}"))?;
     Ok(DepCheck {
         deps: read_deps_from_fm(&sf.fm_lines),
         status: read_status_from_fm(&sf.fm_lines).to_string(),
@@ -281,15 +229,6 @@ fn find_dep_on_ref(dep_slug: &str, ref_: &str, plan_dir: &str) -> Result<Option<
         }
     }
     Ok(None)
-}
-
-/// Compute the local date (YYYY-MM-DD) -- uses local timezone,
-/// matching TS `new Date()` which returns local time.
-fn local_date_string() -> String {
-    // We compute from system time using UTC + timezone offset heuristic.
-    // For simplicity and correctness, use jiff's ZonedDateTime.
-    let now = jiff::Zoned::now();
-    format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day(),)
 }
 
 // ---------------------------------------------------------------------------
@@ -340,11 +279,10 @@ pub fn claim_task(
 
     // 2b. Trunk must record work that has not started. Anything else means
     // the claim would do nothing: the flip below refuses to move a status
-    // that is already at or past in_progress, so the call would create a
-    // worktree, skip the flip, and exit 0 -- the silent success this PR
-    // exists to remove. The branch-side guard cannot cover this, because
-    // `close` deletes the branch, so a task closed and then claimed again has
-    // no branch left to check.
+    // already at or past in_progress, so the call would create a worktree,
+    // skip the flip, and exit 0. The branch-side guard cannot cover this,
+    // because `close` deletes the branch, so a task closed and then claimed
+    // again has no branch left to check.
     let info = read_task_on_ref(trunk, &task_file)?;
     if info.status == "abandoned" {
         return Err(format!(
@@ -379,8 +317,7 @@ pub fn claim_task(
         let dep_status = match dep_file {
             Some(ref f) => {
                 let blob = git::show_ref(trunk, f)?;
-                let sf = split_frontmatter(&blob)
-                    .ok_or_else(|| format!("no frontmatter in dep '{dep}'"))?;
+                let sf = split_fm(&blob).ok_or_else(|| format!("no frontmatter in dep '{dep}'"))?;
                 read_status_from_fm(&sf.fm_lines).to_string()
             }
             None => String::new(),
@@ -444,11 +381,8 @@ pub fn claim_task(
         // prune` is repo-global, so claiming this task would also forget any
         // worktree that merely happens to be unreachable right now -- an
         // unmounted volume, a network path, a home directory not yet
-        // decrypted -- orphaning it as a side effect of an unrelated claim.
-        // Say so. The directory being absent cannot be told apart from a
-        // volume that is merely unmounted, so this is the operator's one
-        // chance to notice that a worktree they still care about was
-        // forgotten -- and it is otherwise invisible.
+        // decrypted. Warn: an absent directory cannot be told apart from an
+        // unmounted volume, so this is the operator's one chance to notice.
         eprintln!(
             "warning: {branch} had a registered worktree at {} whose directory is \
              not there; dropping that record and re-claiming. If that path lives \
@@ -462,7 +396,7 @@ pub fn claim_task(
         // explicit `--worktree`), and no later `close` would remove it --
         // `close` only ever considers the path the task is holding now. Left
         // behind, it silently hides whatever is created at the old path.
-        git::drop_exclude(&held, cwd);
+        exclude::drop_exclude(&held, cwd);
     }
 
     // A terminal branch is not something to resume. Step 2b refuses an
@@ -570,20 +504,6 @@ mod tests {
     // ---- frontmatter helpers ----
 
     #[test]
-    fn test_split_frontmatter_simple() {
-        let blob = "---\nid: x\nstatus: todo\n---\nbody";
-        let sf = split_frontmatter(blob).unwrap();
-        assert_eq!(sf.fm_lines[0], "id: x");
-        assert_eq!(sf.fm_lines[1], "status: todo");
-        assert_eq!(sf.rest, "body");
-    }
-
-    #[test]
-    fn test_split_frontmatter_no_fm() {
-        assert!(split_frontmatter("no frontmatter").is_none());
-    }
-
-    #[test]
     fn test_read_status_from_fm() {
         let fm = ["id: x", "status: todo", "parent: p"];
         assert_eq!(read_status_from_fm(&fm), "todo");
@@ -629,40 +549,6 @@ mod tests {
         assert!(deps.is_empty());
     }
 
-    #[test]
-    fn test_flip_status_in_fm_replaces() {
-        let fm = ["id: x", "status: todo", "updated: 2026-01-01"];
-        let rest = "body\n";
-        let (_new_fm, full) = flip_status_in_fm(&fm, rest, "in_progress", "2026-08-05");
-        assert!(full.contains("status: in_progress"));
-        assert!(full.contains("updated: 2026-08-05"));
-        assert!(full.contains("id: x"));
-        assert!(full.ends_with("body\n"));
-    }
-
-    #[test]
-    fn test_flip_status_in_fm_inserts_if_absent() {
-        let fm = ["id: x"];
-        let rest = "body\n";
-        let (_new_fm, full) = flip_status_in_fm(&fm, rest, "in_progress", "2026-08-05");
-        // Should have both; extract frontmatter block
-        let sep = full.find("\n---\n").unwrap();
-        let fm_part = &full[4..sep];
-        let lines: Vec<&str> = fm_part.split('\n').collect();
-        let status_pos = lines.iter().position(|l| l.starts_with("status:"));
-        let updated_pos = lines.iter().position(|l| l.starts_with("updated:"));
-        assert!(status_pos.is_some(), "status missing: {full}");
-        assert!(updated_pos.is_some(), "updated missing: {full}");
-        // TS order: updated is unshifted first (before status insertion),
-        // so updated ends up ABOVE status (lower array index).
-        assert!(
-            updated_pos.unwrap() < status_pos.unwrap(),
-            "updated (pos {}) should be above status (pos {}): {full}",
-            updated_pos.unwrap(),
-            status_pos.unwrap(),
-        );
-    }
-
     // ---- findTask ----
 
     #[test]
@@ -695,21 +581,5 @@ mod tests {
             Some("tasks/01-http-proxy.md")
         );
         // Also matches "02-http-proxy.md" if it existed (first match wins)
-    }
-
-    // ---- local_date_string ----
-
-    #[test]
-    fn test_local_date_string_format() {
-        let s = local_date_string();
-        assert_eq!(s.len(), 10, "bad format: {s}");
-        assert_eq!(&s[4..5], "-");
-        assert_eq!(&s[7..8], "-");
-        let y: u32 = s[..4].parse().unwrap();
-        let m: u32 = s[5..7].parse().unwrap();
-        let d: u32 = s[8..].parse().unwrap();
-        assert!((2025..=2030).contains(&y));
-        assert!((1..=12).contains(&m));
-        assert!((1..=31).contains(&d));
     }
 }

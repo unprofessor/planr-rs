@@ -60,11 +60,11 @@ pub struct ParsedTicket {
     /// Raw body text (everything after the frontmatter block).
     pub raw: String,
     /// serde_yaml's message when the frontmatter block failed to parse. Every
-    /// field above then reads as absent, so consumers must report this rather
-    /// than the fields it swallowed.
+    /// field above is then absent, so consumers must report this rather than
+    /// the fields it swallowed.
     pub frontmatter_error: Option<String>,
-    /// True when `id` above was not read from the file at all -- it was
-    /// synthesised from the filename because the frontmatter carried none.
+    /// True when `id` above was not read from the file, but synthesized from
+    /// the filename because the frontmatter carried none.
     ///
     /// The slug is then a guess, however good a one: it is the name of a file
     /// that may sit next to another file claiming the same slug for real. A
@@ -100,6 +100,24 @@ pub fn slug_from_filename(file: &str) -> String {
     no_md.to_string()
 }
 
+/// The `NN-<slug>.md` file among `files`, if it is there.
+///
+/// A ticket filename carries a sort-hint prefix, so a slug does not name its
+/// file on its own. The match is anchored to a whole final path segment --
+/// `/NN-<slug>.md` at the end -- which is what keeps `t1` from matching
+/// `.plan/tasks/03-not-t1.md`, and `regex::escape` is what keeps a slug
+/// holding a metacharacter literal.
+///
+/// `claim::find_task_file` matches the same files more loosely on purpose;
+/// that is a port decision documented where it lives, not a fourth copy of
+/// this waiting to be folded in.
+pub fn find_by_slug(files: &[String], slug: &str) -> Option<String> {
+    let pattern = format!(r"/[0-9]+-{}\.md$", regex::escape(slug));
+    // The pattern is built from an escaped slug, so it always compiles.
+    let re = regex::Regex::new(&pattern).unwrap();
+    files.iter().find(|f| re.is_match(f)).cloned()
+}
+
 /// Parse a complete ticket blob (frontmatter + body) into a `ParsedTicket`.
 pub fn parse_ticket(blob: &str) -> ParsedTicket {
     let split = split_frontmatter(blob);
@@ -123,13 +141,6 @@ pub fn parse_ticket(blob: &str) -> ParsedTicket {
         Kind::from_str(&ks)
     };
     let status = get_str("status");
-    if status.is_empty() {
-        // TS defaults to "todo" when missing -- mirror that.
-        // Note: the actual default is set in parseTicket TS:
-        //    const status = String(front.status ?? "todo") as Status;
-        // If the field is absent, YAML key is missing -> as_str -> None -> "";
-        // Default to "todo" to match TS.
-    }
     let status = if status.is_empty() {
         "todo".to_string()
     } else {

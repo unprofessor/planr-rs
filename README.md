@@ -95,7 +95,7 @@ src/                   # Rust source
   close_cmd.rs         # Close workflow (task/story/epic)
 templates/             # Embedded ticket templates
 tests/                 # Integration tests
-  planr-e2e.rs         # End-to-end suite
+  e2e/                 # End-to-end suite, one binary, one module per subject
 ```
 
 ## Development

@@ -9,11 +9,62 @@ use crate::ticket::{Kind, ParsedTicket};
 // Types
 // ---------------------------------------------------------------------------
 
+/// What the branch scan learned about a task from its `plan/*` branch.
+///
+/// `Status` carries a status string read verbatim out of a real file --
+/// valid or not. The other two describe the *branch*, not the task, so they
+/// must never be displayed as a ticket status or counted as one. They are
+/// variants rather than reserved strings so that every reader has to say
+/// which of the three it means, and a ticket whose frontmatter literally
+/// says `status: "(no task file)"` is still a status.
+#[derive(Debug, Clone)]
+pub enum BranchRead {
+    Status(String),
+    NoTaskFile,
+    Unreadable,
+}
+
+impl BranchRead {
+    /// The status the branch reports for the task, if it reports one.
+    fn status(&self) -> Option<&str> {
+        match self {
+            BranchRead::Status(s) => Some(s.as_str()),
+            BranchRead::NoTaskFile | BranchRead::Unreadable => None,
+        }
+    }
+
+    /// How the in-flight table renders it. That table describes branches, so
+    /// a stand-in belongs there; no ticket table may use this.
+    fn display(&self) -> &str {
+        match self {
+            BranchRead::Status(s) => s.as_str(),
+            BranchRead::NoTaskFile => "(no task file)",
+            BranchRead::Unreadable => "(unreadable)",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BranchStatus {
     pub branch: String,
-    pub status: String,
+    pub status: BranchRead,
     pub slug: String,
+}
+
+impl BranchStatus {
+    /// A branch and whatever the scan read from it.
+    pub fn read(branch: &str, slug: &str, status: BranchRead) -> Self {
+        BranchStatus {
+            branch: branch.to_string(),
+            status,
+            slug: slug.to_string(),
+        }
+    }
+
+    /// A branch reporting the status its own task file carries.
+    pub fn of(branch: &str, slug: &str, status: &str) -> Self {
+        Self::read(branch, slug, BranchRead::Status(status.to_string()))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -43,20 +94,14 @@ fn pad_right(s: &str, width: usize) -> String {
 
 /// Whether a ticket may answer the question "what is the status of <slug>?".
 ///
-/// Two things have to be true, and guarding either one alone leaves the other
+/// Three things have to be true, and guarding any one alone leaves the others
 /// open. The ticket has to be one some table shows, because a status the
 /// reader cannot find a row for is not checkable; and the slug has to be the
-/// ticket's own, declared in its frontmatter, rather than one the reader
-/// synthesised from the filename. A synthesised slug is a guess about a file
-/// that may be sitting next to a real ticket claiming that slug, and the
-/// status attached to it is just as likely to be the parser's default `todo`
-/// as anything the author wrote.
-///
-/// Guarding on the kind alone was the mistake this replaces: a file with
-/// valid frontmatter, a real `kind` and no `id` passed it, re-entered the
-/// slug-to-status namespace under a name it had never claimed, and overwrote
-/// a real ticket's `done` -- silently, because every warning was keyed on the
-/// kind too.
+/// ticket's own, declared in its frontmatter and not empty, rather than one
+/// synthesized from the filename. A synthesized slug is a guess about a file
+/// that may sit next to a real ticket claiming that slug, and the status on
+/// it is as likely to be the parser's default `todo` as anything an author
+/// wrote.
 fn contributes_status(t: &ParsedTicket) -> bool {
     t.kind.is_some() && !t.id_from_filename && !t.id.is_empty()
 }
@@ -66,11 +111,10 @@ fn contributes_status(t: &ParsedTicket) -> bool {
 ///
 /// A ticket that is not entitled contributes nothing, and neither does a slug
 /// two tickets both claim: the board cannot tell which of them the dependency
-/// column is asking about, and picking the one that happened to be read last
-/// is how a broken duplicate of a finished ticket overwrote its `done` -- with
-/// every task depending on it showing BLOCKED-BY on the same screen where the
-/// ticket itself read `done`. Unknown is the honest answer, and `blocked_by`
-/// already treats an unknown dependency as unmet.
+/// column is asking about, and taking whichever was read last would let a
+/// broken duplicate overwrite a finished ticket's `done`. Unknown is the
+/// honest answer, and `blocked_by` already treats an unknown dependency as
+/// unmet.
 fn trunk_status_map(tickets: &[ParsedTicket]) -> std::collections::HashMap<String, String> {
     let mut m: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut contested: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -105,17 +149,6 @@ fn blocked_by(
 // ---------------------------------------------------------------------------
 // Section rendering
 // ---------------------------------------------------------------------------
-
-/// Stand-ins the branch scan reports when it could not read a ticket at all.
-/// They describe the *branch*, not the task, so they must never be displayed
-/// or counted as a ticket status. Every other value the scan produces is a
-/// status string read verbatim out of a real file -- valid or not.
-pub const NO_TASK_FILE: &str = "(no task file)";
-pub const UNREADABLE: &str = "(unreadable)";
-
-fn is_placeholder(status: &str) -> bool {
-    status == NO_TASK_FILE || status == UNREADABLE
-}
 
 /// Marker appended to a status that was read from an in-flight branch rather
 /// than from the trunk file the rest of the row describes.
@@ -215,7 +248,7 @@ fn render_in_flight(branches: &[BranchStatus]) -> String {
         out.push_str(&format!(
             "{} {} {}\n",
             pad_right(&b.branch, 30),
-            pad_right(&b.status, 14),
+            pad_right(b.status.display(), 14),
             b.slug,
         ));
     }
@@ -243,20 +276,17 @@ fn ticket_name(t: &ParsedTicket) -> String {
 /// Warnings about every trunk ticket the board declines to place, to count,
 /// or to take a status from.
 ///
-/// There are three ways to fall short of a full row and each has to be said,
-/// because the board is silent about all of them otherwise and silence is
-/// what makes them dangerous. The three tables filter on `kind`, and the
-/// summary counts only what they show, so a ticket whose kind is missing or
-/// unrecognized -- including one whose frontmatter failed to parse, which
-/// reads as every field absent -- is rendered nowhere and counted nowhere. A
-/// ticket that carries no `id` of its own is shown and counted under a slug
-/// the reader synthesised from its filename, but it answers for no slug in
-/// the dependency column. And a slug two tickets both claim answers for
-/// nothing either, because the board cannot tell which of them it belongs to.
+/// Three ways to fall short of a full row, each of which has to be said,
+/// because the board is otherwise silent about all of them. The three tables
+/// filter on `kind`, and the summary counts only what they show, so a ticket
+/// whose kind is missing or unrecognized -- including one whose frontmatter
+/// failed to parse, which leaves every field absent -- is rendered and
+/// counted nowhere. A ticket carrying no `id` of its own is shown and counted
+/// under a slug synthesized from its filename, but answers for no slug in the
+/// dependency column. And a slug two tickets both claim answers for nothing
+/// either, because the board cannot tell which of them it belongs to.
 ///
-/// Keying these on the kind alone was how the last two went out in silence: a
-/// file with valid frontmatter, a real kind and no `id` passed every filter,
-/// shadowed a real ticket's `done`, and warned about nothing at all.
+/// Key these on the kind alone and the last two go out unwarned.
 pub fn ticket_warnings(trunk_tickets: &[ParsedTicket]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for t in trunk_tickets {
@@ -314,6 +344,21 @@ pub fn ticket_warnings(trunk_tickets: &[ParsedTicket]) -> Vec<String> {
     out
 }
 
+/// The slugs of the tasks the ticket tables actually show.
+///
+/// `kind` is what those tables filter on, so a ticket without one is not in
+/// here -- and a branch naming it has no row anywhere for the reader to look
+/// up. The in-flight warnings and the counted summary must mean the same
+/// thing by "shown": counting a branch the tables do not list adds to `total`
+/// for a ticket nobody can find. One predicate, so they cannot disagree.
+fn shown_task_slugs(trunk_tickets: &[ParsedTicket]) -> std::collections::HashSet<&str> {
+    trunk_tickets
+        .iter()
+        .filter(|t| t.kind == Some(Kind::Task))
+        .map(|t| t.id.as_str())
+        .collect()
+}
+
 /// Warnings about `plan/*` branches the board could not take a status from.
 ///
 /// No case is an error, and all of them fall back to the trunk status, but
@@ -324,28 +369,17 @@ pub fn ticket_warnings(trunk_tickets: &[ParsedTicket]) -> Vec<String> {
 /// file that is sitting right where they left it.
 ///
 /// For the same reason no warning names a cause the board did not establish.
-/// "I did not find this slug in the list I was handed" has several causes it
-/// cannot tell apart, two of which are not the branch's fault at all: a
-/// ticket whose frontmatter did not parse is absent from the list even though
-/// the file is committed and present, and a list that came back empty says
-/// nothing about any individual slug. Both are excluded here, and each gets a
-/// warning that names what actually happened instead -- per branch for the
-/// first, once for the second, which is a fact about the read and not about
-/// any one branch.
+/// "This slug is not in the list I was handed" has several causes it cannot
+/// tell apart, two of which are not the branch's fault: a ticket whose
+/// frontmatter did not parse is absent from the list though the file is
+/// committed and present, and an empty list says nothing about any individual
+/// slug. Both are excluded here and warned about for what they are -- per
+/// branch for the first, once for the second, which is a fact about the read.
 pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]) -> Vec<String> {
-    let trunk_task_slugs: std::collections::HashSet<&str> = trunk_tickets
-        .iter()
-        .filter(|t| t.kind == Some(Kind::Task))
-        .map(|t| t.id.as_str())
-        .collect();
-    // Slugs of tickets that are on trunk but that the board could not place,
-    // and why. `kind` is what the tables filter on, so a ticket without one
-    // is missing from the set above for a reason that has nothing to do with
-    // the branch -- whether the kind was swallowed by a failed parse, absent
-    // because the file has no frontmatter at all, or simply not a kind planr
-    // recognizes. Keying this on the parse error covered one of the three and
-    // sent the other two to the arm below, which then said no ticket of that
-    // slug was read on the line after the one saying it was.
+    let trunk_task_slugs = shown_task_slugs(trunk_tickets);
+    // Slugs on trunk that the board could not place, and why. All three
+    // causes belong here -- a failed parse, no frontmatter, an unrecognized
+    // kind -- not just the parse error; see the doc above.
     let unplaceable_slugs: std::collections::HashMap<&str, bool> = trunk_tickets
         .iter()
         .filter(|t| t.kind.is_none())
@@ -355,10 +389,8 @@ pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]
     // it -- it is evidence that the board read no tickets at all.
     let read_any = !trunk_tickets.is_empty();
     let mut out: Vec<String> = Vec::new();
-    // Which is worth saying once. Suppressing the per-branch warning was
-    // right and left nothing in its place: the board printed in-flight rows
-    // against a total of zero in complete silence, with no hint that the gap
-    // came from the read rather than from the branches.
+    // Worth saying once: without it the board prints in-flight rows against a
+    // total of zero, with no hint that the gap came from the read.
     if !read_any && !branches.is_empty() {
         let n = branches.len();
         let subject = if n == 1 {
@@ -367,16 +399,15 @@ pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]
             format!("{n} in-flight branches count")
         };
         out.push(format!(
-            "warning: the board read no tickets at all, so {subject} towards nothing \
+            "warning: the board read no tickets at all, so {subject} toward nothing \
              -- check the plan directory and the ref the board read"
         ));
     }
     let per_branch = branches.iter().filter_map(|b| {
-        let status = b.status.as_str();
         // A slug that is both a real trunk task and the recovered id of
         // some unreadable file is not detached from anything: the task is
-        // there, in the tasks table, counted. Saying it "counts towards
-        // nothing" would be false, and it swallowed the warning about the
+        // there, in the tasks table, counted. Saying it "counts toward
+        // nothing" would be false, and it swallows the warning about the
         // branch that the reader can actually act on.
         if let (false, Some(&unparsed)) = (
             trunk_task_slugs.contains(b.slug.as_str()),
@@ -389,32 +420,34 @@ pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]
             };
             Some(format!(
                 "warning: {}: the ticket for '{}' is present but {why}, so the board \
-                 cannot place it -- the branch is listed but counts towards nothing; \
+                 cannot place it -- the branch is listed but counts toward nothing; \
                  run `planr lint`",
                 b.branch, b.slug
             ))
         } else if read_any && !trunk_task_slugs.contains(b.slug.as_str()) {
             // The branch reads a status fine, but names a task that is
-            // not among the tickets the board read. It counts towards
+            // not among the tickets the board read. It counts toward
             // nothing, so without this it would simply be absent from the
             // summary with no explanation.
             Some(format!(
                 "warning: {}: no task '{}' among the tickets the board read; \
-                 the branch is listed but counts towards nothing; run `planr lint`",
+                 the branch is listed but counts toward nothing; run `planr lint`",
                 b.branch, b.slug
-            ))
-        } else if is_placeholder(status) {
-            Some(format!(
-                "warning: {}: no readable task file for '{}' -- renamed, removed, or not yet committed",
-                b.branch, b.slug
-            ))
-        } else if !crate::ticket::VALID_STATUSES.contains(&status) {
-            Some(format!(
-                "warning: {}: task '{}' has an invalid status '{}' -- counting the trunk status; run `planr lint`",
-                b.branch, b.slug, status
             ))
         } else {
-            None
+            match &b.status {
+                BranchRead::NoTaskFile | BranchRead::Unreadable => Some(format!(
+                    "warning: {}: no readable task file for '{}' -- renamed, removed, or not yet committed",
+                    b.branch, b.slug
+                )),
+                BranchRead::Status(s) if !crate::ticket::VALID_STATUSES.contains(&s.as_str()) => {
+                    Some(format!(
+                        "warning: {}: task '{}' has an invalid status '{}' -- counting the trunk status; run `planr lint`",
+                        b.branch, b.slug, s
+                    ))
+                }
+                BranchRead::Status(_) => None,
+            }
         }
     });
     out.extend(per_branch);
@@ -427,13 +460,17 @@ fn render_summary(
     status_map: &std::collections::HashMap<String, String>,
 ) -> String {
     // Only a branch that reports a real ticket status takes over the count
-    // for its task. A placeholder means the scan learned nothing about the
-    // task, so trunk stays the authority -- otherwise the trunk loop skips
-    // the ticket, the branch loop declines to count the placeholder, and the
-    // task drops out of the totals entirely.
+    // for its task. `NoTaskFile` and `Unreadable` mean the scan learned
+    // nothing about the task, so trunk stays the authority -- otherwise the
+    // trunk loop skips the ticket, the branch loop below declines to count
+    // it, and the task drops out of the totals entirely.
     let in_flight_slugs: std::collections::HashSet<&str> = branches
         .iter()
-        .filter(|b| crate::ticket::VALID_STATUSES.contains(&b.status.as_str()))
+        .filter(|b| {
+            b.status
+                .status()
+                .is_some_and(|s| crate::ticket::VALID_STATUSES.contains(&s))
+        })
         .map(|b| b.slug.as_str())
         .collect();
 
@@ -447,10 +484,9 @@ fn render_summary(
     for t in trunk_tickets {
         // Only a ticket some table shows may be counted. All three tables
         // filter on `kind`, so a ticket whose kind is missing or unrecognized
-        // -- which is also how a ticket reads when its frontmatter failed to
-        // parse -- is rendered nowhere, and counting it put a row in the
-        // summary that the reader cannot find above it. It is not dropped in
-        // silence: `ticket_warnings` names the file on stderr.
+        // -- a failed parse leaves it that way -- is rendered nowhere, and
+        // counting it puts a row in the summary the reader cannot find above
+        // it. `ticket_warnings` names the file on stderr.
         let Some(kind) = t.kind.as_ref() else {
             continue;
         };
@@ -482,29 +518,23 @@ fn render_summary(
         }
     }
 
-    // Count in-flight branch statuses -- but only for a branch that stands in
-    // for a task the ticket tables actually show. A branch whose slug names
-    // no trunk task is listed in the in-flight table, but the tasks table is
-    // built from trunk, so no row there describes it; counting it anyway
-    // would add to `total` and to a status bucket for a ticket the reader
-    // cannot find in any ticket table -- the mirror image of the drop this
-    // counting was reworked to fix, and just as confusing to read.
-    let trunk_task_slugs: std::collections::HashSet<&str> = trunk_tickets
-        .iter()
-        .filter(|t| t.kind == Some(Kind::Task))
-        .map(|t| t.id.as_str())
-        .collect();
+    // Count in-flight branch statuses, but only for a branch that stands in
+    // for a task the ticket tables show. A branch whose slug names no trunk
+    // task is listed in the in-flight table, but no row in the tasks table
+    // describes it, so counting it would add to `total` for a ticket the
+    // reader cannot find anywhere above.
+    let trunk_task_slugs = shown_task_slugs(trunk_tickets);
     for b in branches {
         if !trunk_task_slugs.contains(b.slug.as_str()) {
             continue;
         }
-        match b.status.as_str() {
-            "todo" => t_todo += 1,
-            "in_progress" => t_ip += 1,
-            "review" => t_review += 1,
-            "done" => t_done += 1,
-            "blocked" => t_blocked += 1,
-            "abandoned" => t_abandoned += 1,
+        match b.status.status() {
+            Some("todo") => t_todo += 1,
+            Some("in_progress") => t_ip += 1,
+            Some("review") => t_review += 1,
+            Some("done") => t_done += 1,
+            Some("blocked") => t_blocked += 1,
+            Some("abandoned") => t_abandoned += 1,
             _ => {}
         }
     }
@@ -545,11 +575,13 @@ pub fn render_board(input: &BoardInput) -> String {
         .filter(|t| t.kind == Some(Kind::Task))
         .collect();
 
-    // slug -> status, for the tasks that have a live worktree branch.
+    // slug -> status, for the tasks whose branch reported one. A branch the
+    // scan could not read a status from is absent, so no ticket table can
+    // show its stand-in.
     let in_flight: std::collections::HashMap<&str, &str> = input
         .branch_statuses
         .iter()
-        .map(|b| (b.slug.as_str(), b.status.as_str()))
+        .filter_map(|b| b.status.status().map(|s| (b.slug.as_str(), s)))
         .collect();
 
     let mut out = String::new();
@@ -625,25 +657,19 @@ pub fn source_status_line(ref_arg: Option<&str>) -> String {
 
 /// Name a ticket with no `id` of its own after the file it came from.
 ///
-/// A ticket can arrive anonymous three ways: its frontmatter failed to parse,
-/// which swallows every field, `id` included; it has no frontmatter at all; or
-/// it has frontmatter that simply omits `id`. All three read the same to every
-/// caller downstream, and an anonymous ticket cannot be matched to the
-/// `plan/<slug>` branch that names it or named in a warning -- which made the
-/// board report a present, committed file as a task that is not there, and
-/// then warn about "(no id)" once per file, telling a reader with two broken
-/// files nothing about either. Guarding on the parse error covered only the
-/// first of the three; the other two stayed anonymous while `lint` next door
-/// named their paths.
+/// A ticket can arrive anonymous three ways: frontmatter that failed to
+/// parse, which swallows every field, `id` included; no frontmatter at all;
+/// or frontmatter that simply omits `id`. All three look the same downstream,
+/// and an anonymous ticket matches no `plan/<slug>` branch and can be named
+/// in no warning. Cover all three -- guarding on the parse error alone leaves
+/// the other two anonymous.
 ///
 /// The filename is the last readable evidence of the slug, and `lint` already
 /// treats it as authoritative (it is an error for `id` to disagree with it).
 /// Nothing else is invented, and the recovery is recorded rather than hidden:
-/// `id_from_filename` says the slug is the reader's guess and not the
-/// ticket's own claim, so nothing keyed on it can shadow a ticket that
-/// declared that slug for real. Widening the recovery without recording it
-/// re-opened exactly that hole one axis over -- a file with a real `kind` and
-/// no `id` took the slug of a finished ticket and overwrote its `done`.
+/// `id_from_filename` marks the slug as the reader's guess, so nothing keyed
+/// on it can shadow a ticket that declared that slug for real. Do not widen
+/// the recovery without recording it the same way.
 fn name_from_file(mut ticket: ParsedTicket, file: &str) -> ParsedTicket {
     ticket.source_file = Some(file.to_string());
     if ticket.id.is_empty() {
@@ -653,65 +679,85 @@ fn name_from_file(mut ticket: ParsedTicket, file: &str) -> ParsedTicket {
     ticket
 }
 
-/// Gather trunk tickets from a git ref using the git wrappers.
-pub fn read_ref_tickets(ref_: &str, plan_dir: &str) -> Vec<ParsedTicket> {
-    let kinds = ["epics", "stories", "tasks"];
-    let mut results = Vec::new();
+/// A backlog read: the tickets planr parsed, and how many ticket files it
+/// found to parse.
+pub struct TrunkTickets {
+    pub tickets: Vec<ParsedTicket>,
+    /// Ticket files found, whether or not they could be read.
+    ///
+    /// A board built from part of a backlog renders the same way one built
+    /// from all of it does, and the count of files found is the only thing
+    /// that separates them. Keep it covering everything the walk returned;
+    /// `tickets.len()` is how many of those planr actually opened.
+    pub ticket_files: usize,
+}
 
-    for kind in &kinds {
-        let dir = format!("{plan_dir}/{kind}");
-        let files = match crate::git::ls_tree_md(ref_, &dir) {
-            Ok(f) => f,
-            Err(_) => continue,
+/// Parse whatever the backlog walk managed to read.
+fn parse_backlog(found: Vec<crate::backlog::TicketFile>) -> TrunkTickets {
+    let ticket_files = found.len();
+    let mut tickets = Vec::new();
+    for tf in found {
+        // A file the walk could not read has no ticket in it to parse. It
+        // still counts as found -- see `unread_warning`.
+        let Some(blob) = tf.blob else {
+            continue;
         };
-        for f in &files {
-            if !f.ends_with(".md") {
-                continue;
-            }
-            let blob = match crate::git::show_ref(ref_, f) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            let ticket = name_from_file(crate::ticket::parse_ticket(&blob), f);
-            results.push(ticket);
-        }
+        tickets.push(name_from_file(crate::ticket::parse_ticket(&blob), &tf.file));
     }
-    results
+    TrunkTickets {
+        tickets,
+        ticket_files,
+    }
+}
+
+/// Gather trunk tickets from a git ref using the git wrappers.
+pub fn read_ref_tickets(ref_: &str, plan_dir: &str) -> TrunkTickets {
+    parse_backlog(crate::backlog::read_backlog(
+        crate::backlog::Source::Ref(ref_),
+        plan_dir,
+    ))
 }
 
 /// Gather trunk tickets from the local working tree.
-pub fn read_working_tree_tickets(plan_dir: &str) -> Vec<ParsedTicket> {
-    let kinds = ["epics", "stories", "tasks"];
-    let mut results = Vec::new();
+pub fn read_working_tree_tickets(plan_dir: &str) -> TrunkTickets {
+    parse_backlog(crate::backlog::read_backlog(
+        crate::backlog::Source::WorkingTree,
+        plan_dir,
+    ))
+}
 
-    for kind in &kinds {
-        let dir = format!("{plan_dir}/{kind}");
-        let dir_path = std::path::Path::new(&dir);
-        if !dir_path.exists() {
-            continue;
-        }
-        let mut entries: Vec<_> = match std::fs::read_dir(dir_path) {
-            Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
-            Err(_) => continue,
-        };
-        entries.sort();
-        for entry in &entries {
-            if entry.extension().is_none_or(|e| e != "md") {
-                continue;
-            }
-            if !entry.is_file() {
-                continue;
-            }
-            let blob = match std::fs::read_to_string(entry) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            let ticket =
-                name_from_file(crate::ticket::parse_ticket(&blob), &entry.to_string_lossy());
-            results.push(ticket);
-        }
+/// Say that the board was built from fewer tickets than the ref holds.
+///
+/// The reader skips a ticket file whose blob it cannot show, so a backlog of
+/// ordinary `.md` tickets that planr opened none of renders as an empty board
+/// -- the same shape as a backlog that holds nothing. The two counts are what
+/// separate them. A partial board is right about what it shows and silent
+/// about the rest; an empty one establishes nothing, so the two get different
+/// messages -- as in `warn_if_ref_backlog_unread`, which says the same for
+/// `lint <ref>`.
+///
+/// Nothing found is not a failed read. A repository that has scaffolded
+/// `<plan-dir>/{epics,stories,tasks}` and written no tickets yet finds zero
+/// ticket files and fails to read none of them. Do not widen the guard to
+/// cover an empty backlog.
+pub fn unread_warning(read: &TrunkTickets, ref_: &str, plan_dir: &str) -> Option<String> {
+    let tickets_read = read.tickets.len();
+    if tickets_read >= read.ticket_files {
+        return None;
     }
-    results
+    if tickets_read > 0 {
+        return Some(format!(
+            "warning: planr read {} of the {} ticket file(s) under '{plan_dir}' at \
+             '{ref_}' -- what it could not read is missing from this board",
+            tickets_read, read.ticket_files
+        ));
+    }
+    Some(format!(
+        "warning: planr read none of the {} ticket file(s) under '{plan_dir}' at \
+         '{ref_}' -- this board is empty because nothing opened, which is not the \
+         same as there being nothing to show",
+        read.ticket_files
+    ))
 }
 
 /// Scan in-flight branches and return their statuses.
@@ -724,20 +770,15 @@ pub fn read_in_flight_branches(plan_dir: &str) -> Vec<BranchStatus> {
     let mut results = Vec::new();
     for b in &branches {
         let slug = b.strip_prefix("plan/").unwrap_or(b);
-        // A branch with no tasks directory at all -- one predating the plan
+        // A branch with no tasks directory -- one predating the plan
         // directory, or left over from a `--plan-dir` rename -- still gets a
-        // row. Dropping it here would erase the branch from the in-flight
-        // section, from the counts, and from the warnings (which can only
-        // report rows that exist): the same silent-drop that hid every
-        // worktree branch from the board in the first place.
+        // row. Dropping it here erases the branch from the in-flight section,
+        // from the counts, and from the warnings, which can only report rows
+        // that exist.
         let files = match crate::git::ls_tree_md(b, &format!("{plan_dir}/tasks")) {
             Ok(f) => f,
             Err(_) => {
-                results.push(BranchStatus {
-                    branch: b.clone(),
-                    status: NO_TASK_FILE.to_string(),
-                    slug: slug.to_string(),
-                });
+                results.push(BranchStatus::read(b, slug, BranchRead::NoTaskFile));
                 continue;
             }
         };
@@ -746,11 +787,7 @@ pub fn read_in_flight_branches(plan_dir: &str) -> Vec<BranchStatus> {
         let re = match regex::Regex::new(&re_str) {
             Ok(r) => r,
             Err(_) => {
-                results.push(BranchStatus {
-                    branch: b.clone(),
-                    status: NO_TASK_FILE.to_string(),
-                    slug: slug.to_string(),
-                });
+                results.push(BranchStatus::read(b, slug, BranchRead::NoTaskFile));
                 continue;
             }
         };
@@ -760,27 +797,15 @@ pub fn read_in_flight_branches(plan_dir: &str) -> Vec<BranchStatus> {
                 let blob = match crate::git::show_ref(b, f) {
                     Ok(bl) => bl,
                     Err(_) => {
-                        results.push(BranchStatus {
-                            branch: b.clone(),
-                            status: UNREADABLE.to_string(),
-                            slug: slug.to_string(),
-                        });
+                        results.push(BranchStatus::read(b, slug, BranchRead::Unreadable));
                         continue;
                     }
                 };
                 let ticket = crate::ticket::parse_ticket(&blob);
-                results.push(BranchStatus {
-                    branch: b.clone(),
-                    status: ticket.status,
-                    slug: slug.to_string(),
-                });
+                results.push(BranchStatus::of(b, slug, &ticket.status));
             }
             None => {
-                results.push(BranchStatus {
-                    branch: b.clone(),
-                    status: NO_TASK_FILE.to_string(),
-                    slug: slug.to_string(),
-                });
+                results.push(BranchStatus::read(b, slug, BranchRead::NoTaskFile));
             }
         }
     }
@@ -908,11 +933,7 @@ mod tests {
             t("proxy", "task", Some("net"), "todo", vec![]),
             t("cache", "task", Some("net"), "todo", vec![]),
         ];
-        let branches = vec![BranchStatus {
-            branch: "plan/proxy".to_string(),
-            status: "in_progress".to_string(),
-            slug: "proxy".to_string(),
-        }];
+        let branches = vec![BranchStatus::of("plan/proxy", "proxy", "in_progress")];
         let input = BoardInput {
             trunk_tickets: tickets,
             branch_statuses: branches,
@@ -961,11 +982,11 @@ mod tests {
         // the branch, not the task. It belongs in the in-flight section only;
         // leaking it into the STATUS column would invent a status.
         let tickets = vec![t("proxy", "task", Some("net"), "todo", vec![])];
-        let branches = vec![BranchStatus {
-            branch: "plan/proxy".to_string(),
-            status: "(no task file)".to_string(),
-            slug: "proxy".to_string(),
-        }];
+        let branches = vec![BranchStatus::read(
+            "plan/proxy",
+            "proxy",
+            BranchRead::NoTaskFile,
+        )];
         let input = BoardInput {
             trunk_tickets: tickets,
             branch_statuses: branches,
@@ -994,11 +1015,7 @@ mod tests {
             t("shared", "epic", None, "todo", vec![]),
             t("shared", "task", None, "todo", vec![]),
         ];
-        let branches = vec![BranchStatus {
-            branch: "plan/shared".to_string(),
-            status: "review".to_string(),
-            slug: "shared".to_string(),
-        }];
+        let branches = vec![BranchStatus::of("plan/shared", "shared", "review")];
         let input = BoardInput {
             trunk_tickets: tickets,
             branch_statuses: branches,
@@ -1023,18 +1040,18 @@ mod tests {
     #[test]
     fn test_unreadable_branch_falls_back_to_trunk_status() {
         // A branch that cannot report a status must not consume the task's
-        // count: the trunk loop skips such a task and the branch loop will
-        // not count a placeholder, so the ticket used to vanish from totals.
+        // count: the trunk loop skips such a task and the branch loop declines
+        // to count a placeholder, which would drop the ticket from the totals.
         let tickets = vec![
             t("e", "epic", None, "todo", vec![]),
             t("proxy", "task", Some("net"), "in_progress", vec![]),
             t("cache", "task", Some("net"), "todo", vec![]),
         ];
-        let branches = vec![BranchStatus {
-            branch: "plan/cache".to_string(),
-            status: "(no task file)".to_string(),
-            slug: "cache".to_string(),
-        }];
+        let branches = vec![BranchStatus::read(
+            "plan/cache",
+            "cache",
+            BranchRead::NoTaskFile,
+        )];
         let input = BoardInput {
             trunk_tickets: tickets,
             branch_statuses: branches,
@@ -1059,24 +1076,15 @@ mod tests {
     #[test]
     fn test_summary_skips_branch_naming_no_trunk_task() {
         // The tasks table is built from trunk, so a branch whose slug names
-        // no task there shows up in no table at all. Counting it anyway put a
-        // ticket in the summary that the reader cannot find above it -- the
-        // mirror image of the drop the test above covers.
+        // no task there shows up in no table. Counting it anyway puts a ticket
+        // in the summary the reader cannot find above it.
         let tickets = vec![
             t("proxy", "task", Some("net"), "todo", vec![]),
             t("cache", "task", Some("net"), "todo", vec![]),
         ];
         let branches = vec![
-            BranchStatus {
-                branch: "plan/cache".to_string(),
-                status: "review".to_string(),
-                slug: "cache".to_string(),
-            },
-            BranchStatus {
-                branch: "plan/ghost".to_string(),
-                status: "in_progress".to_string(),
-                slug: "ghost".to_string(),
-            },
+            BranchStatus::of("plan/cache", "cache", "review"),
+            BranchStatus::of("plan/ghost", "ghost", "in_progress"),
         ];
         let input = BoardInput {
             trunk_tickets: tickets,
@@ -1097,7 +1105,7 @@ mod tests {
         assert_eq!(
             count("in_progress"),
             Some("0".to_string()),
-            "a branch with no task on trunk must count towards nothing: {out}"
+            "a branch with no task on trunk must count toward nothing: {out}"
         );
         // The other branch does name a trunk task, so it still counts -- the
         // skip must not swallow the healthy case.
@@ -1111,20 +1119,12 @@ mod tests {
 
     #[test]
     fn test_branch_warning_for_slug_with_no_trunk_task() {
-        // A branch counted towards nothing would otherwise be absent from the
+        // A branch counted toward nothing would otherwise be absent from the
         // summary with no explanation. A story of the same name does not
         // rescue it: the tasks table is what the branch stands in for.
         let branches = vec![
-            BranchStatus {
-                branch: "plan/proxy".to_string(),
-                status: "in_progress".to_string(),
-                slug: "proxy".to_string(),
-            },
-            BranchStatus {
-                branch: "plan/ghost".to_string(),
-                status: "in_progress".to_string(),
-                slug: "ghost".to_string(),
-            },
+            BranchStatus::of("plan/proxy", "proxy", "in_progress"),
+            BranchStatus::of("plan/ghost", "ghost", "in_progress"),
         ];
         let trunk = vec![
             t("proxy", "task", None, "todo", vec![]),
@@ -1142,7 +1142,7 @@ mod tests {
             "warning should name the branch and the slug: {w}"
         );
         assert!(
-            w.contains("counts towards nothing"),
+            w.contains("counts toward nothing"),
             "warning should say the branch is uncounted: {w}"
         );
     }
@@ -1152,11 +1152,8 @@ mod tests {
         // A typo'd status means the ticket is right where the reader left it,
         // with bad frontmatter. Reporting that as "no readable task file"
         // sends them hunting for a file that is not missing.
-        let branches = vec![BranchStatus {
-            branch: "plan/proxy".to_string(),
-            status: "in-progress".to_string(), // hyphen: lint rejects this
-            slug: "proxy".to_string(),
-        }];
+        // Hyphen, not underscore: lint rejects this.
+        let branches = vec![BranchStatus::of("plan/proxy", "proxy", "in-progress")];
         let trunk = vec![t("proxy", "task", None, "todo", vec![])];
         let warnings = branch_warnings(&branches, &trunk);
         assert_eq!(
@@ -1178,21 +1175,9 @@ mod tests {
     #[test]
     fn test_branch_warnings_flag_unreadable_branches_only() {
         let branches = vec![
-            BranchStatus {
-                branch: "plan/proxy".to_string(),
-                status: "in_progress".to_string(),
-                slug: "proxy".to_string(),
-            },
-            BranchStatus {
-                branch: "plan/cache".to_string(),
-                status: "(no task file)".to_string(),
-                slug: "cache".to_string(),
-            },
-            BranchStatus {
-                branch: "plan/ghost".to_string(),
-                status: "(unreadable)".to_string(),
-                slug: "ghost".to_string(),
-            },
+            BranchStatus::of("plan/proxy", "proxy", "in_progress"),
+            BranchStatus::read("plan/cache", "cache", BranchRead::NoTaskFile),
+            BranchStatus::read("plan/ghost", "ghost", BranchRead::Unreadable),
         ];
         let trunk = vec![
             t("proxy", "task", None, "todo", vec![]),
@@ -1221,6 +1206,22 @@ mod tests {
         );
     }
 
+    /// A status is whatever the task file says, even when the file says
+    /// something that reads like one of the scan's stand-ins. The two are
+    /// different variants, so the warning names the real problem: the
+    /// frontmatter carries a status planr does not recognize.
+    #[test]
+    fn test_a_status_that_looks_like_a_stand_in_is_still_a_status() {
+        let branches = vec![BranchStatus::of("plan/proxy", "proxy", "(no task file)")];
+        let trunk = vec![t("proxy", "task", None, "todo", vec![])];
+        let warnings = branch_warnings(&branches, &trunk);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("invalid status '(no task file)'"),
+            "the file is there and its status is wrong: {warnings:?}"
+        );
+    }
+
     /// A ticket whose frontmatter failed to parse: every field reads absent,
     /// so `kind` is `None` and `id` is whatever the reader recovered from the
     /// filename.
@@ -1237,11 +1238,7 @@ mod tests {
         // frontmatter is broken, which drops it out of the kind-filtered
         // slug set. Reporting that as "no task of this slug" sends the reader
         // hunting for a file nobody moved.
-        let branches = vec![BranchStatus {
-            branch: "plan/proxy".to_string(),
-            status: "in_progress".to_string(),
-            slug: "proxy".to_string(),
-        }];
+        let branches = vec![BranchStatus::of("plan/proxy", "proxy", "in_progress")];
         let trunk = vec![unparsed("proxy")];
         let warnings = branch_warnings(&branches, &trunk);
         assert_eq!(warnings.len(), 1, "one warning: {warnings:?}");
@@ -1261,13 +1258,9 @@ mod tests {
         // An empty ticket list is evidence about the read, not about any
         // individual slug: every branch would otherwise be reported as
         // detached from a file that may be exactly where it belongs. Saying
-        // nothing at all is not the answer either -- the board then prints
-        // in-flight rows against a total of zero in silence.
-        let branches = vec![BranchStatus {
-            branch: "plan/proxy".to_string(),
-            status: "in_progress".to_string(),
-            slug: "proxy".to_string(),
-        }];
+        // nothing is not the answer either -- the board then prints in-flight
+        // rows against a total of zero.
+        let branches = vec![BranchStatus::of("plan/proxy", "proxy", "in_progress")];
         let warnings = branch_warnings(&branches, &[]);
         assert_eq!(
             warnings.len(),
@@ -1290,22 +1283,14 @@ mod tests {
         // The one warning stands in for every branch, so it has to say how
         // many rows the reader is looking at.
         let branches = vec![
-            BranchStatus {
-                branch: "plan/proxy".to_string(),
-                status: "in_progress".to_string(),
-                slug: "proxy".to_string(),
-            },
-            BranchStatus {
-                branch: "plan/cache".to_string(),
-                status: "review".to_string(),
-                slug: "cache".to_string(),
-            },
+            BranchStatus::of("plan/proxy", "proxy", "in_progress"),
+            BranchStatus::of("plan/cache", "cache", "review"),
         ];
         let warnings = branch_warnings(&branches, &[]);
         assert!(
             warnings
                 .iter()
-                .any(|w| w.contains("2 in-flight branches count towards nothing")),
+                .any(|w| w.contains("2 in-flight branches count toward nothing")),
             "the warning should count both branches: {warnings:?}"
         );
     }
@@ -1321,13 +1306,10 @@ mod tests {
     fn test_branch_warning_does_not_call_a_real_task_uncounted() {
         // 'proxy' is a task on trunk *and* the recovered id of an unreadable
         // story of the same slug. The task is in the tasks table and in the
-        // totals, so "counts towards nothing" would be false -- and it hid
+        // totals, so "counts toward nothing" would be false -- and it hid
         // the invalid status the reader can actually act on.
-        let branches = vec![BranchStatus {
-            branch: "plan/proxy".to_string(),
-            status: "wip".to_string(), // not a valid status
-            slug: "proxy".to_string(),
-        }];
+        // "wip" is not a valid status.
+        let branches = vec![BranchStatus::of("plan/proxy", "proxy", "wip")];
         let trunk = vec![t("proxy", "task", None, "todo", vec![]), unparsed("proxy")];
         let warnings = branch_warnings(&branches, &trunk);
         assert_eq!(warnings.len(), 1, "one warning: {warnings:?}");
@@ -1337,7 +1319,7 @@ mod tests {
             "the actionable warning must survive: {w}"
         );
         assert!(
-            !w.contains("counts towards nothing"),
+            !w.contains("counts toward nothing"),
             "the task is shown and counted, so this would be false: {w}"
         );
     }
@@ -1412,8 +1394,8 @@ mod tests {
                 "{what}: nothing is blocked: {out}"
             );
 
-            // And never in silence: the board says what it did with the file,
-            // whichever way the file was broken.
+            // And the board says what it did with the file, whichever way the
+            // file was broken.
             let warnings = ticket_warnings(&input.trunk_tickets);
             assert!(
                 warnings.iter().any(|w| w.contains(".plan/tasks/02-dep.md")),
@@ -1535,11 +1517,7 @@ mod tests {
                 crate::ticket::parse_ticket(blob),
                 ".plan/tasks/01-foo.md",
             )];
-            let branches = vec![BranchStatus {
-                branch: "plan/foo".to_string(),
-                status: "in_progress".to_string(),
-                slug: "foo".to_string(),
-            }];
+            let branches = vec![BranchStatus::of("plan/foo", "foo", "in_progress")];
             let warnings = branch_warnings(&branches, &trunk);
             assert_eq!(warnings.len(), 1, "{what}: one warning: {warnings:?}");
             assert!(
@@ -1634,11 +1612,7 @@ mod tests {
     #[test]
     fn test_in_flight_section() {
         let tickets = vec![t("proxy", "task", Some("net"), "in_progress", vec![])];
-        let branches = vec![BranchStatus {
-            branch: "plan/proxy".to_string(),
-            status: "in_progress".to_string(),
-            slug: "proxy".to_string(),
-        }];
+        let branches = vec![BranchStatus::of("plan/proxy", "proxy", "in_progress")];
         let input = BoardInput {
             trunk_tickets: tickets,
             branch_statuses: branches,

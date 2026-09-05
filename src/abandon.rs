@@ -7,7 +7,9 @@
 //! branch. The user-supplied message is appended as `## Reason Abandoned` below
 //! the existing body.
 
-use crate::close_cmd::find_ticket_by_slug;
+use crate::close_cmd::{find_ticket_by_slug, write_and_commit_on_trunk};
+use crate::exclude;
+use crate::frontmatter::{local_date_string, split_fm};
 use crate::git;
 use crate::lock::PlanrLock;
 use crate::ticket::parse_ticket;
@@ -69,29 +71,6 @@ fn abandon_frontmatter(content: &str, message: &str, date: &str) -> Result<Strin
     Ok(format!("---\n{}\n---\n{}", out.join("\n"), body))
 }
 
-struct FmSplit<'a> {
-    fm_lines: Vec<&'a str>,
-    rest: &'a str,
-}
-
-fn split_fm(blob: &str) -> Option<FmSplit<'_>> {
-    if !blob.starts_with("---\n") {
-        return None;
-    }
-    let end = blob[4..].find("\n---\n")?;
-    let fm_end = 4 + end;
-    let fm_str = &blob[4..fm_end];
-    let rest = &blob[fm_end + 5..];
-    let fm_lines: Vec<&str> = fm_str.lines().collect();
-    Some(FmSplit { fm_lines, rest })
-}
-
-/// Return the local date in YYYY-MM-DD form.
-fn local_date_string() -> String {
-    let now = jiff::Zoned::now();
-    format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day())
-}
-
 /// Abandon a ticket on trunk without a review or merge.
 ///
 /// The exclusive plan lock covers the branch check through the commit. This
@@ -133,23 +112,18 @@ pub fn abandon_ticket(
 
     let date = local_date_string();
     let new_content = abandon_frontmatter(&blob, message, &date)?;
-    let fpath = trunk_dir.join(&file);
-    let parent = fpath.parent().unwrap_or(&trunk_dir);
-    std::fs::create_dir_all(parent)
-        .map_err(|e| format!("cannot create dir {}: {e}", parent.display()))?;
-    std::fs::write(&fpath, &new_content)
-        .map_err(|e| format!("cannot write {}: {e}", fpath.display()))?;
-
-    git::add_file(&file, &trunk_dir)?;
-    git::commit_in(&format!("plan: abandon {kind} {slug}"), &trunk_dir)?;
+    write_and_commit_on_trunk(
+        &trunk_dir,
+        &file,
+        &new_content,
+        &format!("plan: abandon {kind} {slug}"),
+    )?;
 
     // Abandon refuses until the branch and worktree are cleaned up by hand, so
     // it never learns which path the worktree had and cannot remove that one
-    // rule by name. Nothing else would either -- `close` never runs for an
-    // abandoned task -- so the rule would outlive everything that referred to
-    // it and go on hiding whatever is created at that path. Prune whatever no
-    // live worktree still justifies.
-    git::exclude_prune(cwd);
+    // rule by name, and no `close` ever runs for an abandoned task. Prune what
+    // no live worktree still justifies -- see `exclude::exclude_prune`.
+    exclude::exclude_prune(cwd);
 
     Ok(format!("abandoned {kind} {slug}"))
 }
