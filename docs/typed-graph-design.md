@@ -1246,9 +1246,13 @@ known boundary.
     `resume` re-dispatches it and `abandon` releases it. `claim` was left
     create-or-fail rather than made reattaching, so its compare-and-swap
     survives — and every other ref move became a CAS too.
-11. **Container integration branches** — deferred, see §9b. The contract change
-    that keeps it cheap is already in (`base: home` resolves by walking the
-    parent chain), but the workflow is not adopted.
+11. **Container integration branches** — **resolved by choosing not to have
+    them.** Children merge to trunk; a container's ref carries only its own
+    declarations, and its close is gated on `children: terminal`. Executed in
+    `tests/next-scenarios.rs`. The contract change that would keep a true
+    integration branch cheap is still in place (`base: home` resolves by walking
+    the parent chain), so adopting one later stays a schema change rather than a
+    contract change.
 12. **Migration seed events** — the exact trailer shape `planr migrate` writes to
     seed a 0.3 ticket's event chain (§7), and whether a seed is one commit per
     ticket or one commit for the whole backlog.
@@ -1683,6 +1687,154 @@ present while a `resume` elsewhere has to make one.
 - **A benchmark reporting only total time cannot detect the regression it
   exists to catch.** Hence `benches/board_scaling.rs` prints per-ticket cost and
   states in its own output what shape to expect.
+- **An experiment that grows two variables together cannot separate them.** The
+  first measurement of the container gate grew the child count and the history
+  together, reported a flat per-child cost, and read as healthy. Holding the
+  children fixed and growing only the unrelated history showed the gate is
+  O(N · C). A confounded experiment does not return a weak signal; it returns a
+  confident wrong one.
+
+### Follow-on probes: topology, bounds, and git's index (2026-09-05)
+
+The round-4 spike proved the verb machinery on a flat backlog. These probes run
+the two shapes the rework exists to justify, and then pull on the two threads
+they exposed. Everything below is measured; the scenarios live in
+`tests/next-scenarios.rs`.
+
+**Both topologies execute, and the sub-unit one needs no language change.** A
+container gated on `children: terminal` closes only once every child is
+terminal, and `terminal` has to span `done` and `abandoned` alike. Above it, the
+more important result: a *unit above the leaf* -- three tasks under one story
+costing **one** worktree and **one** branch. The unit is derived from `worktree:
+create`, so a kind whose verbs declare no worktree is already expressible.
+"A task is a ticket" and "a task is a checklist line in the story body"
+are therefore two schemas, not two designs, and both are available at once.
+
+**`archive` could never fire.** It is from-less *and* declares `require: { self:
+{ status: terminal } }`, but the absorbing rule for from-less verbs refuses
+terminal tickets outright. The two rules contradict, so the verb was
+unreachable. An explicit status precondition now wins over the implicit rule.
+This matters well beyond one verb: the scaling story in
+[Scaling, analysed and then measured](#scaling-analysed-and-then-measured)
+turns on archival bounding **T** while **C** grows, and that argument rested on
+a verb that had never once run. A step that bounds the system, which nobody
+takes, is not a step.
+
+**Folding an archived ticket needs the kind, which lives in the file `archive`
+deletes.** Enumeration survives archival, because trailers are in commit
+messages -- but interpretation does not, because the kind selects the
+sub-machine. State falls back to the last commit that still had the file, and
+only on a genuine miss: a file that is present but invalid must report *that*,
+or a ticket carrying a stored `status` is reported as never having existed.
+
+**The container gate is O(N · C).** One full history walk per child. Holding the
+child count fixed and growing *unrelated* history separates the two costs:
+
+| children | commits | `close` |
+| --- | --- | --- |
+| 20 | 42 | 190ms |
+| 20 | 542 | 316ms |
+| 20 | 2042 | 545ms |
+
+Left unfixed in the spike deliberately; the fix is the one already applied twice
+elsewhere -- one shared walk, plus the batched blob read.
+
+#### Bound the walk on the event, not on the file
+
+`fold_state` is last-write-wins over `to`: it neither validates transitions nor
+accumulates. So a ticket's state is determined entirely by **the most recent
+event whose verb declares a `to`**. Reading state never needs a ticket's
+history; it needs its latest transition. That makes the right terminator an
+event property rather than a structural one:
+
+| bound | sound? | scans |
+| --- | --- | --- |
+| the parent's creation | **no** -- misses pre-reparent transitions | commits since the parent existed |
+| the ticket's own creation | yes | commits since the ticket existed |
+| **first event with a `to`, walking backwards** | yes | **commits since the ticket last moved** |
+
+A parent anchor is sound for *discovering* an edge and unsound for *folding*
+one. `reparent` is the case that separates them, and it separates them the
+opposite way round from the intuition: the edge is established by the reparent
+commit, which necessarily postdates the new parent, so the edge is always in
+range. The child's own transitions are not. Measured on a task claimed under one
+epic and then reparented under a newer one, a parent-anchored fold sees a single
+event and reports `todo` for a ticket that is `in_progress`.
+
+The event bound needs the own-creation anchor as its **floor**, not its primary
+rule: `new` is not a schema verb, so it carries no `to` and will not terminate
+the walk. A ticket that has never transitioned needs its creation commit to stop
+at, and then folds to `initial`.
+
+What the anchor buys depends entirely on where unrelated commits sit. Over 2022
+commits with ten children:
+
+| unrelated history sits | commits after the epic's creation | saved |
+| --- | --- | --- |
+| before the epic exists | 20 of 2022 | 100% |
+| during the epic's life | 2020 of 2022 | 1% |
+
+Anchoring each ticket at its own creation inverts that, because children are the
+short-lived things: in the interleaved layout the epic scans 2020 commits while
+its children scan 19, 11, and 1. **The event bound is on recency, not
+lifetime** -- a five-year-old epic that transitioned yesterday costs one commit
+to read, and what is expensive is a ticket that has sat idle, which is the
+opposite of what a creation anchor punishes.
+
+One caveat this concentrates rather than creates: last-write-wins means trusting
+that the first state-changing event found walking backwards really is the
+latest -- the same `--date-order` union assumption that the trunk-versus-branch
+ordering bug exposed. Today a misordering is one wrong event among many; under a
+terminating walk it is the whole answer.
+
+#### Git's index is usable exactly where paths are touched
+
+Empty declarations forfeit git's changed-path Bloom filters, but only for the
+one question that is not path-shaped. The design already splits along the right
+seam:
+
+| operation | touches a path? | uses git's index? |
+| --- | --- | --- |
+| find a ticket's creation (the anchor) | yes -- `new` writes the file | **yes** |
+| find archived tickets (`--diff-filter=D`) | yes -- `archive` deletes it | **yes** |
+| enumerate a ticket's events | no -- declarations may be empty | no; trailers |
+
+Measured over 2022 commits, an anchor lookup costs 17ms with no commit-graph,
+12ms with one, and 5ms with `--changed-paths`. The trailer walk sits at 16ms and
+is unmovable. The cold-ticket scan in
+[The derived index](#51-the-derived-index) already relies on this. So the
+empty-declaration decision costs the index only where it was never going to
+help, and the alternative that would recover it -- making every declaration
+touch a path -- buys the index back at the price of a transcript accumulating in
+the ticket file and textual conflicts between declarations that today never
+conflict.
+
+#### Archive versus close is a schema choice
+
+Folding removal into `close` is a pure schema edit: `archive` is only
+`content: [remove]`, so moving that onto `close` needs no code change. Probed
+directly, the container gate stays correct, because a child drops out of
+enumeration exactly when it would have passed the gate anyway.
+
+The two stay separate for now, to keep the upgrade path from 0.3 open. Recording
+it as a property of the new system rather than a pending decision: **the
+friction of a two-step retirement is a schema default, not a design
+commitment.** An author who wants retirement to be automatic puts
+`content: [remove]` on `close`; an author who wants a window in which finished
+work is still readable on disk keeps the verbs apart. Neither needs the tool to
+change, which is the same shape as the sub-unit question above.
+
+The one thing that must **not** be made symmetric: removal on `abandon`.
+Both states are terminal, so symmetry is tempting, and it hollows out every
+container gate -- if abandoned tickets vanish too, every child drops out of
+enumeration and `children: <anything>` passes vacuously. The asymmetry is
+principled: `ticket-only` exists to deposit the worker's rationale on trunk, and
+erasing the file in the same commit defeats its only purpose.
+
+The cost of coupling, if it is ever made the default, is
+[open question #9](#8-open-questions): a just-closed ticket is the one carrying
+`## Validation` and `## Review`, so the moment it is most worth reading is the
+moment it leaves the filesystem.
 
 ### Status (round 4)
 
@@ -1693,8 +1845,8 @@ the *mechanism* around it — how events are found, how they are ordered, where
 the initial state comes from, and what happens to a ref when a ticket ends.
 
 The spike is `src/next/**` on `planr-next`, behind the `next` feature, with
-nine end-to-end tests. It is reference material, not a foundation: the valuable
-residue is `plumbing.rs` — build-tree-then-move-ref, the ref CAS, the
-ticket-only merge — and the throwaway parts are the shortcuts, chiefly a
-`children_of` that reads every ticket in the repo and a `state_at` that re-walks
-history inside a loop.
+sixteen end-to-end tests across `next-e2e.rs` and `next-scenarios.rs`. It is
+reference material, not a foundation: the valuable residue is `plumbing.rs` —
+build-tree-then-move-ref, the ref CAS, the ticket-only merge — and the throwaway
+part is the shortcut that survives, a `state_at` that re-walks history inside a
+loop, which is what makes the container gate O(N · C).

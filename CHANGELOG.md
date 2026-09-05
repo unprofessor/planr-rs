@@ -37,6 +37,18 @@
 
 ### Fixed
 
+- **`planr next do archive` could never run.** The verb is from-less and
+  declares `require: { self: { status: terminal } }`, but the absorbing rule
+  that stops a from-less verb firing on a finished ticket refused it on
+  exactly the tickets it exists for. A verb that states its own status
+  precondition now overrides the implicit rule.
+- **`planr next state` reads an archived ticket.** Folding needs the ticket's
+  kind to pick its sub-machine, and the kind lives in the file `archive`
+  deletes -- so enumeration survived archival but interpretation did not.
+  State now falls back to the last commit that still carried the file, and
+  only when the file is genuinely absent: a ticket that is present but
+  invalid still reports its own parse error.
+
 - **`planr new` quotes the `title:` it writes** ([#1]). A colon in the title
   (`"Sanitary history: boundary rev, rewriter"`) produced frontmatter that
   planr's own YAML reader could not parse -- silently at creation, then as
