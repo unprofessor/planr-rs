@@ -223,7 +223,7 @@ fn test_e2e_a_broken_duplicate_does_not_block_a_satisfied_dependency() {
 }
 
 /// A slug that is both a real trunk task and the recovered id of some
-/// unreadable file took the "counts towards nothing" arm -- which is false of
+/// unreadable file took the "counts toward nothing" arm -- which is false of
 /// a task sitting in the tasks table, and which swallowed the invalid status
 /// the reader can actually act on.
 #[test]
@@ -266,7 +266,7 @@ fn test_e2e_board_keeps_the_actionable_warning_about_a_real_task() {
         "the actionable warning must survive: {err}"
     );
     assert!(
-        !err.contains("counts towards nothing"),
+        !err.contains("counts toward nothing"),
         "the task is shown and counted, so that would be false: {err} / {out}"
     );
 }

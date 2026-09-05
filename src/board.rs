@@ -399,15 +399,15 @@ pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]
             format!("{n} in-flight branches count")
         };
         out.push(format!(
-            "warning: the board read no tickets at all, so {subject} towards nothing \
+            "warning: the board read no tickets at all, so {subject} toward nothing \
              -- check the plan directory and the ref the board read"
         ));
     }
     let per_branch = branches.iter().filter_map(|b| {
         // A slug that is both a real trunk task and the recovered id of
         // some unreadable file is not detached from anything: the task is
-        // there, in the tasks table, counted. Saying it "counts towards
-        // nothing" would be false, and it swallowed the warning about the
+        // there, in the tasks table, counted. Saying it "counts toward
+        // nothing" would be false, and it swallows the warning about the
         // branch that the reader can actually act on.
         if let (false, Some(&unparsed)) = (
             trunk_task_slugs.contains(b.slug.as_str()),
@@ -420,18 +420,18 @@ pub fn branch_warnings(branches: &[BranchStatus], trunk_tickets: &[ParsedTicket]
             };
             Some(format!(
                 "warning: {}: the ticket for '{}' is present but {why}, so the board \
-                 cannot place it -- the branch is listed but counts towards nothing; \
+                 cannot place it -- the branch is listed but counts toward nothing; \
                  run `planr lint`",
                 b.branch, b.slug
             ))
         } else if read_any && !trunk_task_slugs.contains(b.slug.as_str()) {
             // The branch reads a status fine, but names a task that is
-            // not among the tickets the board read. It counts towards
+            // not among the tickets the board read. It counts toward
             // nothing, so without this it would simply be absent from the
             // summary with no explanation.
             Some(format!(
                 "warning: {}: no task '{}' among the tickets the board read; \
-                 the branch is listed but counts towards nothing; run `planr lint`",
+                 the branch is listed but counts toward nothing; run `planr lint`",
                 b.branch, b.slug
             ))
         } else {
@@ -1105,7 +1105,7 @@ mod tests {
         assert_eq!(
             count("in_progress"),
             Some("0".to_string()),
-            "a branch with no task on trunk must count towards nothing: {out}"
+            "a branch with no task on trunk must count toward nothing: {out}"
         );
         // The other branch does name a trunk task, so it still counts -- the
         // skip must not swallow the healthy case.
@@ -1119,7 +1119,7 @@ mod tests {
 
     #[test]
     fn test_branch_warning_for_slug_with_no_trunk_task() {
-        // A branch counted towards nothing would otherwise be absent from the
+        // A branch counted toward nothing would otherwise be absent from the
         // summary with no explanation. A story of the same name does not
         // rescue it: the tasks table is what the branch stands in for.
         let branches = vec![
@@ -1142,7 +1142,7 @@ mod tests {
             "warning should name the branch and the slug: {w}"
         );
         assert!(
-            w.contains("counts towards nothing"),
+            w.contains("counts toward nothing"),
             "warning should say the branch is uncounted: {w}"
         );
     }
@@ -1290,7 +1290,7 @@ mod tests {
         assert!(
             warnings
                 .iter()
-                .any(|w| w.contains("2 in-flight branches count towards nothing")),
+                .any(|w| w.contains("2 in-flight branches count toward nothing")),
             "the warning should count both branches: {warnings:?}"
         );
     }
@@ -1306,7 +1306,7 @@ mod tests {
     fn test_branch_warning_does_not_call_a_real_task_uncounted() {
         // 'proxy' is a task on trunk *and* the recovered id of an unreadable
         // story of the same slug. The task is in the tasks table and in the
-        // totals, so "counts towards nothing" would be false -- and it hid
+        // totals, so "counts toward nothing" would be false -- and it hid
         // the invalid status the reader can actually act on.
         // "wip" is not a valid status.
         let branches = vec![BranchStatus::of("plan/proxy", "proxy", "wip")];
@@ -1319,7 +1319,7 @@ mod tests {
             "the actionable warning must survive: {w}"
         );
         assert!(
-            !w.contains("counts towards nothing"),
+            !w.contains("counts toward nothing"),
             "the task is shown and counted, so this would be false: {w}"
         );
     }

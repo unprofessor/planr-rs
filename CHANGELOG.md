@@ -138,7 +138,7 @@
   told the reader nothing about either.
 
 - **A branch whose task is not on trunk is called out by name.** Such a
-  branch is listed in flight and counts towards nothing. The branch scan now
+  branch is listed in flight and counts toward nothing. The branch scan now
   warns on stderr that no task of that slug is among the tickets the board
   read, so the gap between the in-flight table and the totals is explained
   rather than merely correct.
@@ -153,7 +153,7 @@
   A list that came back empty says nothing about any individual slug either,
   so it no longer produces one such warning per branch -- it says once that
   the board read no tickets at all, and how many in-flight branches that
-  leaves counting towards nothing.
+  leaves counting toward nothing.
 
 - **Every command uses the backlog at the repository root.** A relative
   `--plan-dir` (the default `.plan`) is relative to the repository, but every
@@ -237,7 +237,7 @@
   The warning that a ticket is present but did not parse fired on the slug
   alone, so a slug that was both a real task on trunk and the recovered id of
   some unreadable file took it. The board then rendered that task in the tasks
-  table and counted it while stderr said the branch "counts towards nothing",
+  table and counted it while stderr said the branch "counts toward nothing",
   and the warning the reader could act on -- that the branch's task file
   carries a status planr does not recognize -- never appeared at all. The
   warning is now only for a slug that names no task the board could place.
@@ -255,7 +255,7 @@
   is meant to be usable in a repository before `planr new` has ever made a
   backlog -- but it is a fact neither `lint` nor `board` can establish any
   other way. `board` shows the tickets it read, and warns when an in-flight
-  branch counts towards nothing because it read none; `lint` prints nothing
+  branch counts toward nothing because it read none; `lint` prints nothing
   either way, so it says it in both of its modes -- the missing directory in
   working-tree mode, and in ref mode, where there is no directory to look at,
   a plan directory that holds no tickets at the ref it was given.
