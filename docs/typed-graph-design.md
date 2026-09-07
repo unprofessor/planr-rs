@@ -1632,11 +1632,16 @@ stating separately from the asymptotics, because they invert the intuition:
   planr operation rather than a tuning knob: abandoning that ticket gives it a
   recent `to`, archiving it removes it from the live set, and either way it stops
   being paid for. Backlog hygiene and read performance become the same lever.
-- **Creation anchors become load-bearing, and git's index supplies them.** `new`
-  is not a schema verb and carries no `to`, so it cannot terminate a walk; a
-  never-transitioned ticket needs its creation commit as a floor. That query *is*
-  path-shaped, which is exactly the seam described in
+- **The floor is already in the stream.** A never-transitioned ticket needs its
+  creation commit to stop at, and the obvious way to get one is a path-limited
+  lookup -- the anchor query in
   [Git's index is usable exactly where paths are touched](#gits-index-is-usable-exactly-where-paths-are-touched).
+  It is not needed here: `new` is not a schema *verb*, but it does write
+  `Planr-Verb: new`, so the creation commit is already a record in the trailer
+  walk and terminates it by name. The floor costs nothing extra, and `new`
+  becomes a **reserved verb name** rather than merely a convention. The index
+  anchor still earns its keep for the question that is genuinely path-shaped --
+  finding archived tickets, whose files were deleted.
 
 Two conclusions from the middle column, both still standing:
 
