@@ -1930,6 +1930,11 @@ Three things follow, and the third is the one that matters.
   times the history. The 5ms figure for `--format=%H` over the same range locates
   the cost precisely: roughly 26 of the 31ms is `%(trailers:...)` forcing every
   commit message to be loaded and parsed. That is the walk, not the spawn.
+  A second independent measurement on the same shapes came out about half as
+  large -- 6ms and 16ms -- which is a useful reminder that the constant here is
+  machine- and harness-dependent and the *shape* is the finding. Both agree on
+  linear growth of roughly 5-10 microseconds per commit above a 3-4ms process
+  floor, which puts a 20k-commit history somewhere around 100-200ms.
 - **The early stop works, so the hit case is a range rather than a number.** An
   archived slug costs 10ms or 40ms at 2000 commits depending only on how far back
   its genesis sits. A *live* collision never reaches the trailer walk at all --

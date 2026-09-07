@@ -34,11 +34,13 @@
   and are not: renaming the plan directory (or exporting `PLANR_DIR`), purging
   a path with `filter-branch` while every commit survives, or creating from a
   shallow clone each moved the path without touching the trailers, and each
-  made a used slug look free. Reading commit messages costs about 20ms flat and
-  is indifferent to a commit-graph, against 97ms for the path-limited walk on a
-  2000-commit history, so the fresh-slug case got faster rather than slower.
-  It costs `new`, once per ticket, and never a read. `new` refuses outright in
-  a shallow clone rather than issue a reservation it cannot back.
+  made a used slug look free. The cost is a full trailer walk -- linear in
+  history, and unlike the path-limited check it cannot be accelerated by a
+  commit-graph, because changed-path filters answer questions about paths and
+  this is a question about commit messages. On a repository that has one, the
+  common case is slower than it was. It lands on `new`, once per ticket, and
+  never on a read. `new` refuses outright in a shallow clone rather than issue
+  a reservation it cannot back.
 
   A slug whose events are reachable while its creation is not -- a `git replace
   --graft` over the creation commit, or a rewrite that drops it -- is refused
