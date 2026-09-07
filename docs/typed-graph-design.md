@@ -1148,6 +1148,13 @@ before the engine is committed to. Mitigating factor: the events for a live
 ticket are bounded by its own short history, and the schema timeline is one
 `git log -- .plan/schema.yml` walk shared across every ticket.
 
+**Round 4 sized it, and the live index does not need persisting.** The
+[event bound](#scaling-analysed-and-then-measured) makes a state read cost
+commits-since-last-move, so the live rebuild is bounded by the stalest live
+ticket rather than by history. The cold-archive rebuild above is the only part
+whose cost still argues for persistence, and open question #8 is narrowed to
+that trigger.
+
 ## 6. Why not a relational DB
 
 A DB is categorically incompatible with the load-bearing bets:
@@ -1241,10 +1248,16 @@ known boundary.
    **resolved by a third answer** (§3.1). Neither: the unit is a declared *cut*
    across the tree, and it is derived rather than declared — the kind whose
    verbs say `worktree: create`. Kinds below the cut are sub-unit structure.
-8. **Index persistence** — pure in-memory rebuild per invocation vs a persisted
-   git-ignored cache; when does scan cost justify persistence? Sharper now that
-   the fold makes the index the only fast read path (§5.1) — the rebuild cost
-   wants measuring before the engine is committed to.
+8. **Index persistence** -- **narrowed** by the event bound
+   ([Scaling](#scaling-analysed-and-then-measured)). The question was whether the
+   fold's read cost forces a persisted cache. For the *live* set it does not: a
+   state read is O(R) and `board` is one walk bounded by the stalest live ticket,
+   so an in-memory rebuild per invocation stands on its own. What remains open is
+   only the *cold-archive* index, whose rebuild is O(lifetime history) by
+   construction (§5.1) -- and that walk is path-shaped
+   (`--diff-filter=D`), so it gets git's changed-path filters. The open part is
+   therefore the trigger, not the principle: at what archive size does an
+   incremental persisted cache beat a filtered cold walk?
 9. **Filesystem legibility** — is `board`/`graph` + generated symlink views
    enough to replace `ls`-by-kind for humans? Slightly sharper under the fold: a
    ticket file no longer states its own state, so `board` carries more of the
@@ -1578,21 +1591,54 @@ flag in `--help` is an attractive nuisance when the callers are agents.
 ### Scaling, analysed and then measured
 
 Terms: **C** total commits, unbounded; **T** live tickets, bounded by archival;
-**E** events per ticket, small.
+**E** events per ticket, small; **N** children of a container; **R** a ticket's
+*recency* -- commits since it last changed state, floored at its own creation.
 
-| operation | as first written | now |
-|---|---|---|
-| `state <slug>` | O(C) | O(C) |
-| `board` | **O(T · C)** | **O(C + ΣE)** |
+| operation | as first written | measured in the spike | under the event bound |
+|---|---|---|---|
+| `state <slug>` | O(C) | O(C) | **O(R)** |
+| `board` | **O(T · C)** | **O(C + ΣE)** | O(T + max R) |
+| container `close` | -- | **O(N · C)** | O(max R over children) |
 
-Archival bounds **T**, the live tree — not **C**. That is enough: with `board`
-doing one walk and bucketing by `Planr-Ticket`, planr is O(C), the same order as
-git's own log. Measured on synthetic backlogs, per-ticket cost was 12.6 → 17.7 ms
-rising with history under the per-ticket walk, and a flat ~2.8 ms under the
-single walk. Per-ticket cost is the diagnostic; total time cannot distinguish
-removing a factor from shaving a constant.
+**The first two columns are measured; the third is derived and not yet
+implemented.** It follows from the absorption lemma in
+[the semantics](semantics.md#4-denotational-semantics-of-the-fold), which makes
+the backwards-terminating scan a theorem rather than an optimization. The table
+is restated rather than extended because the change is not a better constant: it
+removes **C** from the cost of reading state at all, and that is a different
+engine, not a faster one.
 
-Two conclusions worth carrying forward:
+How the middle column was reached: archival bounds **T**, the live tree -- not
+**C**. With `board` doing one walk and bucketing by `Planr-Ticket`, planr came
+out O(C), the same order as git's own log. Measured on synthetic backlogs,
+per-ticket cost was 12.6 -> 17.7 ms rising with history under the per-ticket
+walk, and a flat ~2.8 ms under the single walk. Per-ticket cost is the
+diagnostic; total time cannot distinguish removing a factor from shaving a
+constant.
+
+**What the third column changes about the design.** A state read stops scanning
+at the most recent event carrying a `to`, so it costs commits-since-last-move
+rather than commits-since-creation or commits-total. The consequences are worth
+stating separately from the asymptotics, because they invert the intuition:
+
+- **Cost tracks staleness, not age or size.** A five-year-old epic that
+  transitioned yesterday reads in one commit. What is expensive is a ticket that
+  has sat idle -- which is the opposite of what a lifetime-based bound punishes,
+  and the opposite of what a creation anchor would have optimized for.
+- **`board`'s cost is set by its single stalest live ticket.** The shared walk
+  can stop once every live ticket has been resolved, so the terminator is
+  `max R` across the live set rather than **C**. Worst case is unchanged -- one
+  ticket idle since the project began costs a full walk -- but the remedy is a
+  planr operation rather than a tuning knob: abandoning that ticket gives it a
+  recent `to`, archiving it removes it from the live set, and either way it stops
+  being paid for. Backlog hygiene and read performance become the same lever.
+- **Creation anchors become load-bearing, and git's index supplies them.** `new`
+  is not a schema verb and carries no `to`, so it cannot terminate a walk; a
+  never-transitioned ticket needs its creation commit as a floor. That query *is*
+  path-shaped, which is exactly the seam described in
+  [Git's index is usable exactly where paths are touched](#gits-index-is-usable-exactly-where-paths-are-touched).
+
+Two conclusions from the middle column, both still standing:
 
 - **Empty declarations and the index are the same decision.** Trailer scanning
   must load and parse every commit object. Path-limited scanning gets git's
@@ -1607,10 +1653,18 @@ Two conclusions worth carrying forward:
   enforcing no-dangling-pointers unnecessary, and that is worth avoiding, since
   enforcement would make archival a closure operation over unrelated tickets.
 
-Still unmeasured, and the reason `board` is not yet done: with the T multiplier
-gone, **the bottleneck moves from history walking to process spawning** — one
-`git show` per ticket to read its kind. That is a tree read, so archival bounds
-it, but it now dominates.
+**The process-spawn bottleneck this exposed is closed.** With the T multiplier
+gone, the cost moved from history walking to process spawning -- one `git show`
+per ticket to read its kind. `board` now runs two git processes for the whole
+board regardless of ticket count: one history walk and one `cat-file --batch`.
+Per-ticket cost fell from ~2.6 ms to ~0.5 ms and now *falls* with backlog size as
+the fixed cost amortizes, which is the signature of O(1) processes.
+
+The batch protocol frames records by declared byte length, so the parser must
+count bytes rather than scan for something header-shaped -- a ticket body
+containing a line that looks like a `cat-file` header would otherwise
+desynchronize the stream and misreport every ticket after it. That case is
+pinned by a test.
 
 ### Implementation cautions
 
