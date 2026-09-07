@@ -45,10 +45,15 @@ fn log_format() -> String {
 
 /// `new` is genesis, not a schema verb -- but it writes `Planr-Verb: new`, so
 /// the creation commit is already a record in this stream. That makes it the
-/// floor for a ticket that has never transitioned, at no extra cost. The name
-/// is therefore RESERVED: a schema that defined a verb called `new` would put
-/// a second, meaningless floor into every walk.
-const GENESIS: &str = "new";
+/// floor for a ticket that has never transitioned, at no extra cost.
+///
+/// The name is therefore RESERVED, and reserved in the schema rather than in
+/// prose: `Schema::validate` rejects a verb of this name, because a verb
+/// called `new` would put a second, meaningless floor into every walk. Worse,
+/// it would do so silently -- a stateless verb would report itself as a
+/// transition, since `verb::run` reads the before and after states through
+/// this same bounded walk.
+pub const GENESIS: &str = "new";
 
 fn parse_record(record: &str) -> Option<Event> {
     let record = record.trim_matches(['\n', '\r']);
@@ -178,10 +183,24 @@ pub fn for_ticket(
 /// The same enumeration with no stop rule, kept as the differential oracle for
 /// [`for_ticket`]: the two must fold to the same state on every history.
 ///
-/// Deliberately a SEPARATE read path -- one `git log` read to completion and
-/// parsed in one go -- rather than [`for_ticket`] with a rule that never
-/// fires. An oracle sharing the streaming reader could not catch a bug in it.
-/// `planr next state --unbounded` is how a repository reaches this.
+/// **What the oracle is worth, exactly.** It is a separate READ path -- one
+/// `git log` read to completion and parsed in one go, rather than
+/// [`for_ticket`] with a rule that never fires -- so it catches bugs in the
+/// streaming reader's framing and in the stop rule. That is all it catches.
+/// Both walks call [`walk_refs`], use the same format string, and consume the
+/// same `git log` stream in the same order, so a wrong ref set, a wrong
+/// ordering flag, a wrong format or separator, and any [`parse_record`] bug
+/// are invisible to it BY CONSTRUCTION: the two would agree on the same wrong
+/// answer.
+///
+/// The sharp case is the ordering assumption. Give a trunk declaration and a
+/// branch declaration that are neither ancestor nor descendant a committer
+/// date skew, and flipping one date flips the folded state -- with both walks
+/// still agreeing, the bounded one after reading a single commit. Catching
+/// that needs an oracle that derives order from the commit graph rather than
+/// from dates, which is a different mechanism and not this one.
+///
+/// Reached by tests through `PLANR_NEXT_ORACLE`; it is not a CLI mode.
 pub fn for_ticket_unbounded(slug: &str, kind: &str, trunk: &str) -> Result<Walk, String> {
     let own = format!("plan/{kind}/{slug}");
     let format = format!("--format={}", log_format());

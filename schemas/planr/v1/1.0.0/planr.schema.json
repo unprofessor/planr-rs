@@ -41,10 +41,16 @@
       "description": "A lowercase token. Used for kind names, verb names, edge names, and state names. Underscores are permitted so established names such as depends_on and in_progress stay expressible."
     },
 
+    "verb-name": {
+      "$ref": "#/$defs/identifier",
+      "not": { "const": "new" },
+      "description": "A verb's name: any identifier except the reserved 'new'. Creation is fixed tooling rather than a verb, and it writes 'Planr-Verb: new' -- the record a bounded state read stops its backwards walk at, and the only floor a ticket that has never transitioned has. A verb of that name would end every walk at itself, and silently: the runner reads a verb's before and after states through that same walk, so even a stateless verb would report itself as a transition. The '#commit' anchor still admits 'new' as a Planr-Verb, because that trailer is exactly what creation writes."
+    },
+
     "slug": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9_-]*$",
-      "description": "A ticket's identity. The slug is the filename stem and the last segment of its branch ref; it carries no numeric prefix and must not contain a slash."
+      "description": "A ticket's identity, and its primary key. The slug is the filename stem and the last segment of its branch ref; it carries no numeric prefix and must not contain a slash. The mapping from slug to file path is one-to-one and permanent: archival deletes the file but does not release the name, because every event is attributed by 'Planr-Ticket: <slug>' and a reused slug would make one identifier name two tickets, folding a dead ticket's events into a live one."
     },
 
     "kinds": {
@@ -228,7 +234,7 @@
       "description": "One named lifecycle mutation, and one commit. A verb is a declaration first and a content mutation second: several verbs legitimately have no content at all, and their commit message carries the whole payload. The commit is built from 'base', carries the content steps if any, and lands per 'effect' -- so there is nothing to order and no ordering key.",
 
       "properties": {
-        "name": { "$ref": "#/$defs/identifier" },
+        "name": { "$ref": "#/$defs/verb-name" },
 
         "applies-to": {
           "type": "array",

@@ -126,7 +126,29 @@ branch and reports success.
 under W-Integrate and W-Retire the declaration says nothing. Two mechanisms for
 one concern; see [open questions](#8-open-questions-this-raises).
 
-### 2.2 Derived properties of a kind
+### 2.2 The reserved name
+
+`new` is not available as a verb name:
+
+```
+             name(v) != new
+   ---------------------------------- [W-Reserved]
+                |- v wf
+```
+
+Creation is fixed tooling rather than a verb -- there is no prior node and no
+from-transition -- but it writes `Planr-Verb: new`, so the creation commit is a
+record in the same event stream every declaration lands in. Section 4's
+backwards bound stops at that record when a ticket has never transitioned, and
+it is the only floor such a ticket has.
+
+A verb of that name would end every walk at itself, and it would do so
+silently: the runner reads a verb's before and after states through the same
+bounded walk, so even a `to`-less verb would report itself as a transition to
+the initial state. The rule is enforced at load, in the implementation and in
+the published schema alike.
+
+### 2.3 Derived properties of a kind
 
 Three properties are computed from the verb set rather than declared:
 
@@ -249,9 +271,19 @@ Named so that breaking one is a decision rather than an accident.
 2. **Event order is total, and given by `--date-order` over trunk and the
    `plan/` refs together.** Committer-date skew across machines breaks it.
    Under a terminating backwards scan a misordering is not one wrong event
-   among many; it is the whole answer.
+   among many; it is the whole answer. No differential test can catch this:
+   a bounded and an unbounded walk read the same date-ordered stream, so they
+   agree on the same wrong answer. Detecting it needs an oracle that derives
+   order from the commit graph rather than from dates.
 3. **A ticket's events all descend from its creation commit**, which is what
-   makes that commit a valid floor.
+   makes that commit a valid floor. This holds because a slug is never reused:
+   the mapping from slug to file path is one-to-one and permanent, and `new`
+   refuses a slug that has ever existed in history rather than merely one that
+   exists now. Archival deletes the file and does not release the name. Without
+   that rule the assumption is simply false -- a re-created slug folds its dead
+   predecessor's events, and a bounded read stopping at the newer creation
+   commit and an unbounded read reaching the older one disagree about the same
+   ticket.
 4. **The schema in force is the one in the same history.** There is no schema
    trailer, deliberately: the schema is tracked in the repository it governs.
 5. **Trailers survive.** Events are attributable because commit messages are

@@ -236,6 +236,22 @@ impl Schema {
         }
         let known: Vec<&str> = self.kinds.iter().map(|k| k.name.as_str()).collect();
         for verb in &self.verbs {
+            // Genesis owns this name. Creation writes `Planr-Verb: new`, and a
+            // bounded state read stops its backwards walk at that record --
+            // the floor for a ticket that has never transitioned. A verb of
+            // the same name puts a second floor into every walk, and it fails
+            // silently rather than loudly: `verb::run` reads the before and
+            // after states through that same walk, so even a stateless verb
+            // would report itself as a transition to the initial state. The
+            // published schema rejects it too, and the constant lives with the
+            // walk that depends on it.
+            if verb.name == super::events::GENESIS {
+                return Err(format!(
+                    "verb '{}' is a reserved name: creation is fixed tooling rather than a verb, and it writes 'Planr-Verb: {}' -- the record a bounded state read stops at. A verb of that name would end every walk at itself. Rename it",
+                    verb.name,
+                    super::events::GENESIS
+                ));
+            }
             if verb.applies_to.is_empty() {
                 return Err(format!("verb '{}' applies to no kind", verb.name));
             }
@@ -514,5 +530,27 @@ mod wf {
                 "{cell:?} is legal but no reference verb inhabits it"
             );
         }
+    }
+
+    /// Section 2.2, W-Reserved. The published schema rejects this too, via
+    /// `tests/fixtures/schema/root/invalid/verb-named-new.yml` -- both sides
+    /// are pinned because three-way drift between the reference schema, this
+    /// file, and the published document is how the earlier renames got lost.
+    #[test]
+    fn the_genesis_name_is_not_available_to_a_verb() {
+        let with_name = |name: &str| {
+            format!(
+                "kinds: [task]\n\
+                 verbs:\n\
+                 \x20 - name: {name}\n\
+                 \x20   applies-to: [task]\n\
+                 \x20   to: todo\n"
+            )
+        };
+        let err = Schema::parse(&with_name(crate::next::events::GENESIS))
+            .expect_err("a verb named 'new' must not load");
+        assert!(err.contains("reserved"), "unhelpful refusal: {err}");
+        // Only the name is disqualifying -- the same verb otherwise loads.
+        assert!(Schema::parse(&with_name("spawn")).is_ok());
     }
 }

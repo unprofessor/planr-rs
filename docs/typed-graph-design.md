@@ -920,6 +920,18 @@ in-repo (observable, same trust boundary as the code being built).
   (removes an arbitrary layer of indirection *and* removes the `planr new`
   prefix-allocation `flock` — one of the two operations that needed
   serialization; only trunk merge in `close` still serializes).
+  **The file path is the primary key, and the slug maps to it one-to-one and
+  permanently.** Archival deletes the file; it does not release the name.
+  `new` therefore refuses a slug that has ever existed in history, not merely
+  one present in the current tree. This is not tidiness: every event is
+  attributed by `Planr-Ticket: <slug>`, so a reused slug makes one identifier
+  name two tickets, and the second ticket folds the first one's events. It was
+  reachable with two ordinary commands -- archive, then create the slug again
+  -- and it made `state` and `board` disagree about a live ticket, because a
+  bounded read stops at the newer creation commit while an unbounded one
+  reaches the older events. It is also what
+  [the semantics](semantics.md#6-assumptions-this-rests-on) assumption 3 needs
+  in order to be true.
 - **Branch refs are `plan/<kind>/<slug>`** (round-3), not flat `plan/<slug>`.
   Slugs contain no `/` and refs are always three segments, so git's
   directory/file ref conflict can never arise. It makes `board` *cheaper*: the
@@ -1874,6 +1886,7 @@ seam:
 | --- | --- | --- |
 | find a ticket's creation (the anchor) | yes -- `new` writes the file | **yes** |
 | find archived tickets (`--diff-filter=D`) | yes -- `archive` deletes it | **yes** |
+| has this slug ever existed (`--diff-filter=A`) | yes -- same commit | **yes** |
 | enumerate a ticket's events | no -- declarations may be empty | no; trailers |
 
 Measured over 2022 commits, an anchor lookup costs 17ms with no commit-graph,
@@ -1885,6 +1898,16 @@ help, and the alternative that would recover it -- making every declaration
 touch a path -- buys the index back at the price of a transcript accumulating in
 the ticket file and textual conflicts between declarations that today never
 conflict.
+
+The third row is what enforces slug uniqueness, and it inverts the usual cost
+shape: the MISS is the expensive case, because proving a slug has never existed
+means reaching the root, while a hit stops at the creation commit. Measured on
+a 2000-commit history, the check costs 97ms with no commit-graph and 4ms with
+one carrying `--changed-paths` -- effectively flat, against 22ms / 3ms at 500
+commits. A repository large enough for this to matter wants
+`git commit-graph write --reachable --changed-paths`, which is the same
+maintenance any large repository already wants. The cost lands on `new`, once
+per ticket, and never on a read.
 
 #### Archive versus close is a schema choice
 

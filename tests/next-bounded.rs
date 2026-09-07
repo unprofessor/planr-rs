@@ -6,12 +6,23 @@
 //! kind of test:
 //!
 //!   * **the answer is unchanged.** Every scenario here folds the ticket twice
-//!     -- bounded, and through the unbounded oracle `--unbounded` reaches --
-//!     and asserts the two agree. A suite that only exercised the new path
-//!     would agree with itself.
+//!     -- bounded, and through the unbounded oracle `PLANR_NEXT_ORACLE`
+//!     reaches -- and asserts the two agree. A suite that only exercised the
+//!     new path would agree with itself.
 //!   * **the bound actually binds.** Agreement says nothing about cost, so the
 //!     counting tests below read `commit(s) scanned` back out of the command
 //!     and pin how it moves as history grows.
+//!
+//! **What the differential does NOT cover, stated so it is not mistaken for
+//! more.** Both walks consume the same `git log` stream in the same order,
+//! sharing the ref set, the format string and the record parser; only the read
+//! path and the stop rule differ. So this catches framing bugs and stop-rule
+//! bugs, and by construction cannot catch a wrong format, a wrong ref set, a
+//! wrong ordering flag, or a parser bug -- the two agree on the same wrong
+//! answer. The live instance of that is committer-date skew between two
+//! declarations that are neither ancestor nor descendant: it changes the
+//! folded state and no differential test can see it. That needs a
+//! graph-ordered oracle, which is a different mechanism.
 
 #![cfg(feature = "next")]
 
@@ -44,6 +55,33 @@ fn ok(dir: &Path, args: &[&str]) -> String {
     let (success, stdout, stderr) = planr(dir, args);
     assert!(success, "planr {args:?} failed:\n{stderr}");
     stdout
+}
+
+fn refused(dir: &Path, args: &[&str]) -> String {
+    let (success, stdout, stderr) = planr(dir, args);
+    assert!(
+        !success,
+        "planr {args:?} should have been refused but succeeded:\n{stdout}"
+    );
+    stderr
+}
+
+/// The unbounded oracle. Not a CLI mode -- an env-gated seam, because the
+/// oracle needs a real repository and the crate has no library target.
+fn oracle(dir: &Path, slug: &str) -> String {
+    let out = Command::cargo_bin("planr")
+        .unwrap()
+        .args(["next", "state", slug])
+        .env("PLANR_NEXT_ORACLE", "1")
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "the oracle failed for '{slug}':\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).to_string()
 }
 
 fn setup(dir: &Path) {
@@ -90,12 +128,13 @@ fn scanned(out: &str) -> usize {
         .unwrap_or_else(|| panic!("cannot read commits scanned from: {line}"))
 }
 
-/// THE ORACLE. Fold the ticket bounded and unbounded, and require the same
-/// state from both. Returns the state, so a scenario reads as a walkthrough
-/// and every step is differentially checked on the way past.
+/// Fold the ticket bounded and unbounded, and require the same state from
+/// both. Returns the state, so a scenario reads as a walkthrough and every
+/// step is differentially checked on the way past. See the module header for
+/// the limits of what this can detect.
 fn agree(dir: &Path, slug: &str) -> String {
     let bounded = ok(dir, &["next", "state", slug]);
-    let whole = ok(dir, &["next", "state", slug, "--unbounded"]);
+    let whole = oracle(dir, slug);
     assert_eq!(
         state_line(&bounded),
         state_line(&whole),
@@ -192,6 +231,10 @@ fn bounded_and_unbounded_agree_across_a_whole_lifecycle() {
     noise(dir, "post", 3);
     assert_eq!(agree(dir, "loader"), "loader: done");
 
+    // ...and the slug stays taken. Re-creating it is what makes the archived
+    // ticket's events attach to a new one; see the dedicated test below.
+    refused(dir, &["next", "new", "task", "loader", "Loader again"]);
+
     // The container, still never having moved, after all of that history.
     assert_eq!(agree(dir, "platform"), "platform: todo");
     ok(dir, &["next", "do", "abandon", "platform", "superseded"]);
@@ -229,6 +272,87 @@ fn a_verb_outside_this_kinds_machine_does_not_terminate_the_walk() {
     assert_eq!(agree(dir, "platform"), "platform: done");
 }
 
+#[test]
+fn a_slug_is_never_reused_after_archival() {
+    // The history that breaks the floor, and it needed no hand-written commit:
+    // archive a ticket and create the slug again, and one identifier names two
+    // tickets. The bounded walk then stops at the newer `new` and the
+    // unbounded one folds the dead ticket's events, so `state` said `todo`
+    // while `board` said `abandoned` about the same live ticket -- and every
+    // `from` gate reads the bounded answer, so a terminal ticket could be
+    // re-entered.
+    //
+    // The defect is the identity, not the floor. The slug-to-path mapping is
+    // one-to-one and permanent, so `new` refuses a slug that has EVER existed
+    // rather than one that exists now. That makes `docs/semantics.md` section
+    // 6 assumption 3 -- a ticket's events all descend from its creation commit
+    // -- true rather than assumed.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+
+    ok(dir, &["next", "new", "task", "foo", "Foo"]);
+    ok(dir, &["next", "do", "abandon", "foo", "not doing it"]);
+    ok(dir, &["next", "do", "archive", "foo", ""]);
+    assert!(
+        show(dir, "main:.plan/tickets/foo.md").is_empty(),
+        "archive did not remove the ticket from trunk"
+    );
+
+    let err = refused(dir, &["next", "new", "task", "foo", "Foo again"]);
+    // The refusal has to say what happened, not merely refuse: the slug, that
+    // it was used, and where it went.
+    assert!(err.contains("foo"), "{err}");
+    assert!(err.contains("has been used"), "{err}");
+    assert!(
+        err.contains("archive foo"),
+        "the refusal should name the archival commit: {err}"
+    );
+
+    // A different slug is unaffected -- the rule is about identity, not about
+    // archival poisoning the backlog.
+    ok(dir, &["next", "new", "task", "foo-2", "Foo again"]);
+    assert_eq!(agree(dir, "foo-2"), "foo-2: todo");
+    assert_eq!(agree(dir, "foo"), "foo: abandoned");
+}
+
+#[test]
+fn a_schema_cannot_declare_a_verb_named_new() {
+    // `new` is the floor of every bounded walk, so a verb of that name ends
+    // each walk at itself -- silently, since the runner reads a verb's before
+    // and after states through that same walk. Rejected at load, which means
+    // every command fails rather than one misbehaving.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup_with(
+        dir,
+        "kinds: [task]\nverbs:\n  - name: new\n    applies-to: [task]\n    to: todo\n",
+    );
+
+    let err = refused(dir, &["next", "board"]);
+    assert!(err.contains("reserved"), "unhelpful refusal: {err}");
+}
+
+fn setup_with(dir: &Path, schema: &str) {
+    git(dir, &["init", "-b", "main", "."]);
+    git(dir, &["config", "user.email", "e2e@test"]);
+    git(dir, &["config", "user.name", "E2E Test"]);
+    std::fs::create_dir_all(dir.join(".plan/tickets")).unwrap();
+    std::fs::write(dir.join(".plan/schema.yml"), schema).unwrap();
+    std::fs::write(dir.join(".plan/tickets/.gitkeep"), "").unwrap();
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-m", "seed"]);
+}
+
+fn show(dir: &Path, spec: &str) -> String {
+    let out = Command::new("git")
+        .args(["show", spec])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
 /// Two repositories differing only in how much unrelated history precedes the
 /// ticket's last transition.
 fn repo_with_history(dir: &Path, commits: usize) {
@@ -264,8 +388,8 @@ fn the_bound_does_not_grow_with_history_before_the_last_transition() {
 
     // ...and the unbounded oracle grows by exactly the added history, which is
     // what makes the comparison above mean anything.
-    let su = ok(small.path(), &["next", "state", "platform", "--unbounded"]);
-    let lu = ok(large.path(), &["next", "state", "platform", "--unbounded"]);
+    let su = oracle(small.path(), "platform");
+    let lu = oracle(large.path(), "platform");
     assert_eq!(
         scanned(&lu) - scanned(&su),
         30,
@@ -314,7 +438,7 @@ fn the_creation_commit_is_the_floor() {
         5,
         "the walk should stop at creation, having read only what follows it:\n{out}"
     );
-    let whole = ok(dir, &["next", "state", "late", "--unbounded"]);
+    let whole = oracle(dir, "late");
     assert!(
         scanned(&whole) > 30,
         "the oracle should still be reading the whole history:\n{whole}"

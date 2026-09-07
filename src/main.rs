@@ -180,15 +180,7 @@ enum NextCommand {
         parent: Option<String>,
     },
     /// Fold a ticket's state from its commit events
-    State {
-        slug: String,
-        /// Walk the whole history instead of stopping at the last transition.
-        //  Hidden: this is the differential oracle for the bounded walk, kept
-        //  reachable from a real repository because the two must always fold
-        //  to the same state. It is a diagnostic, not a mode anyone wants.
-        #[arg(long, hide = true)]
-        unbounded: bool,
-    },
+    State { slug: String },
     /// Render each kind's derived lifecycle
     Lifecycle { kind: Option<String> },
     /// List every live ticket with its folded state
@@ -220,7 +212,7 @@ fn main() {
                     title,
                     parent,
                 } => next::new_ticket(&ctx, &kind, &slug, &title, parent.as_deref()),
-                NextCommand::State { slug, unbounded } => next::cmd_state(&ctx, &slug, !unbounded),
+                NextCommand::State { slug } => next::cmd_state(&ctx, &slug),
                 NextCommand::Lifecycle { kind } => next::cmd_lifecycle(&ctx, kind.as_deref()),
                 NextCommand::Board => next::cmd_board(&ctx),
                 NextCommand::Do {

@@ -111,6 +111,8 @@ fn terminator<'a>(schema: &'a Schema, kind: &'a str) -> impl Fn(&str) -> bool + 
 ///
 /// `bounded` is false only for the differential oracle: the unbounded walk is
 /// kept reachable so the bound can be checked against it rather than trusted.
+/// It covers framing and the stop rule and nothing else -- see
+/// [`events::for_ticket_unbounded`] for what it cannot see.
 pub fn state_of(ctx: &Ctx, slug: &str, bounded: bool) -> Result<(String, events::Walk), String> {
     let ticket = read_ticket_or_archived(ctx, slug)?;
     let walk = if bounded {

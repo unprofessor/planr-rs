@@ -209,6 +209,43 @@ pub fn log_raw(args: &[&str]) -> Result<String, String> {
     run(&full)
 }
 
+/// The newest commit in `range` that touched `path` the way `filter` names --
+/// `"A"` for added, `"D"` for deleted -- as `(short sha, subject)`.
+///
+/// The counterpart to the trailer walk, and the reason both exist. Trailer
+/// scanning has to load and parse every commit object because a declaration
+/// may touch no path at all. THIS question is path-shaped, so git answers it
+/// with its changed-path filters and skips most object loads: it is the right
+/// tool for the two questions that really are about files -- has this slug
+/// ever existed, and where did an archived ticket live.
+pub fn last_touch(
+    range: &str,
+    path: &str,
+    filter: &str,
+) -> Result<Option<(String, String)>, String> {
+    let out = run(&[
+        "log",
+        "-1",
+        "--format=%h%x1f%s",
+        &format!("--diff-filter={filter}"),
+        range,
+        "--",
+        path,
+    ])?;
+    let line = out.trim();
+    if line.is_empty() {
+        return Ok(None);
+    }
+    let mut fields = line.split('\x1f');
+    let (Some(commit), Some(subject)) = (fields.next(), fields.next()) else {
+        return Ok(None);
+    };
+    Ok(Some((
+        commit.trim().to_string(),
+        subject.trim().to_string(),
+    )))
+}
+
 /// Hand every WHOLE record in `pending` to `on_record`, leaving the partial
 /// tail behind for the next read to complete. Returns how many records were
 /// consumed and whether the caller asked to stop.
@@ -261,9 +298,6 @@ pub fn log_streaming(
     use std::io::Read;
     use std::process::Stdio;
 
-    // stderr is piped but not read until the end, which is safe only because
-    // `git log` writes at most a fatal and a usage blurb there -- well under a
-    // pipe buffer. A command with chatty stderr would need both drained.
     let mut child = Command::new("git")
         .arg("log")
         .args(args)
@@ -271,6 +305,19 @@ pub fn log_streaming(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("git command failed: {e}"))?;
+
+    // Both pipes are drained concurrently. Only stdout is read in this thread,
+    // so stderr left until the end would deadlock the pair as soon as a
+    // command filled its ~64KB buffer while we were still reading stdout --
+    // git blocked on the write, us blocked on the read. `git log` is not
+    // chatty enough to reach that today, which is exactly why the guard has to
+    // be structural: the next caller of this primitive will not check.
+    let mut errors = child.stderr.take().ok_or("cannot read git stderr")?;
+    let draining = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = errors.read_to_end(&mut buf);
+        buf
+    });
 
     let mut stdout = child.stdout.take().ok_or("cannot read git stdout")?;
     let mut chunk = [0u8; 32 * 1024];
@@ -285,6 +332,7 @@ pub fn log_streaming(
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = draining.join();
                 return Err(format!("cannot read git output: {e}"));
             }
         };
@@ -310,6 +358,7 @@ pub fn log_streaming(
         // at all, so it cannot reach this branch; it is caught below.
         let _ = child.kill();
         let _ = child.wait();
+        let _ = draining.join();
         return Ok(consumed);
     }
 
@@ -323,14 +372,14 @@ pub fn log_streaming(
         }
     }
 
-    // stdout was taken above, so this collects stderr and reaps the child.
-    let out = child
-        .wait_with_output()
+    let status = child
+        .wait()
         .map_err(|e| format!("git command failed: {e}"))?;
-    if out.status.success() {
+    let errors = draining.join().unwrap_or_default();
+    if status.success() {
         Ok(consumed)
     } else {
-        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stderr = String::from_utf8_lossy(&errors);
         Err(stderr
             .lines()
             .rfind(|l| !l.trim().is_empty())

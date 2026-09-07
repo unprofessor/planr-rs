@@ -18,6 +18,26 @@
   a 2000-commit history whose ticket last moved at the tip, it reads 1 commit
   instead of 2003.
 
+- **`planr next new` refuses a slug that has ever been used**, not merely one
+  that exists now. A ticket's file path is its primary key and the slug maps to
+  it one-to-one and permanently: archival deletes the file but does not release
+  the name. Reusing one made a single identifier name two tickets, so the new
+  ticket folded the archived one's events -- `next board` reported a ticket
+  created seconds earlier as `abandoned` while `next state` reported it as
+  `todo`, and every verb's `from` gate reads the second answer, so a terminal
+  ticket could be re-entered. The refusal names the commit that created the
+  slug and the commit that removed it. The check is one path-limited log, so it
+  gets git's changed-path filters where a commit-graph exists, and it costs
+  `new` rather than every read.
+
+- **A schema may not declare a verb named `new`.** Creation is fixed tooling
+  rather than a verb, and it writes `Planr-Verb: new` -- the record a bounded
+  state read stops at, and the only floor a ticket that has never transitioned
+  has. A verb of that name ended every walk at itself, silently: the runner
+  reads a verb's before and after states through that same walk, so even a
+  stateless verb reported itself as a transition to the initial state. Rejected
+  at load by `planr` and by the published JSON Schema alike.
+
 - **Published schema for the typed-graph model**, identified by its canonical URL
   `https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json` and kept
   in-tree at the matching path so validation never needs the network.

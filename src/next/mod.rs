@@ -38,6 +38,7 @@ pub fn new_ticket(
     if plumbing::show(&ctx.trunk, &path).is_ok() {
         return Err(format!("ticket '{slug}' already exists"));
     }
+    reserve_slug(ctx, slug, &path)?;
 
     let mut fm = format!("kind: {kind}\ntitle: \"{}\"", title.replace('"', "'"));
     if let Some(p) = parent {
@@ -70,13 +71,62 @@ pub fn new_ticket(
     ))
 }
 
+/// Refuse a slug that has EVER named a ticket, not merely one that names one
+/// now.
+///
+/// The ticket's file path is the primary key, and the mapping from slug to
+/// path is one-to-one and permanent. Archival deletes the file; it does not
+/// release the name. `Planr-Ticket: <slug>` is the identity every event is
+/// attributed by, so a reused slug makes one identifier name two tickets, and
+/// the whole event model comes apart: a re-created ticket folded its dead
+/// predecessor's events, `board` reported a ticket seconds old as `abandoned`,
+/// and a bounded read and an unbounded one disagreed about the same ticket
+/// because they stopped at different `new` commits. It also falsifies
+/// `docs/semantics.md` section 6 assumption 3 -- that a ticket's events all
+/// descend from its creation commit -- which is what makes that commit a valid
+/// floor for the backwards walk. Enforcing uniqueness here is what makes the
+/// assumption true rather than hoped for.
+///
+/// This is the one question in the model that is genuinely path-shaped, so it
+/// is the one place git's changed-path filters apply: the walk is
+/// `--diff-filter` over a single path, not a trailer scan. The cost lands on
+/// `new`, once per ticket, instead of on every state read.
+fn reserve_slug(ctx: &Ctx, slug: &str, path: &str) -> Result<(), String> {
+    let Some((created, _)) = plumbing::last_touch(&ctx.trunk, path, "A")? else {
+        return Ok(());
+    };
+    let removed = plumbing::last_touch(&ctx.trunk, path, "D")?;
+    let fate = match removed {
+        Some((commit, subject)) => format!("removed at {commit} ({subject})"),
+        // Added and now absent, with no deletion on this ref: the file left
+        // trunk some way archival did not, so name what is known and no more.
+        None => format!("and {} no longer carries it", ctx.trunk),
+    };
+    Err(format!(
+        "slug '{slug}' has been used: created at {created}, {fate}\n\
+         a slug is a ticket's identity in the event log, and archiving does not release it -- \
+         a new ticket here would fold the archived one's events into its own state. Choose another slug."
+    ))
+}
+
+/// The test seam for the differential oracle, and deliberately not a flag.
+///
+/// The oracle has to run against a real repository, and this crate is a binary
+/// with no library target, so the only way in is the process. An env var keeps
+/// it out of the CLI surface: there is one state-read mode, `planr next state`
+/// has one documented behaviour, and nothing here is reachable by a user who
+/// has not gone looking for it. See [`verb::state_of`] for what the oracle is
+/// worth -- it is narrower than it looks.
+const ORACLE_ENV: &str = "PLANR_NEXT_ORACLE";
+
 /// Fold one ticket's state, reporting what the walk cost.
 ///
 /// Commits scanned is the number the bound exists to hold down, so it is
 /// printed rather than asserted: it is `R` in the cost table -- commits since
 /// the ticket last moved -- and no longer the length of history. Events folded
 /// is what survived the backwards scan, not the ticket's whole life.
-pub fn cmd_state(ctx: &Ctx, slug: &str, bounded: bool) -> Result<String, String> {
+pub fn cmd_state(ctx: &Ctx, slug: &str) -> Result<String, String> {
+    let bounded = std::env::var_os(ORACLE_ENV).is_none();
     let (state, walk) = verb::state_of(ctx, slug, bounded)?;
     Ok(format!(
         "{slug}: {state}\n  {} commit(s) scanned, {} event(s) folded -- {}",
