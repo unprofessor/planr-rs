@@ -693,13 +693,30 @@ mod streaming {
         if !in_a_repository() {
             return;
         }
+        // Reads THIS repository, so the expectation has to come from it rather
+        // than be hardcoded: a shallow checkout has as little as one commit,
+        // and asserting a fixed count made the test pass locally and fail on
+        // CI, which clones with `fetch-depth: 1` by default. Count first, then
+        // stop one short of the end -- that is what proves the walk was cut
+        // rather than merely finished.
+        let args = ["--format=%H\x1e", "HEAD"];
+        let available = log_streaming(&args, b'\x1e', |_| true).unwrap();
+        if available < 2 {
+            return;
+        }
+        let stop_at = available - 1;
+
         let mut seen = 0;
-        let n = log_streaming(&["--format=%H\x1e", "HEAD"], b'\x1e', |_| {
+        let n = log_streaming(&args, b'\x1e', |_| {
             seen += 1;
-            seen < 3
+            seen < stop_at
         })
         .unwrap();
-        assert_eq!((n, seen), (3, 3));
+        assert_eq!((n, seen), (stop_at, stop_at));
+        assert!(
+            n < available,
+            "the walk read everything instead of stopping"
+        );
     }
 
     #[test]
