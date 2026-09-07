@@ -2,6 +2,8 @@
 //!
 //! These functions are the direct port of `skills/planr/src/parse.ts`.
 
+use std::sync::LazyLock;
+
 use regex::Regex;
 use serde_yaml::Value;
 
@@ -78,36 +80,156 @@ pub fn parse_frontmatter(fm: &str) -> Result<Option<Value>, String> {
 // Wiki-link extraction
 // ---------------------------------------------------------------------------
 
-/// Extract wiki-links from body text. Matches `[[slug]]`, `[[slug|alias]]`,
-/// and `[[slug#heading]]` -- stripping alias/heading, skipping fenced code
-/// blocks, and deduplicating results.
+/// Fenced code blocks (both backtick and tilde).
+static FENCE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"```[\s\S]*?```|~~~[\s\S]*?~~~").unwrap());
+
+/// Byte ranges of every code span in `body` -- fenced blocks and inline spans.
 ///
-/// Regex breakdown:
-///   \[\[           literal [[
-///   ([^\]|#]+)    capture group 1: slug (no ], |, or #)
-///   (?:#[^\]]*)?  optional #heading (non-capturing)
-///   (?:\|[^\]]*)? optional |alias  (non-capturing)
-///   \]\]           literal ]]
-pub fn extract_wiki_links(body: &str) -> Vec<String> {
-    // Remove fenced code blocks before scanning (both backtick and tilde)
-    let re_fence = Regex::new(r"```[\s\S]*?```|~~~[\s\S]*?~~~").unwrap();
-    let without_fences = re_fence.replace_all(body, "").to_string();
+/// A `[[slug]]` inside code is a piece of writing about the link syntax, not a
+/// link, and the backlog is full of tickets that say so: the parser's own
+/// ticket documents `` `[[a|label]]` `` as a case to handle. Reading those as
+/// references makes `lint` report dangling links that no author wrote, and
+/// makes a renderer rewrite the sample it was quoting.
+///
+/// Inline spans follow the CommonMark rule -- a run of N backticks closes on
+/// the next run of exactly N -- which is why this is a scan and not another
+/// regex: the crate has no backreferences to match a run against itself.
+fn code_spans(body: &str) -> Vec<std::ops::Range<usize>> {
+    let mut spans: Vec<std::ops::Range<usize>> =
+        FENCE_RE.find_iter(body).map(|m| m.range()).collect();
 
-    let link_re = Regex::new(r"\[\[([^\]|#]+)(?:#[^\]]*)?(?:\|[^\]]*)?\]\]").unwrap();
-
-    let mut seen = std::collections::HashSet::new();
-    let mut result = Vec::new();
-
-    for cap in link_re.captures_iter(&without_fences) {
-        if let Some(slug_match) = cap.get(1) {
-            let slug = slug_match.as_str().to_string();
-            if seen.insert(slug.clone()) {
-                result.push(slug);
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // A fence is already accounted for; step over it whole so its
+        // contents cannot open an inline span.
+        if let Some(f) = spans.iter().find(|f| f.start == i) {
+            i = f.end;
+            continue;
+        }
+        if bytes[i] != b'`' {
+            i += 1;
+            continue;
+        }
+        let open = run_len(bytes, i);
+        match close_at(bytes, i + open, open) {
+            Some(close) => {
+                spans.push(i..close + open);
+                i = close + open;
             }
+            // An unmatched run is literal backticks. Step past the run rather
+            // than one byte, or the next iteration re-opens on its tail.
+            None => i += open,
         }
     }
+    spans
+}
 
-    result
+/// Length of the backtick run starting at `at`.
+fn run_len(bytes: &[u8], at: usize) -> usize {
+    let mut n = 0;
+    while at + n < bytes.len() && bytes[at + n] == b'`' {
+        n += 1;
+    }
+    n
+}
+
+/// Where a run of exactly `want` backticks starts, at or after `from`.
+fn close_at(bytes: &[u8], from: usize, want: usize) -> Option<usize> {
+    let mut i = from;
+    while i < bytes.len() {
+        if bytes[i] != b'`' {
+            i += 1;
+            continue;
+        }
+        let n = run_len(bytes, i);
+        if n == want {
+            return Some(i);
+        }
+        i += n;
+    }
+    None
+}
+
+/// A wiki-link, in the shape the body writes it.
+///
+/// Regex breakdown:
+///   \[\[            literal [[
+///   ([^\]|#]+)     capture group 1: slug (no ], |, or #)
+///   (?:#([^\]|]*))? optional #heading, captured
+///   (?:\|([^\]]*))? optional |alias, captured
+///   \]\]            literal ]]
+///
+/// The heading capture stops at `|` where the slug-only version ran to `]`.
+/// Both accept the same strings and read the same slug out of them; only the
+/// split between heading and alias differs, which nothing looked at before.
+static LINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[\[([^\]|#]+)(?:#([^\]|]*))?(?:\|([^\]]*))?\]\]").unwrap());
+
+/// One wiki-link found in a body.
+///
+/// Only `slug` has a reader without the `serve` feature -- `extract_wiki_links`
+/// throws the rest away -- so the position and label are dead code in a
+/// `--no-default-features` build and live code in every other.
+#[cfg_attr(not(feature = "serve"), allow(dead_code))]
+pub struct WikiLink {
+    /// Byte range of the whole `[[...]]` in the body it was found in.
+    pub range: std::ops::Range<usize>,
+    /// The slug it points at, with any heading and alias stripped.
+    pub slug: String,
+    /// What to show for it: the alias when it carries one, otherwise the
+    /// slug with its heading still attached.
+    pub label: String,
+}
+
+/// Every wiki-link in `body`, in the order they appear and including repeats.
+///
+/// The single scan behind both [`extract_wiki_links`] and anything that
+/// rewrites links in place. A second scanner would eventually disagree with
+/// this one about which links are real -- lint would report a dangling link
+/// that the rendered page shows as live, or the reverse -- and the reader has
+/// no way to tell which of the two is wrong. Do not add one.
+///
+/// Code is skipped by range rather than by deleting it, because a caller
+/// replacing a link needs the offset it has in the original body.
+pub fn wiki_links(body: &str) -> Vec<WikiLink> {
+    let code = code_spans(body);
+    let in_code = |at: usize| code.iter().any(|f| f.contains(&at));
+
+    let mut out = Vec::new();
+    for cap in LINK_RE.captures_iter(body) {
+        // The whole match and group 1 are always present when the pattern
+        // matched, so neither `get` can be None here.
+        let whole = cap.get(0).unwrap();
+        if in_code(whole.start()) {
+            continue;
+        }
+        let slug = cap.get(1).unwrap().as_str().to_string();
+        let label = match cap.get(3) {
+            Some(alias) => alias.as_str().to_string(),
+            None => match cap.get(2) {
+                Some(heading) => format!("{slug}#{}", heading.as_str()),
+                None => slug.clone(),
+            },
+        };
+        out.push(WikiLink {
+            range: whole.range(),
+            slug,
+            label,
+        });
+    }
+    out
+}
+
+/// The distinct slugs [`wiki_links`] found, in first-seen order.
+pub fn extract_wiki_links(body: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    wiki_links(body)
+        .into_iter()
+        .map(|l| l.slug)
+        .filter(|slug| seen.insert(slug.clone()))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +455,59 @@ title: The shadow remote: git-native sync
         let body = "~~~\n[[inside]]\n~~~\n[[outside]]";
         let links = extract_wiki_links(body);
         assert_eq!(links, vec!["outside"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // wiki_links -- ranges and labels
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_wiki_links_range_indexes_the_original_body() {
+        // The range has to address the body as given, fences and all -- a
+        // caller replacing a link seeks with it.
+        let body = "```\n[[inside]]\n```\nsee [[outside]] here";
+        let links = wiki_links(body);
+        assert_eq!(links.len(), 1);
+        assert_eq!(&body[links[0].range.clone()], "[[outside]]");
+    }
+
+    #[test]
+    fn test_wiki_links_labels() {
+        let body = "[[plain]] [[slug|Alias]] [[slug#heading]] [[slug#heading|Alias]]";
+        let labels: Vec<String> = wiki_links(body).into_iter().map(|l| l.label).collect();
+        assert_eq!(labels, vec!["plain", "Alias", "slug#heading", "Alias"]);
+    }
+
+    #[test]
+    fn test_wiki_links_skip_inline_code() {
+        // The parser's own ticket writes `[[a|label]]` in backticks as a case
+        // to handle. Reading that as a reference invents a dangling link.
+        let body = "handle `[[a|label]]` and `[[b#heading]]`, but [[real]] counts";
+        assert_eq!(extract_wiki_links(body), vec!["real"]);
+    }
+
+    #[test]
+    fn test_wiki_links_inline_code_run_must_match() {
+        // A run of two closes on a run of two, not on the single backtick
+        // inside it.
+        let body = "``a ` [[hidden]] b`` then [[shown]]";
+        assert_eq!(extract_wiki_links(body), vec!["shown"]);
+    }
+
+    #[test]
+    fn test_wiki_links_unmatched_backtick_is_literal() {
+        // One stray backtick opens nothing, so the link after it is real.
+        let body = "a ` stray tick and [[still-a-link]]";
+        assert_eq!(extract_wiki_links(body), vec!["still-a-link"]);
+    }
+
+    #[test]
+    fn test_wiki_links_keeps_repeats() {
+        // extract_wiki_links dedupes; the scan under it must not, or a body
+        // with the same link twice loses the second one's position.
+        let body = "[[a]] then [[a]]";
+        assert_eq!(wiki_links(body).len(), 2);
+        assert_eq!(extract_wiki_links(body), vec!["a"]);
     }
 
     // -----------------------------------------------------------------------

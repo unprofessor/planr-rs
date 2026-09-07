@@ -26,7 +26,7 @@ pub enum BranchRead {
 
 impl BranchRead {
     /// The status the branch reports for the task, if it reports one.
-    fn status(&self) -> Option<&str> {
+    pub(crate) fn status(&self) -> Option<&str> {
         match self {
             BranchRead::Status(s) => Some(s.as_str()),
             BranchRead::NoTaskFile | BranchRead::Unreadable => None,
@@ -35,7 +35,7 @@ impl BranchRead {
 
     /// How the in-flight table renders it. That table describes branches, so
     /// a stand-in belongs there; no ticket table may use this.
-    fn display(&self) -> &str {
+    pub(crate) fn display(&self) -> &str {
         match self {
             BranchRead::Status(s) => s.as_str(),
             BranchRead::NoTaskFile => "(no task file)",
@@ -115,7 +115,9 @@ fn contributes_status(t: &ParsedTicket) -> bool {
 /// broken duplicate overwrite a finished ticket's `done`. Unknown is the
 /// honest answer, and `blocked_by` already treats an unknown dependency as
 /// unmet.
-fn trunk_status_map(tickets: &[ParsedTicket]) -> std::collections::HashMap<String, String> {
+pub(crate) fn trunk_status_map(
+    tickets: &[ParsedTicket],
+) -> std::collections::HashMap<String, String> {
     let mut m: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut contested: std::collections::HashSet<String> = std::collections::HashSet::new();
     for t in tickets.iter().filter(|t| contributes_status(t)) {
@@ -130,7 +132,7 @@ fn trunk_status_map(tickets: &[ParsedTicket]) -> std::collections::HashMap<Strin
 }
 
 /// Compute BLOCKED-BY for a task: slugs of unmet depends_on.
-fn blocked_by(
+pub(crate) fn blocked_by(
     task: &ParsedTicket,
     status_map: &std::collections::HashMap<String, String>,
 ) -> String {
@@ -161,7 +163,7 @@ const IN_FLIGHT_MARKER: &str = " *";
 /// would misreport active work as unstarted; substituting the branch value
 /// silently would misreport a branch-local edit as committed. Show the branch
 /// value and mark it.
-fn task_status_display(
+pub(crate) fn task_status_display(
     task: &ParsedTicket,
     in_flight: &std::collections::HashMap<&str, &str>,
 ) -> (String, bool) {
