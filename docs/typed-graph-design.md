@@ -1884,22 +1884,19 @@ seam:
 
 | operation | touches a path? | uses git's index? |
 | --- | --- | --- |
-| find a ticket's creation (the anchor) | yes -- `new` writes the file | **yes** |
-| find archived tickets (`--diff-filter=D`) | yes -- `archive` deletes it | **yes** |
+| find an archived ticket's last commit | yes -- `archive` deletes the file | **yes** |
 | has this slug ever existed | **no** -- see below | no; trailers |
 | enumerate a ticket's events | no -- declarations may be empty | no; trailers |
 
-Measured over 2022 commits, an anchor lookup costs 17ms with no commit-graph,
-12ms with one, and 5ms with `--changed-paths`. The trailer walk sits at 16ms and
-is unmovable. The cold-ticket scan in
-[The derived index](#51-the-derived-index) already relies on this. So the
-empty-declaration decision costs the index only where it was never going to
-help, and the alternative that would recover it -- making every declaration
-touch a path -- buys the index back at the price of a transcript accumulating in
-the ticket file and textual conflicts between declarations that today never
-conflict.
+The cold-ticket scan in [The derived index](#51-the-derived-index) relies on the
+first row, and `verb.rs`'s archived-ticket lookup is the only path-limited query
+left in the engine. So the empty-declaration decision costs the index only where
+it was never going to help, and the alternative that would recover it -- making
+every declaration touch a path -- buys the index back at the price of a
+transcript accumulating in the ticket file and textual conflicts between
+declarations that today never conflict.
 
-**The third row moved sides, and the move was free.** Slug uniqueness was first
+**Slug uniqueness moved off the path side, and it cost something.** It was first
 enforced path-shaped, by asking whether the ticket's file had ever been added.
 That is a *different question wearing the same clothes* as the one the fold
 asks, and every gap between the two was a way to reuse a slug whose events
@@ -1911,33 +1908,74 @@ now keyed on the trailer stream -- has any commit declared `Planr-Verb: new`
 with this `Planr-Ticket` -- which is the question the fold asks and therefore
 cannot drift from it.
 
-Giving up the Bloom filters was supposed to be the price. It was not. Measured
-on the same shape:
+Giving up the Bloom filters is a real cost, and an earlier draft of this section
+claimed otherwise on the strength of a bad measurement -- timing the whole `new`
+command, which spawns seven gits and is dominated by start-up, rather than the
+check. Measured in isolation, best of seven:
 
-| history | path-keyed miss / hit | trailer-keyed miss / hit |
+| the check alone | 500 commits | 2000 commits |
 | --- | --- | --- |
-| 500 commits, no commit-graph | 22ms / 6ms | 20ms / 24ms |
-| 2000 commits, no commit-graph | **97ms** / 4ms | **20ms** / 22ms |
-| 2000 commits, `--changed-paths` | 4ms / 8ms | 26ms / 18ms |
+| trailer walk, no commit-graph | 10-12ms | **29-36ms** |
+| trailer walk, `--changed-paths` | 9-13ms | 28-34ms |
+| path-keyed miss, no commit-graph | 17ms | 59ms |
+| path-keyed miss, `--changed-paths` | 3ms | **3ms** |
 
-The path-keyed check inverted the usual cost shape -- the *miss* was expensive,
-because proving a slug has never existed means reaching the root, and without
-Bloom filters that meant diffing every commit against a path. Reading commit
-messages instead is flat at roughly 20ms and indifferent to the commit-graph,
-so the common case (a fresh slug) got five times faster while the rare case (a
-collision) went from 4ms to 22ms. Both are dominated by process start-up. The
-index acceleration we gave up only ever helped the case that was already cheap.
+Reference points on the same machine: planr start-up with no git spawn is 4ms,
+one bare `git rev-parse HEAD` is 3ms, and `git log --format=%H` over the same
+2000 commits is 5ms.
+
+Three things follow, and the third is the one that matters.
+
+- **The walk is O(C) with a small constant, not flat.** 10ms to 29ms for four
+  times the history. The 5ms figure for `--format=%H` over the same range locates
+  the cost precisely: roughly 26 of the 31ms is `%(trailers:...)` forcing every
+  commit message to be loaded and parsed. That is the walk, not the spawn.
+- **The early stop works, so the hit case is a range rather than a number.** An
+  archived slug costs 10ms or 40ms at 2000 commits depending only on how far back
+  its genesis sits. A *live* collision never reaches the trailer walk at all --
+  the tree read short-circuits it in 5-6ms.
+- **On a repository with a commit-graph this is a regression we accepted.** The
+  path-keyed miss was 3ms and unaffected by history size; the trailer walk is
+  29ms and unaccelerable, because changed-path filters answer questions about
+  paths and this is a question about commit messages. The miss is the common
+  case, so the common case got roughly ten times slower there. Without a
+  commit-graph it is the other way around -- 59ms to 29ms, about twice as fast --
+  but that is the configuration nobody optimizes for.
+
+The honest summary is that the check costs a full trailer walk, once per ticket,
+and unlike the path-keyed check that cost cannot be accelerated. We took the
+trade for an identity check that cannot drift from the fold, and the correctness
+argument stands on its own; the performance argument does not support it and
+should not be made. At 2000 commits `new` takes 61-78ms end to end, of which
+about 31ms is this walk. That is fine now and will not be at 50k, and the
+mitigation the path-keyed design pointed at -- write a commit-graph -- no longer
+applies.
 
 The cost lands on `new`, once per ticket, and never on a read.
 
-What no in-repo check can cover is a second lineage: two clones each create the
-same slug, neither can consult a history that does not exist yet, and the merge
-is *clean* -- because archival deleted the file on one side, so a deletion and
-an addition do not conflict. Two `Planr-Verb: new` records then coexist,
-permanently and mutually non-ancestral. That needs a check at integration
-rather than at creation, and it is the same detector the concurrent-ordering
-problem needs; see [open questions](#8-open-questions). `new` refuses outright
-in a shallow clone rather than issue a reservation it cannot back.
+What no check at creation time can cover is a second lineage: two clones each
+create the same slug, neither can consult a history that does not exist yet, and
+the merge is *clean* -- because archival deleted the file on one side, so a
+deletion and an addition do not conflict. Two `Planr-Verb: new` records then
+coexist, permanently and mutually non-ancestral.
+
+That needs a check at integration, and it should be specified as **exactly one**
+genesis per slug reachable from trunk, not *at most* one. The two failures are
+mirror images and a `> 1` rule walks straight past the second:
+
+| reachable geneses | how it arises | symptom |
+| --- | --- | --- |
+| 2 or more | two lineages each created the slug | the floor is clock-determined |
+| 0, with events present | history grafted or rewritten above the genesis | the slug reads as free |
+
+Both are one question -- *does every event for a slug descend from exactly one
+reachable genesis?* -- and stating it that way makes the integration check
+subsume the creation-time one, which then becomes belt-and-braces rather than
+the only guard. It is also the same detector the concurrent-ordering problem
+needs; see [open questions](#8-open-questions).
+
+`new` refuses outright in a shallow clone rather than issue a reservation it
+cannot back.
 
 #### Archive versus close is a schema choice
 
