@@ -95,6 +95,149 @@ fn create_and_retire(dir: &Path, slug: &str) {
 }
 
 #[test]
+fn a_slug_whose_creation_is_unreachable_is_refused_rather_than_reported_free() {
+    // The gap between the reservation and the fold, one layer down. The fold
+    // reacts to ANY event for a slug; a reservation that reacted only to the
+    // CREATION record drifts from it exactly where a history has been
+    // rewritten above the creation. Grafting the `abandon` commit onto the
+    // root cuts the `new` record out of reachability and leaves every later
+    // trailer in place -- so the slug looked free while the fold still
+    // answered for it, and creating it restored the whole divergence:
+    // `state: todo`, `board: abandoned`, terminal ticket re-enterable.
+    //
+    // `filter-branch` dropping just the creation commit does the same thing.
+    // The walk was already holding the evidence and threw it away.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    create_and_retire(dir, "foo");
+
+    let root = git_out(dir, &["rev-list", "--max-parents=0", "HEAD"])
+        .trim()
+        .to_string();
+    let abandon = git_out(
+        dir,
+        &[
+            "log",
+            "--format=%H",
+            "-1",
+            "--grep=Planr-Verb: abandon",
+            "main",
+        ],
+    )
+    .trim()
+    .to_string();
+    git(dir, &["replace", "--graft", &abandon, &root]);
+
+    assert!(
+        git_out(dir, &["log", "--format=%s", "main"])
+            .lines()
+            .all(|l| l.trim() != "plan: new foo"),
+        "the graft did not cut the creation commit out, so this proves nothing"
+    );
+    assert!(
+        git_out(dir, &["log", "--format=%s", "main"])
+            .lines()
+            .any(|l| l.trim() == "plan: abandon foo"),
+        "the graft cut too much -- the later events must survive"
+    );
+
+    let err = refused(dir, &["next", "new", "task", "foo", "Foo again"]);
+    assert!(
+        err.contains("no reachable creation"),
+        "a severed lineage must not be reported as a free slug: {err}"
+    );
+    // A user seeing this has a broken repository, not a name collision, and
+    // the two refusals must not read alike.
+    assert!(
+        !err.contains("has been used"),
+        "the two refusals should be distinguishable: {err}"
+    );
+    assert!(err.contains("abandon") || err.contains("archive"), "{err}");
+}
+
+#[test]
+fn a_slug_must_be_what_its_own_trailer_reads_back() {
+    // Not an attack -- a trailing space from a shell paste, or an agent
+    // assembling arguments. Git's trailer reader trims and so does the record
+    // parser, so `new task "foo "` wrote `.plan/tickets/foo .md` while
+    // declaring `Planr-Ticket: foo`: two files, one identity. `abandon "foo "`
+    // then reported `todo -> todo` because it could not see its own effect,
+    // `board` printed two rows called `foo`, and the ticket that actually went
+    // terminal was the one nobody had touched.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    ok(dir, &["next", "new", "task", "foo", "Foo"]);
+
+    for bad in [
+        "foo ", " foo", "Foo", "a/b", "", "-foo", "_foo", "foo bar", "foo\t",
+    ] {
+        // `--` so clap reads a leading-dash slug as the argument it is rather
+        // than as an unknown flag; the check under test is planr's, not clap's.
+        let err = refused(dir, &["next", "new", "task", "--", bad, "Bad"]);
+        assert!(
+            err.contains("invalid slug"),
+            "'{bad}' was refused for the wrong reason: {err}"
+        );
+        assert!(
+            err.contains("^[a-z0-9][a-z0-9_-]*$"),
+            "the refusal should name the rule: {err}"
+        );
+    }
+
+    // Nothing was written by any of those: one ticket, one file, one row.
+    let tickets = std::fs::read_dir(dir.join(".plan/tickets"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+        .count();
+    assert_eq!(tickets, 1, "a refused slug left a file behind");
+}
+
+#[test]
+fn every_accepted_slug_survives_its_own_trailer_unchanged() {
+    // The property the pattern stands in for. A slug is the ticket's filename
+    // AND its identity in the event log, so the two have to be the same
+    // string after the trailer has been written and read back -- by git's
+    // reader, which is what planr folds from.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+
+    for slug in [
+        "foo",
+        "foo-bar",
+        "foo_bar",
+        "2fa",
+        "v1-ship-it",
+        "a",
+        "foo--bar",
+        "foo-",
+    ] {
+        ok(dir, &["next", "new", "task", slug, "Accepted"]);
+        let read_back = git_out(
+            dir,
+            &[
+                "log",
+                "-1",
+                "--format=%(trailers:key=Planr-Ticket,valueonly)",
+                "main",
+            ],
+        );
+        assert_eq!(
+            read_back.trim_end_matches('\n'),
+            slug,
+            "'{slug}' does not survive its own Planr-Ticket trailer"
+        );
+        assert!(
+            dir.join(format!(".plan/tickets/{slug}.md")).exists(),
+            "'{slug}' did not land at the path its identity names"
+        );
+    }
+}
+
+#[test]
 fn an_archived_slug_is_not_free() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();

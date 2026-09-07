@@ -219,11 +219,22 @@ pub fn for_ticket_unbounded(slug: &str, kind: &str, trunk: &str) -> Result<Walk,
     })
 }
 
-/// What the event log already knows about a slug: the commit that created it,
-/// and the most recent commit that declared anything about it.
-pub struct Lineage {
-    pub genesis: Event,
-    pub latest: Event,
+/// What the event log knows about a slug.
+///
+/// Three answers, not two. "Created" and "never seen" are the cases anyone
+/// expects; the third is a history in which the slug's events survive and its
+/// creation does not, and collapsing it into "never seen" is what let a
+/// rewritten history hand out a slug that a fold still answers for.
+pub enum Lineage {
+    /// No commit reachable from the rev declares anything about this slug.
+    Unused,
+    /// Created, and whatever was last declared about it.
+    Created { genesis: Event, latest: Event },
+    /// Events exist and no creation record is reachable. A grafted or
+    /// rewritten history, not a name collision -- and NOT the same thing as
+    /// unused: the fold answers for these events, so a ticket created here
+    /// would inherit them.
+    Severed { latest: Event },
 }
 
 /// Has any commit reachable from `rev` created this slug -- and if so, what
@@ -245,7 +256,14 @@ pub struct Lineage {
 ///
 /// Newest-first, so the walk stops at the genesis record it is looking for and
 /// the first record it sees for the slug is the latest declaration.
-pub fn lineage(slug: &str, rev: &str) -> Result<Option<Lineage>, String> {
+///
+/// Every event for the slug counts, not only the genesis: the fold reacts to
+/// ANY event, so a reservation that reacted only to a creation record drifted
+/// from it exactly where a history had been rewritten. `git replace --graft`
+/// over the creation commit, or a `filter-branch` that drops it, leaves the
+/// later trailers reachable and the `new` record not -- and the walk was
+/// already holding the evidence when it threw it away.
+pub fn lineage(slug: &str, rev: &str) -> Result<Lineage, String> {
     let format = format!("--format={}", log_format());
     let mut latest: Option<Event> = None;
     let mut genesis: Option<Event> = None;
@@ -257,19 +275,23 @@ pub fn lineage(slug: &str, rev: &str) -> Result<Option<Lineage>, String> {
         if event.ticket != slug {
             return true;
         }
-        if event.verb == GENESIS {
-            genesis = Some(event.clone());
-        }
         if latest.is_none() {
-            latest = Some(event);
+            latest = Some(event.clone());
         }
-        genesis.is_none()
+        if event.verb == GENESIS {
+            genesis = Some(event);
+            return false; // the oldest record that can matter; stop here
+        }
+        true
     })?;
 
-    Ok(genesis.map(|genesis| Lineage {
-        latest: latest.unwrap_or_else(|| genesis.clone()),
-        genesis,
-    }))
+    // A genesis record is itself an event for the slug, so it sets `latest`
+    // on the way past: no events means no genesis either.
+    Ok(match (latest, genesis) {
+        (None, _) => Lineage::Unused,
+        (Some(latest), None) => Lineage::Severed { latest },
+        (Some(latest), Some(genesis)) => Lineage::Created { genesis, latest },
+    })
 }
 
 fn label(union: bool, bounded: bool) -> &'static str {

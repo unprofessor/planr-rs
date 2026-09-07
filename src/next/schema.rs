@@ -10,6 +10,24 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+/// What a ticket's slug may look like, mirroring `$defs/slug` in the published
+/// schema -- and pinned against that document by a test below, because this is
+/// the third copy of a rule and the other two have drifted before.
+///
+/// The rule the pattern stands in for: **a slug must be exactly what comes
+/// back out of `Planr-Ticket`.** The slug is the ticket's identity in the
+/// event log AND its filename, and git's trailer reader trims, so a slug of
+/// `"foo "` writes `Planr-Ticket: foo` -- one identity for two files, and a
+/// verb run against one of them silently moves the other. Nothing in the
+/// pattern survives trimming or splits a trailer, which is what makes the
+/// round trip hold; the property itself is asserted in `tests/next-identity`
+/// over every accepted shape.
+///
+/// Deliberately NOT 0.3's stricter `^[a-z0-9]+(-[a-z0-9]+)*$`: 0.4's contract
+/// is the published document, and rejecting a slug that document calls valid
+/// would be a new drift rather than a shared rule.
+pub const SLUG_PATTERN: &str = "^[a-z0-9][a-z0-9_-]*$";
+
 /// Which ref a verb's commit is built on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -552,5 +570,23 @@ mod wf {
         assert!(err.contains("reserved"), "unhelpful refusal: {err}");
         // Only the name is disqualifying -- the same verb otherwise loads.
         assert!(Schema::parse(&with_name("spawn")).is_ok());
+    }
+
+    /// The slug rule is written down twice -- here and in the published
+    /// document -- so it is read out of the document rather than restated.
+    /// `tests/schema.rs` validates fixtures against the document and would not
+    /// notice the ENGINE drifting away from it, which is the direction that
+    /// lets planr accept a slug its own schema calls invalid.
+    #[test]
+    fn the_slug_pattern_matches_the_published_schema() {
+        const PUBLISHED: &str = include_str!("../../schemas/planr/v1/1.0.0/planr.schema.json");
+        let doc: serde_json::Value = serde_json::from_str(PUBLISHED).unwrap();
+        let published = doc["$defs"]["slug"]["pattern"]
+            .as_str()
+            .expect("the published schema has no $defs/slug pattern");
+        assert_eq!(
+            published, SLUG_PATTERN,
+            "the engine and the published schema disagree about what a slug is"
+        );
     }
 }

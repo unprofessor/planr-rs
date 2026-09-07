@@ -34,6 +34,7 @@ pub fn new_ticket(
     if !ctx.schema.kinds.iter().any(|k| k.name == kind) {
         return Err(format!("unknown kind '{kind}'"));
     }
+    check_slug(slug)?;
     let path = ctx.ticket_path(slug);
 
     // The base is read FIRST, and everything below is evaluated against it.
@@ -98,6 +99,37 @@ pub fn new_ticket(
     ))
 }
 
+/// A slug has to be exactly what comes back out of its own `Planr-Ticket`
+/// trailer.
+///
+/// That is the invariant; [`schema::SLUG_PATTERN`] is how it is enforced.
+/// Nothing checked this before, and the gap was not exotic -- a trailing space
+/// from a shell paste or an agent assembling arguments is enough. Git's
+/// trailer reader trims, and so does the record parser, so `new task "foo "`
+/// wrote `.plan/tickets/foo .md` while declaring `Planr-Ticket: foo`: two
+/// files, one identity. `abandon "foo "` then reported `todo -> todo` because
+/// it could not see its own effect, `board` printed two rows called `foo`, and
+/// the ticket that actually went terminal was the one nobody had touched.
+///
+/// It also means the reservation cannot be sidestepped by decoration: a slug
+/// that trims to a taken one is rejected here, before the walk that compares
+/// them.
+fn check_slug(slug: &str) -> Result<(), String> {
+    let pattern = regex::Regex::new(schema::SLUG_PATTERN)
+        .map_err(|e| format!("the slug pattern does not compile: {e}"))?;
+    if pattern.is_match(slug) {
+        return Ok(());
+    }
+    Err(format!(
+        "invalid slug '{slug}': must match {} -- lowercase letters, digits, '-' and '_', \
+         starting with a letter or digit\n\
+         the slug is both the ticket's filename and its identity in the event log, and trailers \
+         are trimmed when they are read back, so anything else would name one ticket on disk and \
+         a different one in history",
+        schema::SLUG_PATTERN
+    ))
+}
+
 /// Refuse a slug that has EVER named a ticket, not merely one that names one
 /// now.
 ///
@@ -140,24 +172,38 @@ fn reserve_slug(slug: &str, rev: &str) -> Result<(), String> {
         ));
     }
 
-    let Some(lineage) = events::lineage(slug, rev)? else {
-        return Ok(());
-    };
-    let created = &lineage.genesis.commit[..7];
-    let since = if lineage.latest.commit == lineage.genesis.commit {
-        "nothing has been declared about it since".to_string()
-    } else {
-        format!(
-            "last declared '{}' at {}",
-            lineage.latest.verb,
-            &lineage.latest.commit[..7]
-        )
-    };
-    Err(format!(
-        "slug '{slug}' has been used: created at {created}, {since}\n\
-         a slug is a ticket's identity in the event log, and archiving does not release it -- \
-         a new ticket here would fold the old one's events into its own state. Choose another slug."
-    ))
+    match events::lineage(slug, rev)? {
+        events::Lineage::Unused => Ok(()),
+        events::Lineage::Created { genesis, latest } => {
+            let since = if latest.commit == genesis.commit {
+                "nothing has been declared about it since".to_string()
+            } else {
+                format!("last declared '{}' at {}", latest.verb, &latest.commit[..7])
+            };
+            Err(format!(
+                "slug '{slug}' has been used: created at {}, {since}\n\
+                 a slug is a ticket's identity in the event log, and archiving does not release \
+                 it -- a new ticket here would fold the old one's events into its own state. \
+                 Choose another slug.",
+                &genesis.commit[..7]
+            ))
+        }
+        // Absence is not proof, the same way it is not in a shallow clone --
+        // except that here the walk reached the root and found the evidence
+        // rather than running out of history. Reporting this slug as free
+        // would hand the new ticket the old one's events.
+        events::Lineage::Severed { latest } => Err(format!(
+            "slug '{slug}' has events but no reachable creation: last declared '{}' at {}, and \
+             no '{}' record for it is reachable\n\
+             that is a rewritten or grafted history rather than a name collision, so this \
+             repository cannot say whether the slug is free -- a ticket created here would fold \
+             those events into its own state. Restore the history carrying its creation, or \
+             choose another slug.",
+            latest.verb,
+            &latest.commit[..7],
+            events::GENESIS
+        )),
+    }
 }
 
 /// The test seam for the differential oracle, and deliberately not a flag.

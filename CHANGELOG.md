@@ -40,9 +40,28 @@
   It costs `new`, once per ticket, and never a read. `new` refuses outright in
   a shallow clone rather than issue a reservation it cannot back.
 
+  A slug whose events are reachable while its creation is not -- a `git replace
+  --graft` over the creation commit, or a rewrite that drops it -- is refused
+  too, with a different message: the fold still answers for those events, so
+  reporting the slug free would hand them to the new ticket. That refusal says
+  the repository's history is broken rather than that the name is taken.
+
   One case no check at creation time can cover: two lineages that each create
   the same slug, whose merge is clean because archival deleted the file on one
   side. That needs a check at integration and is not yet implemented.
+
+- **`planr next new` validates the slug**, which it did not do at all. A slug
+  is both the ticket's filename and its identity in the event log, and
+  `Planr-Ticket` is read back trimmed -- so `new task "foo "` wrote
+  `.plan/tickets/foo .md` while declaring `Planr-Ticket: foo`, and two files
+  shared one identity. Acting on one then moved the other: `abandon "foo "`
+  reported `todo -> todo` because it could not see its own effect, the ticket
+  that actually went terminal was the one nobody had touched, and `board`
+  printed two rows with the same name. A trailing space from a shell paste is
+  enough, so this needed no adversary. Slugs must now match the published
+  schema's `^[a-z0-9][a-z0-9_-]*$`, and the refusal names the rule; the
+  pattern is pinned against the published document by a test, since it is now
+  written down in two places.
 
 - **Two concurrent `planr next new` calls can no longer both succeed.** The
   slug reservation read trunk, then the tip was read again separately, and the

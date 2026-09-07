@@ -283,6 +283,22 @@ Named so that breaking one is a decision rather than an accident.
    the check cannot drift from the thing it protects. Archival deletes the file
    and does not release the name.
 
+   **Identity is the trailer, so a slug has to survive it.** `Planr-Ticket` is
+   read back trimmed, so `foo`, `foo ` and ` foo` are one identity and three
+   filenames -- and a verb run against one of them silently moves another.
+   `new` therefore accepts only a slug matching the published `$defs/slug`
+   pattern, which is the enforceable form of the real rule: a slug must equal
+   what its own trailer reads back.
+
+   **Absence is proof only in a complete history.** A walk that runs out of
+   history reports "no such record" in exactly the way one that reached the
+   root does, so `new` refuses rather than guesses wherever it cannot tell the
+   two apart: in a shallow clone, and for a slug whose events are reachable
+   while its genesis is not -- a graft, or a rewrite that dropped the creation
+   commit. The second case is the sharper one, because the events are still
+   there for the fold to answer from: reporting that slug free would hand them
+   to a new ticket.
+
    **Enforced against one lineage, assumed across several.** `new` can only
    consult a history it can reach, so two clones that each create the same slug
    both pass legitimately, and their merge is *clean* -- archival deleted the
