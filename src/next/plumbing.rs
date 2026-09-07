@@ -209,6 +209,136 @@ pub fn log_raw(args: &[&str]) -> Result<String, String> {
     run(&full)
 }
 
+/// Hand every WHOLE record in `pending` to `on_record`, leaving the partial
+/// tail behind for the next read to complete. Returns how many records were
+/// consumed and whether the caller asked to stop.
+///
+/// Split out from [`log_streaming`] because the boundary handling is the part
+/// that can be wrong invisibly: a read boundary falls wherever the pipe
+/// decides, so a bug here would show up only on histories large enough to fill
+/// the buffer. Testing it needs arbitrary chunkings, not a git repository.
+fn drain_records(
+    pending: &mut Vec<u8>,
+    sep: u8,
+    on_record: &mut impl FnMut(&str) -> bool,
+) -> (usize, bool) {
+    let mut start = 0;
+    let mut consumed = 0;
+    let mut stopped = false;
+    while let Some(offset) = pending[start..].iter().position(|b| *b == sep) {
+        let end = start + offset;
+        let keep_going = on_record(&String::from_utf8_lossy(&pending[start..end]));
+        consumed += 1;
+        start = end + 1;
+        if !keep_going {
+            stopped = true;
+            break;
+        }
+    }
+    pending.drain(..start);
+    (consumed, stopped)
+}
+
+/// Walk `git log` a record at a time, and stop when the caller has enough.
+///
+/// [`log_raw`] reads git to completion before a single record is parsed, so a
+/// walk that needs only the newest few commits still pays for every commit in
+/// history. This one hands whole records to `on_record` as they arrive, and
+/// KILLS the child the moment it returns false. Draining to EOF instead would
+/// bound the parsing and nothing else -- the walk itself is the cost.
+///
+/// Records are terminated by `sep`, which is a byte rather than something the
+/// caller's format string is scanned for: the record layout belongs to the
+/// caller, not here. A record straddling two reads is held over.
+///
+/// Returns the number of records consumed -- one per commit git emitted,
+/// which is the measured cost of the walk.
+pub fn log_streaming(
+    args: &[&str],
+    sep: u8,
+    mut on_record: impl FnMut(&str) -> bool,
+) -> Result<usize, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    // stderr is piped but not read until the end, which is safe only because
+    // `git log` writes at most a fatal and a usage blurb there -- well under a
+    // pipe buffer. A command with chatty stderr would need both drained.
+    let mut child = Command::new("git")
+        .arg("log")
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("git command failed: {e}"))?;
+
+    let mut stdout = child.stdout.take().ok_or("cannot read git stdout")?;
+    let mut chunk = [0u8; 32 * 1024];
+    let mut pending: Vec<u8> = Vec::new();
+    let mut consumed = 0usize;
+    let mut stopped = false;
+
+    loop {
+        let n = match stdout.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("cannot read git output: {e}"));
+            }
+        };
+        pending.extend_from_slice(&chunk[..n]);
+
+        let (n, halt) = drain_records(&mut pending, sep, &mut on_record);
+        consumed += n;
+        stopped = halt;
+        if stopped {
+            break;
+        }
+    }
+
+    // Closing the read end first means git sees EPIPE rather than blocking on
+    // a full pipe while it waits to be killed.
+    drop(stdout);
+
+    if stopped {
+        // An early stop is the success case, so nothing here is reported as a
+        // failure: a killed child has no meaningful exit status, and git
+        // writing into a closed pipe is expected. A genuinely broken
+        // invocation -- bad revision, not a repository -- produces no records
+        // at all, so it cannot reach this branch; it is caught below.
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok(consumed);
+    }
+
+    // A trailing record with no separator. Formats here terminate every record
+    // with one, so this normally holds only git's own trailing newline.
+    if !pending.is_empty() {
+        let record = String::from_utf8_lossy(&pending);
+        if !record.trim().is_empty() {
+            consumed += 1;
+            on_record(&record);
+        }
+    }
+
+    // stdout was taken above, so this collects stderr and reaps the child.
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("git command failed: {e}"))?;
+    if out.status.success() {
+        Ok(consumed)
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        Err(stderr
+            .lines()
+            .rfind(|l| !l.trim().is_empty())
+            .unwrap_or("git failed")
+            .to_string())
+    }
+}
+
 pub fn rev_parse(ref_: &str) -> Result<String, String> {
     Ok(run(&["rev-parse", "--verify", "--quiet", ref_])?
         .trim()
@@ -399,4 +529,144 @@ pub fn worktree_add(path: &str, branch: &str) -> Result<(), String> {
 
 pub fn worktree_remove(path: &str) -> Result<(), String> {
     run(&["worktree", "remove", "--force", path]).map(|_| ())
+}
+
+#[cfg(test)]
+mod streaming {
+    use super::*;
+
+    const SEP: u8 = b'\x1e';
+
+    /// Feed one byte stream through [`drain_records`] in fixed-size chunks,
+    /// as a pipe would deliver it.
+    fn records_at_chunk_size(stream: &[u8], size: usize) -> Vec<String> {
+        let mut got = Vec::new();
+        let mut pending = Vec::new();
+        let mut sink = |r: &str| {
+            got.push(r.to_string());
+            true
+        };
+        for chunk in stream.chunks(size) {
+            pending.extend_from_slice(chunk);
+            drain_records(&mut pending, SEP, &mut sink);
+        }
+        got
+    }
+
+    #[test]
+    fn a_record_split_across_reads_is_still_one_record() {
+        // The boundary falls wherever the pipe decides, so every boundary has
+        // to produce the same records -- including one inside a separator's
+        // own record and one exactly on it.
+        let want: Vec<String> = (0..7)
+            .map(|i| format!("commit-{i}-{}", "x".repeat(i * 3)))
+            .collect();
+        let stream: Vec<u8> = want
+            .iter()
+            .flat_map(|r| r.bytes().chain(std::iter::once(SEP)))
+            .collect();
+
+        for size in 1..=stream.len() + 2 {
+            assert_eq!(
+                records_at_chunk_size(&stream, size),
+                want,
+                "records differ when read in chunks of {size} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn a_partial_tail_is_held_over_rather_than_delivered() {
+        let mut pending = Vec::from(&b"one\x1etw"[..]);
+        let mut got = Vec::new();
+        let (n, stopped) = drain_records(&mut pending, SEP, &mut |r: &str| {
+            got.push(r.to_string());
+            true
+        });
+        assert_eq!((n, stopped), (1, false));
+        assert_eq!(got, vec!["one".to_string()]);
+        assert_eq!(pending, b"tw", "the partial record must survive the read");
+    }
+
+    #[test]
+    fn a_stop_leaves_the_rest_of_the_buffer_alone() {
+        let mut pending = Vec::from(&b"one\x1etwo\x1ethree\x1e"[..]);
+        let mut got = Vec::new();
+        let (n, stopped) = drain_records(&mut pending, SEP, &mut |r: &str| {
+            got.push(r.to_string());
+            r != "two"
+        });
+        assert_eq!((n, stopped), (2, true));
+        assert_eq!(got, vec!["one".to_string(), "two".to_string()]);
+        assert_eq!(
+            pending, b"three\x1e",
+            "records after the stop must not be consumed"
+        );
+    }
+
+    /// The process half of [`log_streaming`], against the repository the test
+    /// itself is running in -- the only git history a unit test has without
+    /// changing the process-wide working directory, which parallel tests share.
+    /// Skipped rather than failed where there is none, e.g. an unpacked crate.
+    fn in_a_repository() -> bool {
+        rev_parse("HEAD").map(|s| !s.is_empty()).unwrap_or(false)
+    }
+
+    #[test]
+    fn streaming_a_log_yields_the_same_records_as_reading_it_whole() {
+        if !in_a_repository() {
+            return;
+        }
+        // Padded so the output runs well past the read buffer: without that,
+        // a boundary bug never gets the chance to show.
+        let format = format!("--format=%H{}\x1e", "p".repeat(4096));
+        let args = ["-n", "40", &format, "HEAD"];
+
+        let whole = log_raw(&args).unwrap();
+        let want: Vec<&str> = whole
+            .split('\x1e')
+            .filter(|r| !r.trim().is_empty())
+            .collect();
+
+        let mut got = Vec::new();
+        let n = log_streaming(&args, b'\x1e', |r| {
+            got.push(r.trim_matches('\n').to_string());
+            true
+        })
+        .unwrap();
+
+        assert_eq!(n, want.len());
+        assert_eq!(got.len(), want.len());
+        for (got, want) in got.iter().zip(&want) {
+            assert_eq!(got, want.trim_matches('\n'));
+        }
+    }
+
+    #[test]
+    fn stopping_early_is_not_an_error_and_reads_no_further() {
+        if !in_a_repository() {
+            return;
+        }
+        let mut seen = 0;
+        let n = log_streaming(&["--format=%H\x1e", "HEAD"], b'\x1e', |_| {
+            seen += 1;
+            seen < 3
+        })
+        .unwrap();
+        assert_eq!((n, seen), (3, 3));
+    }
+
+    #[test]
+    fn a_genuine_git_failure_is_still_reported() {
+        // The one thing an early stop must not paper over: a killed child and
+        // a broken invocation both end the walk without EOF.
+        let mut seen = 0;
+        let err = log_streaming(&["--format=%H\x1e", "no/such/revision"], b'\x1e', |_| {
+            seen += 1;
+            true
+        })
+        .expect_err("a bad revision must not look like a bounded walk");
+        assert!(!err.trim().is_empty(), "a failure with no message");
+        assert_eq!(seen, 0, "a failed walk should have produced no records");
+    }
 }

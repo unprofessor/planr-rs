@@ -7,16 +7,19 @@
 //! `git log -- <ticket path>` silently SKIPS exactly those declarations.
 //! Enumeration must therefore go through trailers, never paths.
 //!
-//! Two strategies, deliberately both:
+//! Two ref sets, deliberately both:
 //!
 //! * a union walk over trunk and the ticket's own ref -- the fast path for a
-//!   single slug, bounded by the ticket's own short history. It must be ONE
-//!   walk: ordering has to come from the commit graph, because trunk can move
-//!   after a branch is cut and a later trunk declaration must not be folded
-//!   before an earlier branch one.
-//! * [`scan`] -- the authoritative path. Walks a commit range reading
-//!   trailers, which is the only thing that still works once a ticket has been
-//!   archived and its file no longer exists in any tree.
+//!   single slug. It must be ONE walk: ordering has to come from the commit
+//!   graph, because trunk can move after a branch is cut and a later trunk
+//!   declaration must not be folded before an earlier branch one.
+//! * trunk alone, for a ticket with no ref. Trailers are the only thing that
+//!   still works once a ticket has been archived and its file no longer exists
+//!   in any tree, which is why enumeration never gets to use a pathspec.
+//!
+//! Both are BOUNDED: the walk stops at the newest event that decides the
+//! answer instead of reading history back to the ticket's birth. See
+//! [`for_ticket`] for why that is a theorem rather than a heuristic.
 
 use std::collections::BTreeMap;
 
@@ -40,81 +43,170 @@ fn log_format() -> String {
     )
 }
 
-fn parse_log(out: &str) -> Vec<Event> {
-    let mut events = Vec::new();
-    for record in out.split(RS) {
-        let record = record.trim_matches(['\n', '\r']);
-        if record.is_empty() {
-            continue;
-        }
-        let mut fields = record.split(FS);
-        let (Some(commit), Some(verb), Some(ticket)) =
-            (fields.next(), fields.next(), fields.next())
-        else {
-            continue;
-        };
-        let verb = verb.trim();
-        let ticket = ticket.trim();
-        // A commit with no Planr-Verb trailer is not an event -- ordinary code
-        // commits share these branches and must be ignored, not guessed at.
-        if verb.is_empty() {
-            continue;
-        }
-        events.push(Event {
-            commit: commit.trim().to_string(),
-            verb: verb.to_string(),
-            ticket: ticket.to_string(),
-        });
+/// `new` is genesis, not a schema verb -- but it writes `Planr-Verb: new`, so
+/// the creation commit is already a record in this stream. That makes it the
+/// floor for a ticket that has never transitioned, at no extra cost. The name
+/// is therefore RESERVED: a schema that defined a verb called `new` would put
+/// a second, meaningless floor into every walk.
+const GENESIS: &str = "new";
+
+fn parse_record(record: &str) -> Option<Event> {
+    let record = record.trim_matches(['\n', '\r']);
+    if record.is_empty() {
+        return None;
     }
+    let mut fields = record.split(FS);
+    let (Some(commit), Some(verb), Some(ticket)) = (fields.next(), fields.next(), fields.next())
+    else {
+        return None;
+    };
+    let verb = verb.trim();
+    // A commit with no Planr-Verb trailer is not an event -- ordinary code
+    // commits share these branches and must be ignored, not guessed at.
+    if verb.is_empty() {
+        return None;
+    }
+    Some(Event {
+        commit: commit.trim().to_string(),
+        verb: verb.to_string(),
+        ticket: ticket.trim().to_string(),
+    })
+}
+
+fn parse_log(out: &str) -> Vec<Event> {
+    let mut events: Vec<Event> = out.split(RS).filter_map(parse_record).collect();
     // git log is newest-first; a fold wants oldest-first.
     events.reverse();
     events
 }
 
-/// Authoritative path: scan a commit range for trailers, optionally filtered
-/// to one slug. Works for archived tickets, whose files exist in no tree.
-pub fn scan(range: &str, slug: Option<&str>) -> Result<Vec<Event>, String> {
-    let format = format!("--format={}", log_format());
-    let out = git::log_raw(&[&format, range])?;
-    let mut events = parse_log(&out);
-    if let Some(slug) = slug {
-        events.retain(|e| e.ticket == slug);
-    }
-    Ok(events)
+/// Commits in a log's output, event-bearing or not -- the cost of the walk.
+fn count_records(out: &str) -> usize {
+    out.split(RS)
+        .filter(|r| !r.trim_matches(['\n', '\r']).is_empty())
+        .count()
 }
 
-/// Every event for one ticket, using the cheap path when the ticket's own ref
-/// exists and falling back to the authoritative scan otherwise.
+/// One walk's result: the events it found oldest-first, which ref set
+/// answered, and how many commits it had to read to answer.
+pub struct Walk {
+    pub events: Vec<Event>,
+    pub how: &'static str,
+    pub scanned: usize,
+}
+
+/// The refs a ticket's events can live on, plus a label for the pair.
 ///
-/// Returns the events oldest-first, plus which strategy answered -- the spike
-/// reports that so the cost of each is observable rather than assumed.
+/// ONE walk over the union, date-ordered. An earlier version walked the two
+/// refs separately and concatenated, on the reasoning that a branch's events
+/// are strictly newer than the trunk events it descends from. That is false
+/// the moment trunk moves after the branch was cut -- which is exactly what an
+/// integration-lane verb on a claimed ticket does, and the authority rule
+/// explicitly allows. Concatenating then ordered a later trunk declaration
+/// BEFORE an earlier branch one, and the fold silently took the wrong winner.
+/// Ordering has to come from the commit graph, never from which ref an event
+/// was read through.
+fn walk_refs<'a>(trunk: &'a str, own: &'a str) -> (Vec<&'a str>, bool) {
+    if git::ref_exists(own) {
+        (vec!["--date-order", trunk, own], true)
+    } else {
+        (vec![trunk], false)
+    }
+}
+
+/// Every event that can still affect one ticket's folded state, oldest-first.
+///
+/// **Bounded.** An event denotes `const s` when its verb declares `to: s` and
+/// `id` otherwise, and the fold is composition; `const s . f = const s`, so
+/// every event before the most recent one carrying a `to` is annihilated. A
+/// backwards scan may therefore stop at the first such event. This is the
+/// absorption lemma of `docs/semantics.md` section 4, not a heuristic: the
+/// result is the same as folding the whole history, and the cost falls from
+/// commits-since-the-ticket-existed to commits-since-the-ticket-last-moved.
+///
+/// Three things the stop rule depends on, each load-bearing:
+///
+/// * **Stream order is fold order reversed.** `git log` emits newest-first and
+///   [`parse_log`] reverses; stopping at the FIRST qualifying record in stream
+///   order is stopping at the LAST one in fold order. Reverse either and the
+///   walk stops at the wrong end of history.
+/// * **The slug filter comes first.** Another ticket's `close` carries a `to`
+///   and would otherwise terminate this ticket's walk.
+/// * **`terminates` must accept exactly the verbs the fold acts on.** A verb
+///   the kind's machine does not resolve is `id` in the fold, so it must not
+///   terminate here either, or bounded and unbounded disagree. The rule is
+///   passed in rather than derived here to keep this module schema-agnostic.
+///
+/// Termination also concentrates the ordering assumption (`docs/semantics.md`
+/// section 6, assumption 2): committer-date skew across machines already made
+/// `--date-order` a guess, but under an unbounded fold a misordering was one
+/// wrong event among many, and here it is the whole answer.
 pub fn for_ticket(
     slug: &str,
     kind: &str,
     trunk: &str,
-) -> Result<(Vec<Event>, &'static str), String> {
+    terminates: impl Fn(&str) -> bool,
+) -> Result<Walk, String> {
     let own = format!("plan/{kind}/{slug}");
+    let format = format!("--format={}", log_format());
+    let (refs, union) = walk_refs(trunk, &own);
 
-    if git::ref_exists(&own) {
-        // ONE walk over the union of both refs, date-ordered.
-        //
-        // An earlier version walked them separately and concatenated, on the
-        // reasoning that a branch's events are strictly newer than the trunk
-        // events it descends from. That is false the moment trunk moves after
-        // the branch was cut -- which is exactly what an integration-lane verb
-        // on a claimed ticket does, and the authority rule explicitly allows.
-        // Concatenating then ordered a later trunk declaration BEFORE an
-        // earlier branch one, and the fold silently took the wrong winner.
-        // Ordering has to come from the commit graph, never from which ref an
-        // event was read through.
-        let format = format!("--format={}", log_format());
-        let out = git::log_raw(&[&format, "--date-order", trunk, &own])?;
-        let mut events = parse_log(&out);
-        events.retain(|e| e.ticket == slug);
-        return Ok((events, "branch-ref fast path (union walk)"));
+    let mut args: Vec<&str> = vec![&format];
+    args.extend(refs);
+
+    let mut events = Vec::new();
+    let scanned = git::log_streaming(&args, RS as u8, |record| {
+        let Some(event) = parse_record(record) else {
+            return true;
+        };
+        if event.ticket != slug {
+            return true;
+        }
+        let stop = event.verb == GENESIS || terminates(&event.verb);
+        events.push(event);
+        !stop
+    })?;
+    events.reverse();
+
+    Ok(Walk {
+        events,
+        how: label(union, true),
+        scanned,
+    })
+}
+
+/// The same enumeration with no stop rule, kept as the differential oracle for
+/// [`for_ticket`]: the two must fold to the same state on every history.
+///
+/// Deliberately a SEPARATE read path -- one `git log` read to completion and
+/// parsed in one go -- rather than [`for_ticket`] with a rule that never
+/// fires. An oracle sharing the streaming reader could not catch a bug in it.
+/// `planr next state --unbounded` is how a repository reaches this.
+pub fn for_ticket_unbounded(slug: &str, kind: &str, trunk: &str) -> Result<Walk, String> {
+    let own = format!("plan/{kind}/{slug}");
+    let format = format!("--format={}", log_format());
+    let (refs, union) = walk_refs(trunk, &own);
+
+    let mut args: Vec<&str> = vec![&format];
+    args.extend(refs);
+
+    let out = git::log_raw(&args)?;
+    let mut events = parse_log(&out);
+    events.retain(|e| e.ticket == slug);
+    Ok(Walk {
+        events,
+        how: label(union, false),
+        scanned: count_records(&out),
+    })
+}
+
+fn label(union: bool, bounded: bool) -> &'static str {
+    match (union, bounded) {
+        (true, true) => "branch-ref fast path (union walk)",
+        (true, false) => "branch-ref union walk, UNBOUNDED",
+        (false, true) => "trunk trailer scan",
+        (false, false) => "trunk trailer scan, UNBOUNDED",
     }
-
-    Ok((scan(trunk, Some(slug))?, "trunk trailer scan"))
 }
 
 /// Every event in the repository, bucketed by ticket, from a SINGLE walk.

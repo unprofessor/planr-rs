@@ -70,11 +70,20 @@ pub fn new_ticket(
     ))
 }
 
-/// Fold one ticket's state, reporting which enumeration strategy answered so
-/// the cost of each is observable rather than assumed.
-pub fn cmd_state(ctx: &Ctx, slug: &str) -> Result<String, String> {
-    let (state, how, count) = verb::state_of(ctx, slug)?;
-    Ok(format!("{slug}: {state}\n  {count} event(s) via {how}"))
+/// Fold one ticket's state, reporting what the walk cost.
+///
+/// Commits scanned is the number the bound exists to hold down, so it is
+/// printed rather than asserted: it is `R` in the cost table -- commits since
+/// the ticket last moved -- and no longer the length of history. Events folded
+/// is what survived the backwards scan, not the ticket's whole life.
+pub fn cmd_state(ctx: &Ctx, slug: &str, bounded: bool) -> Result<String, String> {
+    let (state, walk) = verb::state_of(ctx, slug, bounded)?;
+    Ok(format!(
+        "{slug}: {state}\n  {} commit(s) scanned, {} event(s) folded -- {}",
+        walk.scanned,
+        walk.events.len(),
+        walk.how
+    ))
 }
 
 pub fn cmd_lifecycle(ctx: &Ctx, kind: Option<&str>) -> Result<String, String> {

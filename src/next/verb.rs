@@ -94,12 +94,37 @@ pub fn parse_ticket(slug: &str, blob: &str) -> Result<Ticket, String> {
     })
 }
 
-/// Current state of a ticket, plus which enumeration strategy answered.
-pub fn state_of(ctx: &Ctx, slug: &str) -> Result<(String, &'static str, usize), String> {
+/// When the backwards scan may stop, expressed over verb NAMES because
+/// `events` is schema-agnostic and must stay that way.
+///
+/// The rule has to accept exactly the verbs [`fold::fold_state`] acts on: it
+/// skips any `(name, kind)` the schema does not resolve, so those denote `id`
+/// and cannot end the scan. A looser rule here stops on an event the fold then
+/// ignores, and the bounded walk answers with a state the unbounded one does
+/// not.
+fn terminator<'a>(schema: &'a Schema, kind: &'a str) -> impl Fn(&str) -> bool + 'a {
+    move |name| schema.verb(name, kind).is_some_and(|v| v.to.is_some())
+}
+
+/// Current state of a ticket, with the walk that produced it -- which ref set
+/// answered and how many commits it read.
+///
+/// `bounded` is false only for the differential oracle: the unbounded walk is
+/// kept reachable so the bound can be checked against it rather than trusted.
+pub fn state_of(ctx: &Ctx, slug: &str, bounded: bool) -> Result<(String, events::Walk), String> {
     let ticket = read_ticket_or_archived(ctx, slug)?;
-    let (evs, how) = events::for_ticket(slug, &ticket.kind, &ctx.trunk)?;
-    let state = fold::fold_state(&ctx.schema, &ticket.kind, &evs)?;
-    Ok((state, how, evs.len()))
+    let walk = if bounded {
+        events::for_ticket(
+            slug,
+            &ticket.kind,
+            &ctx.trunk,
+            terminator(&ctx.schema, &ticket.kind),
+        )?
+    } else {
+        events::for_ticket_unbounded(slug, &ticket.kind, &ctx.trunk)?
+    };
+    let state = fold::fold_state(&ctx.schema, &ticket.kind, &walk.events)?;
+    Ok((state, walk))
 }
 
 /// Read a ticket from trunk, falling back to the last commit that still had
@@ -130,9 +155,13 @@ fn read_ticket_or_archived(ctx: &Ctx, slug: &str) -> Result<Ticket, String> {
     parse_ticket(slug, &blob)
 }
 
+/// A gate's view of state. The walk is a SUFFIX of the ticket's history --
+/// everything before its last transition is annihilated -- which the fold is
+/// fine with because it seeds from `initial_state` and the suffix begins with
+/// a `const`. Any caller that wanted the full event list would not be.
 fn state_at(ctx: &Ctx, slug: &str, kind: &str) -> Result<String, String> {
-    let (evs, _) = events::for_ticket(slug, kind, &ctx.trunk)?;
-    fold::fold_state(&ctx.schema, kind, &evs)
+    let walk = events::for_ticket(slug, kind, &ctx.trunk, terminator(&ctx.schema, kind))?;
+    fold::fold_state(&ctx.schema, kind, &walk.events)
 }
 
 /// Evaluate a verb's precondition. Structural only -- never a judgement about

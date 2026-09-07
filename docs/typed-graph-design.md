@@ -1600,13 +1600,22 @@ Terms: **C** total commits, unbounded; **T** live tickets, bounded by archival;
 | `board` | **O(T · C)** | **O(C + ΣE)** | O(T + max R) |
 | container `close` | -- | **O(N · C)** | O(max R over children) |
 
-**The first two columns are measured; the third is derived and not yet
-implemented.** It follows from the absorption lemma in
+**The first two columns are measured, and so is `state <slug>` in the third;
+the two rows below it are still derived.** The bound follows from the
+absorption lemma in
 [the semantics](semantics.md#4-denotational-semantics-of-the-fold), which makes
 the backwards-terminating scan a theorem rather than an optimization. The table
 is restated rather than extended because the change is not a better constant: it
 removes **C** from the cost of reading state at all, and that is a different
 engine, not a faster one.
+
+`planr next state` reports commits scanned, so the bound is observed rather
+than assumed. On synthetic histories whose ticket last moved at the tip, it
+reads 1 commit at 100, 200, 400 and 2000 commits of history, where the same
+walk without the stop rule reads 103, 203, 403 and 2003. Wall clock goes from
+10 ms flat against 14 -> 30 ms rising, but commits scanned is the diagnostic:
+at these sizes process start-up and the single blob read that supplies the kind
+dominate the total, and they would hide the shape.
 
 How the middle column was reached: archival bounds **T**, the live tree -- not
 **C**. With `board` doing one walk and bucketing by `Planr-Ticket`, planr came

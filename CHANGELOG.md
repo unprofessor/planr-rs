@@ -4,6 +4,20 @@
 
 ### Added
 
+- **`planr next state` is bounded, and says what it cost.** Reading a ticket's
+  state walked its whole reachable history and then discarded all but the last
+  state-changing event. The backwards scan now stops at that event: an event
+  denotes `const s` when its verb declares `to: s` and the identity otherwise,
+  so `const s . f = const s` annihilates everything earlier -- the absorption
+  lemma of `docs/semantics.md` section 4, not a heuristic. A state read costs
+  commits since the ticket last moved rather than commits since it existed, and
+  a ticket that has never moved stops at its own `new` commit, which is already
+  a record in the same stream. `new` is therefore a reserved verb name. The
+  output reports commits scanned alongside the state, because the whole point
+  of the change is a number that should be observable rather than asserted: on
+  a 2000-commit history whose ticket last moved at the tip, it reads 1 commit
+  instead of 2003.
+
 - **Published schema for the typed-graph model**, identified by its canonical URL
   `https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json` and kept
   in-tree at the matching path so validation never needs the network.
