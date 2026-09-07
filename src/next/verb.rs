@@ -157,7 +157,13 @@ fn read_ticket_or_archived(ctx: &Ctx, slug: &str) -> Result<Ticket, String> {
     parse_ticket(slug, &blob)
 }
 
-/// A gate's view of state. The walk is a SUFFIX of the ticket's history --
+/// A gate's view of state. Always bounded, and deliberately without the
+/// oracle's escape hatch: `state_of` can be asked for the unbounded walk, this
+/// cannot, so every `from` check and every `require` in the runner reads the
+/// bounded answer and only the bounded answer. The differential proves the two
+/// agree; it does not make the gate switchable.
+///
+/// The walk is a SUFFIX of the ticket's history --
 /// everything before its last transition is annihilated -- which the fold is
 /// fine with because it seeds from `initial_state` and the suffix begins with
 /// a `const`. Any caller that wanted the full event list would not be.

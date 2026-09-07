@@ -35,10 +35,22 @@ pub fn new_ticket(
         return Err(format!("unknown kind '{kind}'"));
     }
     let path = ctx.ticket_path(slug);
-    if plumbing::show(&ctx.trunk, &path).is_ok() {
+
+    // The base is read FIRST, and everything below is evaluated against it.
+    //
+    // Reserving a slug and then reading the tip separately is a TOCTOU: the
+    // final compare-and-swap asserts the tip, so a racer whose reservation ran
+    // before the winner's ref move but whose tip read ran after it commits on
+    // top and its CAS SUCCEEDS. Both processes then report success, one
+    // ticket file survives, and two `Planr-Verb: new` records exist for one
+    // slug -- exactly the invariant the reservation is here to hold. Reading
+    // the base once and asserting THAT base makes the reservation and the
+    // write a single atomic step.
+    let base = plumbing::rev_parse(&ctx.trunk)?;
+    if plumbing::show(&base, &path).is_ok() {
         return Err(format!("ticket '{slug}' already exists"));
     }
-    reserve_slug(ctx, slug, &path)?;
+    reserve_slug(slug, &base)?;
 
     let mut fm = format!("kind: {kind}\ntitle: \"{}\"", title.replace('"', "'"));
     if let Some(p) = parent {
@@ -52,16 +64,31 @@ pub fn new_ticket(
         .unwrap_or_default();
     let blob = format!("---\n{fm}\n---\n\n# {title}\n\n{body}");
 
-    let base = plumbing::rev_parse(&ctx.trunk)?;
     let index = plumbing::ScratchIndex::from_ref(&base)?;
     index.put(&path, &blob)?;
     let tree = index.write_tree()?;
+    // The trailer the whole model is attributed by, written through the same
+    // constant the walk stops on. Spelling it out here once let the floor and
+    // the record that creates it drift apart in silence: a renamed constant
+    // would leave the walk stopping on a name nothing writes, and every
+    // never-transitioned ticket would walk to the root.
+    let genesis = events::GENESIS;
     let commit = plumbing::commit_tree(
         &tree,
         &[&base],
-        &format!("plan: new {slug}\n\nPlanr-Verb: new\nPlanr-Ticket: {slug}\n"),
+        &format!("plan: {genesis} {slug}\n\nPlanr-Verb: {genesis}\nPlanr-Ticket: {slug}\n"),
     )?;
-    plumbing::update_ref(&ctx.trunk, &commit, &base)?;
+    // The CAS asserts the base the reservation was evaluated against, so a
+    // concurrent creation loses here rather than landing a second genesis.
+    plumbing::update_ref(&ctx.trunk, &commit, &base).map_err(|_| {
+        format!(
+            "cannot create '{slug}': {} moved while the slug was being reserved -- another \
+             '{genesis}' or verb landed first, so this one is refused rather than stacked on \
+             top of a reservation it did not see. Nothing was created; re-run, and if the slug \
+             was taken in the meantime the re-run refuses it by name",
+            ctx.trunk
+        )
+    })?;
     plumbing::sync_path(&ctx.trunk, &commit, &path)?;
 
     let state = fold::initial_state(&ctx.schema, kind)?;
@@ -74,50 +101,97 @@ pub fn new_ticket(
 /// Refuse a slug that has EVER named a ticket, not merely one that names one
 /// now.
 ///
-/// The ticket's file path is the primary key, and the mapping from slug to
-/// path is one-to-one and permanent. Archival deletes the file; it does not
-/// release the name. `Planr-Ticket: <slug>` is the identity every event is
-/// attributed by, so a reused slug makes one identifier name two tickets, and
-/// the whole event model comes apart: a re-created ticket folded its dead
-/// predecessor's events, `board` reported a ticket seconds old as `abandoned`,
-/// and a bounded read and an unbounded one disagreed about the same ticket
-/// because they stopped at different `new` commits. It also falsifies
-/// `docs/semantics.md` section 6 assumption 3 -- that a ticket's events all
-/// descend from its creation commit -- which is what makes that commit a valid
-/// floor for the backwards walk. Enforcing uniqueness here is what makes the
-/// assumption true rather than hoped for.
+/// The slug is the ticket's identity and it is never released. Archival
+/// deletes the file; the events remain, attributed by `Planr-Ticket: <slug>`,
+/// so a reused slug makes one identifier name two tickets and the model comes
+/// apart: the re-created ticket folds its dead predecessor's events, `board`
+/// reports a ticket seconds old as `abandoned`, and a bounded read and an
+/// unbounded one disagree about it because they stop at different `new`
+/// commits. Every `from` gate reads the bounded answer, so a terminal ticket
+/// becomes re-enterable.
 ///
-/// This is the one question in the model that is genuinely path-shaped, so it
-/// is the one place git's changed-path filters apply: the walk is
-/// `--diff-filter` over a single path, not a trailer scan. The cost lands on
-/// `new`, once per ticket, instead of on every state read.
-fn reserve_slug(ctx: &Ctx, slug: &str, path: &str) -> Result<(), String> {
-    let Some((created, _)) = plumbing::last_touch(&ctx.trunk, path, "A")? else {
+/// **Keyed on the trailer stream, not on the file path.** An earlier version
+/// asked whether the ticket's path appeared in trunk's history, which is a
+/// different question wearing the same clothes -- and every gap between the
+/// two was a way to reuse a slug whose events survived: `git mv .plan .planr`
+/// (or a `PLANR_DIR` export) moves the path and keeps every trailer, a
+/// `filter-branch --index-filter` purge removes the path from history while
+/// leaving the commits, and a shallow clone can see neither. Asking the
+/// question the fold asks is the only version that cannot drift from it.
+///
+/// The price is git's changed-path filters, which a trailer scan cannot use:
+/// a fresh slug costs a full walk, because proving absence means reaching the
+/// root. That lands on `new`, once per ticket, and never on a read.
+///
+/// `rev` is the tip the caller will compare-and-swap against, not the trunk
+/// ref -- see [`new_ticket`] for why those must be the same commit.
+fn reserve_slug(slug: &str, rev: &str) -> Result<(), String> {
+    // A shallow clone cannot answer this, and it fails in the direction that
+    // matters: the walk runs out of history and reports the slug free. A read
+    // in a shallow clone is wrong too, but transiently -- deepen the clone and
+    // it is right again. A duplicate genesis record is permanent, so this is
+    // the one operation that refuses rather than guesses.
+    if plumbing::is_shallow() {
+        return Err(format!(
+            "cannot create '{slug}': this is a shallow clone, so a slug cannot be shown to be \
+             unused -- the walk runs out of history rather than reaching the ticket's creation. \
+             Run `git fetch --unshallow` first. (Reads are affected too: a fold that cannot \
+             reach a ticket's creation commit reports its initial state.)"
+        ));
+    }
+
+    let Some(lineage) = events::lineage(slug, rev)? else {
         return Ok(());
     };
-    let removed = plumbing::last_touch(&ctx.trunk, path, "D")?;
-    let fate = match removed {
-        Some((commit, subject)) => format!("removed at {commit} ({subject})"),
-        // Added and now absent, with no deletion on this ref: the file left
-        // trunk some way archival did not, so name what is known and no more.
-        None => format!("and {} no longer carries it", ctx.trunk),
+    let created = &lineage.genesis.commit[..7];
+    let since = if lineage.latest.commit == lineage.genesis.commit {
+        "nothing has been declared about it since".to_string()
+    } else {
+        format!(
+            "last declared '{}' at {}",
+            lineage.latest.verb,
+            &lineage.latest.commit[..7]
+        )
     };
     Err(format!(
-        "slug '{slug}' has been used: created at {created}, {fate}\n\
+        "slug '{slug}' has been used: created at {created}, {since}\n\
          a slug is a ticket's identity in the event log, and archiving does not release it -- \
-         a new ticket here would fold the archived one's events into its own state. Choose another slug."
+         a new ticket here would fold the old one's events into its own state. Choose another slug."
     ))
 }
 
 /// The test seam for the differential oracle, and deliberately not a flag.
 ///
 /// The oracle has to run against a real repository, and this crate is a binary
-/// with no library target, so the only way in is the process. An env var keeps
-/// it out of the CLI surface: there is one state-read mode, `planr next state`
-/// has one documented behaviour, and nothing here is reachable by a user who
-/// has not gone looking for it. See [`verb::state_of`] for what the oracle is
-/// worth -- it is narrower than it looks.
+/// with no library target, so the only way in is the process. See
+/// [`verb::state_of`] for what the oracle is worth -- it is narrower than it
+/// looks, and it covers `planr next state` alone.
 const ORACLE_ENV: &str = "PLANR_NEXT_ORACLE";
+
+/// Whether the caller asked for the unbounded walk.
+///
+/// The VALUE decides, never mere presence. Presence-testing made
+/// `PLANR_NEXT_ORACLE=0` and `=false` turn the oracle ON, so anyone exporting
+/// it to disable the thing enabled it -- and an env var is inherited by every
+/// child process and CI shell, so one line in a profile would have degraded
+/// every state read to a full history walk with nothing but a word in the cost
+/// line to show for it. An unrecognized value is an error rather than a shrug,
+/// because the whole failure mode here is a setting that does the opposite of
+/// what its author intended, silently.
+fn oracle_requested() -> Result<bool, String> {
+    let Some(raw) = std::env::var_os(ORACLE_ENV) else {
+        return Ok(false);
+    };
+    match raw.to_string_lossy().trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "" | "0" | "false" | "no" | "off" => Ok(false),
+        other => Err(format!(
+            "{ORACLE_ENV} is set to '{other}', which is not a yes or a no. It is a diagnostic \
+             seam that reads state by walking the WHOLE history; set it to 1 to use it, or \
+             unset it"
+        )),
+    }
+}
 
 /// Fold one ticket's state, reporting what the walk cost.
 ///
@@ -126,8 +200,14 @@ const ORACLE_ENV: &str = "PLANR_NEXT_ORACLE";
 /// the ticket last moved -- and no longer the length of history. Events folded
 /// is what survived the backwards scan, not the ticket's whole life.
 pub fn cmd_state(ctx: &Ctx, slug: &str) -> Result<String, String> {
-    let bounded = std::env::var_os(ORACLE_ENV).is_none();
-    let (state, walk) = verb::state_of(ctx, slug, bounded)?;
+    let oracle = oracle_requested()?;
+    if oracle {
+        // Loud, because the cost line's "UNBOUNDED" is too quiet a tell for a
+        // setting that can arrive by inheritance from a shell nobody is
+        // looking at.
+        eprintln!("{ORACLE_ENV} is set: reading state UNBOUNDED, which walks the whole history");
+    }
+    let (state, walk) = verb::state_of(ctx, slug, !oracle)?;
     Ok(format!(
         "{slug}: {state}\n  {} commit(s) scanned, {} event(s) folded -- {}",
         walk.scanned,

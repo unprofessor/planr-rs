@@ -1886,7 +1886,7 @@ seam:
 | --- | --- | --- |
 | find a ticket's creation (the anchor) | yes -- `new` writes the file | **yes** |
 | find archived tickets (`--diff-filter=D`) | yes -- `archive` deletes it | **yes** |
-| has this slug ever existed (`--diff-filter=A`) | yes -- same commit | **yes** |
+| has this slug ever existed | **no** -- see below | no; trailers |
 | enumerate a ticket's events | no -- declarations may be empty | no; trailers |
 
 Measured over 2022 commits, an anchor lookup costs 17ms with no commit-graph,
@@ -1899,15 +1899,45 @@ touch a path -- buys the index back at the price of a transcript accumulating in
 the ticket file and textual conflicts between declarations that today never
 conflict.
 
-The third row is what enforces slug uniqueness, and it inverts the usual cost
-shape: the MISS is the expensive case, because proving a slug has never existed
-means reaching the root, while a hit stops at the creation commit. Measured on
-a 2000-commit history, the check costs 97ms with no commit-graph and 4ms with
-one carrying `--changed-paths` -- effectively flat, against 22ms / 3ms at 500
-commits. A repository large enough for this to matter wants
-`git commit-graph write --reachable --changed-paths`, which is the same
-maintenance any large repository already wants. The cost lands on `new`, once
-per ticket, and never on a read.
+**The third row moved sides, and the move was free.** Slug uniqueness was first
+enforced path-shaped, by asking whether the ticket's file had ever been added.
+That is a *different question wearing the same clothes* as the one the fold
+asks, and every gap between the two was a way to reuse a slug whose events
+survived: `git mv .plan .planr` (or one `PLANR_DIR` export) moves the path and
+keeps every trailer; a `filter-branch --index-filter` purge removes the path
+from history while leaving the commits; a shallow clone can see neither. Each
+restored the read divergence the reservation exists to prevent. The check is
+now keyed on the trailer stream -- has any commit declared `Planr-Verb: new`
+with this `Planr-Ticket` -- which is the question the fold asks and therefore
+cannot drift from it.
+
+Giving up the Bloom filters was supposed to be the price. It was not. Measured
+on the same shape:
+
+| history | path-keyed miss / hit | trailer-keyed miss / hit |
+| --- | --- | --- |
+| 500 commits, no commit-graph | 22ms / 6ms | 20ms / 24ms |
+| 2000 commits, no commit-graph | **97ms** / 4ms | **20ms** / 22ms |
+| 2000 commits, `--changed-paths` | 4ms / 8ms | 26ms / 18ms |
+
+The path-keyed check inverted the usual cost shape -- the *miss* was expensive,
+because proving a slug has never existed means reaching the root, and without
+Bloom filters that meant diffing every commit against a path. Reading commit
+messages instead is flat at roughly 20ms and indifferent to the commit-graph,
+so the common case (a fresh slug) got five times faster while the rare case (a
+collision) went from 4ms to 22ms. Both are dominated by process start-up. The
+index acceleration we gave up only ever helped the case that was already cheap.
+
+The cost lands on `new`, once per ticket, and never on a read.
+
+What no in-repo check can cover is a second lineage: two clones each create the
+same slug, neither can consult a history that does not exist yet, and the merge
+is *clean* -- because archival deleted the file on one side, so a deletion and
+an addition do not conflict. Two `Planr-Verb: new` records then coexist,
+permanently and mutually non-ancestral. That needs a check at integration
+rather than at creation, and it is the same detector the concurrent-ordering
+problem needs; see [open questions](#8-open-questions). `new` refuses outright
+in a shallow clone rather than issue a reservation it cannot back.
 
 #### Archive versus close is a schema choice
 

@@ -304,9 +304,13 @@ fn a_slug_is_never_reused_after_archival() {
     // it was used, and where it went.
     assert!(err.contains("foo"), "{err}");
     assert!(err.contains("has been used"), "{err}");
+    // Named from the trailer, not from the commit subject: the reservation
+    // reads the event stream, so what it can name is the verb that declared
+    // last. Asserting a subject line here would test a different source than
+    // the one the check consults.
     assert!(
-        err.contains("archive foo"),
-        "the refusal should name the archival commit: {err}"
+        err.contains("'archive'"),
+        "the refusal should name the verb that retired it: {err}"
     );
 
     // A different slug is unaffected -- the rule is about identity, not about

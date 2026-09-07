@@ -276,14 +276,31 @@ Named so that breaking one is a decision rather than an accident.
    agree on the same wrong answer. Detecting it needs an oracle that derives
    order from the commit graph rather than from dates.
 3. **A ticket's events all descend from its creation commit**, which is what
-   makes that commit a valid floor. This holds because a slug is never reused:
-   the mapping from slug to file path is one-to-one and permanent, and `new`
-   refuses a slug that has ever existed in history rather than merely one that
-   exists now. Archival deletes the file and does not release the name. Without
-   that rule the assumption is simply false -- a re-created slug folds its dead
-   predecessor's events, and a bounded read stopping at the newer creation
-   commit and an unbounded read reaching the older one disagree about the same
-   ticket.
+   makes that commit a valid floor. It rests on a slug never being reused: the
+   mapping from slug to file path is one-to-one and permanent, and `new`
+   refuses a slug that any reachable commit has ever declared a genesis for --
+   asked over the trailer stream, which is the same question the fold asks, so
+   the check cannot drift from the thing it protects. Archival deletes the file
+   and does not release the name.
+
+   **Enforced against one lineage, assumed across several.** `new` can only
+   consult a history it can reach, so two clones that each create the same slug
+   both pass legitimately, and their merge is *clean* -- archival deleted the
+   file on one side, so a deletion and an addition do not conflict. Two genesis
+   records then coexist, permanently and mutually non-ancestral, and a bounded
+   walk terminates at whichever one it meets first: the floor becomes
+   clock-determined, by assumption 2. So the honest claim is *true modulo no
+   two lineages independently creating the same slug*. Frequent integration
+   keeps the window small; that is mitigation, not guarantee. Closing it needs
+   a check at integration -- one that fails when a slug has more than one
+   genesis reachable from trunk -- which is the same detector assumption 2
+   needs, for the same reason: the fold being asked to arbitrate between events
+   git declines to order.
+
+   Without any of this the assumption is simply false: a re-created slug folds
+   its dead predecessor's events, and a bounded read stopping at the newer
+   creation commit and an unbounded read reaching the older one disagree about
+   the same ticket.
 4. **The schema in force is the one in the same history.** There is no schema
    trailer, deliberately: the schema is tracked in the repository it governs.
 5. **Trailers survive.** Events are attributable because commit messages are

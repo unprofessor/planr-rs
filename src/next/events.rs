@@ -219,6 +219,59 @@ pub fn for_ticket_unbounded(slug: &str, kind: &str, trunk: &str) -> Result<Walk,
     })
 }
 
+/// What the event log already knows about a slug: the commit that created it,
+/// and the most recent commit that declared anything about it.
+pub struct Lineage {
+    pub genesis: Event,
+    pub latest: Event,
+}
+
+/// Has any commit reachable from `rev` created this slug -- and if so, what
+/// has it done since?
+///
+/// This is what reserving a slug asks, and it deliberately asks it the way the
+/// FOLD asks: over `Planr-Ticket` trailers, not over the ticket's file path.
+/// A path-shaped reservation is a different question wearing the same clothes,
+/// and every gap between the two is a way to reuse a slug while its events
+/// survive: renaming the plan directory (`git mv .plan .planr`, or one
+/// `PLANR_DIR` export), purging a path with `filter-branch --index-filter`
+/// while every trailer stays, or creating from a shallow clone. Each one
+/// restored the divergence the reservation exists to prevent. One question,
+/// one mechanism.
+///
+/// The price is git's changed-path filters: a trailer scan cannot use them, so
+/// a slug that has never existed costs a full walk. That is the miss case and
+/// it lands on `new`, which happens once per ticket.
+///
+/// Newest-first, so the walk stops at the genesis record it is looking for and
+/// the first record it sees for the slug is the latest declaration.
+pub fn lineage(slug: &str, rev: &str) -> Result<Option<Lineage>, String> {
+    let format = format!("--format={}", log_format());
+    let mut latest: Option<Event> = None;
+    let mut genesis: Option<Event> = None;
+
+    git::log_streaming(&[&format, rev], RS as u8, |record| {
+        let Some(event) = parse_record(record) else {
+            return true;
+        };
+        if event.ticket != slug {
+            return true;
+        }
+        if event.verb == GENESIS {
+            genesis = Some(event.clone());
+        }
+        if latest.is_none() {
+            latest = Some(event);
+        }
+        genesis.is_none()
+    })?;
+
+    Ok(genesis.map(|genesis| Lineage {
+        latest: latest.unwrap_or_else(|| genesis.clone()),
+        genesis,
+    }))
+}
+
 fn label(union: bool, bounded: bool) -> &'static str {
     match (union, bounded) {
         (true, true) => "branch-ref fast path (union walk)",

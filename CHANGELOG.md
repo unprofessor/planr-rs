@@ -26,9 +26,35 @@
   created seconds earlier as `abandoned` while `next state` reported it as
   `todo`, and every verb's `from` gate reads the second answer, so a terminal
   ticket could be re-entered. The refusal names the commit that created the
-  slug and the commit that removed it. The check is one path-limited log, so it
-  gets git's changed-path filters where a commit-graph exists, and it costs
-  `new` rather than every read.
+  slug and the verb that last declared anything about it.
+
+  The check asks the question the fold asks -- has any reachable commit written
+  `Planr-Verb: new` for this `Planr-Ticket` -- rather than the path-shaped
+  question of whether the ticket's file was ever added. Those look identical
+  and are not: renaming the plan directory (or exporting `PLANR_DIR`), purging
+  a path with `filter-branch` while every commit survives, or creating from a
+  shallow clone each moved the path without touching the trailers, and each
+  made a used slug look free. Reading commit messages costs about 20ms flat and
+  is indifferent to a commit-graph, against 97ms for the path-limited walk on a
+  2000-commit history, so the fresh-slug case got faster rather than slower.
+  It costs `new`, once per ticket, and never a read. `new` refuses outright in
+  a shallow clone rather than issue a reservation it cannot back.
+
+  One case no check at creation time can cover: two lineages that each create
+  the same slug, whose merge is clean because archival deleted the file on one
+  side. That needs a check at integration and is not yet implemented.
+
+- **Two concurrent `planr next new` calls can no longer both succeed.** The
+  slug reservation read trunk, then the tip was read again separately, and the
+  final compare-and-swap asserted the *second* read -- so a racer whose
+  reservation ran before the winner's ref move but whose tip read ran after it
+  landed on top and its swap succeeded. Both processes reported success, one
+  ticket file survived, and two genesis records existed for one slug. A
+  synchronised race never showed it, because four racers starting together all
+  read the same tip; staggering them across the window produced duplicates in
+  three of 276 pairs. The reservation is now evaluated against the same commit
+  the swap asserts, making creation a single atomic step, and the loser is told
+  the slug was taken concurrently instead of receiving a raw ref-lock error.
 
 - **A schema may not declare a verb named `new`.** Creation is fixed tooling
   rather than a verb, and it writes `Planr-Verb: new` -- the record a bounded
@@ -70,6 +96,21 @@
   checked out.
 
 ### Fixed
+
+- **`PLANR_NEXT_ORACLE` parses its value instead of its presence.** The
+  unbounded state read is a diagnostic reached by tests; setting the variable
+  to `0`, `false`, or `off` used to turn it *on*, so anyone exporting it to
+  disable the oracle enabled it -- and being an environment variable it is
+  inherited by every child process and every CI shell, where it would silently
+  degrade `planr next state` to a full history walk. An unrecognized value is
+  now an error rather than a guess, and enabling it says so on stderr.
+
+- **A panicking `log_streaming` callback no longer leaks a `git` child.**
+  `std::process::Child` has no reaping `Drop`, so every early return reaped by
+  hand and a panic reaped not at all; forty panicking callbacks left forty
+  zombies. The child is now owned by a guard that kills and waits on unwind.
+  Harmless in a short-lived CLI, but the primitive's whole justification is
+  that the next caller will not check.
 
 - **A verb declaring `worktree: create` alongside `effect: merge` is now
   rejected.** `base: own` proves the ticket's ref exists when the verb is

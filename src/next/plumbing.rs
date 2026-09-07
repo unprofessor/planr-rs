@@ -209,41 +209,15 @@ pub fn log_raw(args: &[&str]) -> Result<String, String> {
     run(&full)
 }
 
-/// The newest commit in `range` that touched `path` the way `filter` names --
-/// `"A"` for added, `"D"` for deleted -- as `(short sha, subject)`.
+/// Whether this repository's history is truncated.
 ///
-/// The counterpart to the trailer walk, and the reason both exist. Trailer
-/// scanning has to load and parse every commit object because a declaration
-/// may touch no path at all. THIS question is path-shaped, so git answers it
-/// with its changed-path filters and skips most object loads: it is the right
-/// tool for the two questions that really are about files -- has this slug
-/// ever existed, and where did an archived ticket live.
-pub fn last_touch(
-    range: &str,
-    path: &str,
-    filter: &str,
-) -> Result<Option<(String, String)>, String> {
-    let out = run(&[
-        "log",
-        "-1",
-        "--format=%h%x1f%s",
-        &format!("--diff-filter={filter}"),
-        range,
-        "--",
-        path,
-    ])?;
-    let line = out.trim();
-    if line.is_empty() {
-        return Ok(None);
-    }
-    let mut fields = line.split('\x1f');
-    let (Some(commit), Some(subject)) = (fields.next(), fields.next()) else {
-        return Ok(None);
-    };
-    Ok(Some((
-        commit.trim().to_string(),
-        subject.trim().to_string(),
-    )))
+/// It matters only where ABSENCE is the answer: a walk that runs out of
+/// history reports "no such record" in exactly the way a walk that reached the
+/// root does. Anything treating absence as proof has to know the difference.
+pub fn is_shallow() -> bool {
+    run(&["rev-parse", "--is-shallow-repository"])
+        .map(|out| out.trim() == "true")
+        .unwrap_or(false)
 }
 
 /// Hand every WHOLE record in `pending` to `on_record`, leaving the partial
@@ -276,6 +250,26 @@ fn drain_records(
     (consumed, stopped)
 }
 
+/// A child that is reaped however the scope ends, including by unwinding.
+///
+/// `std::process::Child` deliberately has no reaping `Drop`, so every early
+/// return has to reap by hand -- and a panic is an early return no hand can
+/// cover. The callback below is the CALLER's code, so a panic in it unwinds
+/// straight through this function; without this guard each one left a zombie.
+/// The blast radius in a short-lived CLI is nil, which is precisely the
+/// argument that keeps being wrong about the next caller.
+struct Reaped(std::process::Child);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        // Both are no-ops once the child has been waited for, which is the
+        // ordinary path: `kill` reports InvalidInput and `wait` returns the
+        // status it already has.
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Walk `git log` a record at a time, and stop when the caller has enough.
 ///
 /// [`log_raw`] reads git to completion before a single record is parsed, so a
@@ -298,13 +292,16 @@ pub fn log_streaming(
     use std::io::Read;
     use std::process::Stdio;
 
-    let mut child = Command::new("git")
-        .arg("log")
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("git command failed: {e}"))?;
+    let mut child = Reaped(
+        Command::new("git")
+            .arg("log")
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("git command failed: {e}"))?,
+    );
+    let child = &mut child.0;
 
     // Both pipes are drained concurrently. Only stdout is read in this thread,
     // so stderr left until the end would deadlock the pair as soon as a
