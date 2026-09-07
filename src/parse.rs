@@ -19,7 +19,6 @@ pub fn split_frontmatter(blob: &str) -> FrontmatterSplit {
         return FrontmatterSplit {
             fm: String::new(),
             body: blob.to_string(),
-            raw: blob.to_string(),
         };
     }
 
@@ -38,17 +37,12 @@ pub fn split_frontmatter(blob: &str) -> FrontmatterSplit {
             FrontmatterSplit {
                 fm: String::new(),
                 body: blob.to_string(),
-                raw: blob.to_string(),
             }
         }
         Some(idx) => {
             let fm = parts[1..idx].join("\n");
             let body = parts[idx + 1..].join("\n");
-            FrontmatterSplit {
-                fm,
-                body,
-                raw: blob.to_string(),
-            }
+            FrontmatterSplit { fm, body }
         }
     }
 }
@@ -57,8 +51,6 @@ pub fn split_frontmatter(blob: &str) -> FrontmatterSplit {
 pub struct FrontmatterSplit {
     pub fm: String,
     pub body: String,
-    #[allow(dead_code)]
-    pub raw: String,
 }
 
 /// Parse frontmatter YAML into a value map using serde_yaml.
@@ -207,7 +199,6 @@ mod tests {
         let s = split_frontmatter(blob);
         assert_eq!(s.fm, "id: test\nkind: task");
         assert_eq!(s.body, "\n## Goal\n\nBody.\n");
-        assert_eq!(s.raw, blob);
     }
 
     #[test]

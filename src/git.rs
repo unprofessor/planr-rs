@@ -22,35 +22,73 @@ pub(crate) fn git_in(cwd: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git(cwd: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    let out = run_git_raw(cwd, args)?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    } else {
+        Err(last_stderr_line(&out))
+    }
+}
+
+/// A `git` child process with its messages pinned to English.
+///
+/// git translates its own diagnostics, and planr reads them two ways that
+/// both break under a translated locale: `toplevel_or_none` tells "there is
+/// no repository here" from a real failure by matching git's wording, and
+/// every other wrapper quotes git's last stderr line inside an English planr
+/// sentence.
+///
+/// `LC_ALL=C` is the pin: it outranks `LC_MESSAGES`, and GNU gettext ignores
+/// `LANGUAGE` once the locale is `C`, so nothing in the environment can put
+/// the translation back. Set it on every git planr runs, not just the one
+/// that matches -- a message planr is about to quote is one it has to read.
+pub(crate) fn git_command() -> Command {
     let mut cmd = Command::new("git");
+    cmd.env("LC_ALL", "C");
+    cmd
+}
+
+/// The raw process result, for the one caller that has to read all of git's
+/// stderr rather than the last line of it.
+fn run_git_raw(cwd: Option<&Path>, args: &[&str]) -> Result<std::process::Output, String> {
+    let mut cmd = git_command();
     cmd.args(args);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
-    let out = cmd
-        .output()
-        .map_err(|e| format!("git command failed: {e}"))?;
-
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let last_line = stderr
-            .lines()
-            .rfind(|l| !l.trim().is_empty())
-            .unwrap_or("git failed")
-            .to_string();
-        Err(last_line)
-    }
+    cmd.output().map_err(|e| format!("git command failed: {e}"))
 }
 
-/// List all `.md` files under `dir` at `ref` (e.g. `HEAD:.plan`).
-pub fn ls_tree_md(ref_: &str, dir: &str) -> Result<Vec<String>, String> {
+/// The last non-empty line of git's stderr -- the part that usually names the
+/// problem, and short enough to put in one warning.
+fn last_stderr_line(out: &std::process::Output) -> String {
+    String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .rfind(|l| !l.trim().is_empty())
+        .unwrap_or("git failed")
+        .to_string()
+}
+
+/// List every file under `dir` at `ref`, whatever its extension.
+///
+/// The unfiltered listing answers a question the `.md` one cannot: whether
+/// anything is there. A backlog scaffolded with `.gitkeep` files and no
+/// tickets yet holds zero tickets, which is not the same fact as a plan
+/// directory that is not in the commit.
+pub fn ls_tree(ref_: &str, dir: &str) -> Result<Vec<String>, String> {
     let out = git(&["ls-tree", "-r", "--name-only", ref_, "--", dir])?;
     Ok(out
         .lines()
         .map(|l| l.trim().to_string())
-        .filter(|l| l.ends_with(".md") && !l.is_empty())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
+/// List all `.md` files under `dir` at `ref` (e.g. `HEAD:.plan`).
+pub fn ls_tree_md(ref_: &str, dir: &str) -> Result<Vec<String>, String> {
+    Ok(ls_tree(ref_, dir)?
+        .into_iter()
+        .filter(|l| l.ends_with(".md"))
         .collect())
 }
 
@@ -59,16 +97,30 @@ pub fn show_ref(ref_: &str, path: &str) -> Result<String, String> {
     git(&["show", &format!("{ref_}:{path}")])
 }
 
-/// `git worktree add <path> [-b] <branch> [<ref>]`.
+/// Whether `refs/heads/<branch>` already exists.
+pub fn branch_exists(branch: &str) -> bool {
+    git(&["rev-parse", "--verify", &format!("refs/heads/{branch}")]).is_ok()
+}
+
+/// `git worktree add <path> [-b] <branch> <commit-ish>`.
+///
+/// `ref_` is the commit-ish to branch *from*, and applies only when the
+/// branch is being created. Once the branch exists it is its own starting
+/// point: passing `ref_` there would ask git to check out trunk in the new
+/// worktree, which fails with "'<trunk>' is already used by worktree at
+/// ..." because trunk is checked out already. Naming the branch explicitly
+/// also stops git from inferring one from the path basename.
 pub fn worktree_add(path: &Path, branch: &str, ref_: Option<&str>) -> Result<(), String> {
-    let branch_exists = git(&["rev-parse", "--verify", &format!("refs/heads/{branch}")]).is_ok();
+    let branch_exists = branch_exists(branch);
     let mut args: Vec<&str> = vec!["worktree", "add"];
     if !branch_exists {
         args.push("-b");
         args.push(branch);
     }
     args.push(path.to_str().unwrap_or_default());
-    if let Some(r) = ref_ {
+    if branch_exists {
+        args.push(branch);
+    } else if let Some(r) = ref_ {
         args.push(r);
     }
     git(&args).map(|_| ())
@@ -94,18 +146,6 @@ pub fn branch_delete(branch: &str, force: bool, cwd: &Path) -> Result<(), String
     git_in(cwd, &["branch", flag, branch]).map(|_| ())
 }
 
-/// `git merge --no-ff <branch>`.
-#[allow(dead_code)]
-pub fn merge_no_ff(branch: &str) -> Result<String, String> {
-    git(&["merge", "--no-ff", branch])
-}
-
-/// `git checkout <branch>`.
-#[allow(dead_code)]
-pub fn checkout(branch: &str) -> Result<(), String> {
-    git(&["checkout", branch]).map(|_| ())
-}
-
 /// `git checkout <branch>` run in `cwd`.
 pub fn checkout_in(cwd: &Path, branch: &str) -> Result<(), String> {
     git_in(cwd, &["checkout", branch]).map(|_| ())
@@ -122,40 +162,32 @@ pub fn commit_in(message: &str, cwd: &Path) -> Result<(), String> {
     git_in(cwd, &["commit", "-m", message]).map(|_| ())
 }
 
-#[allow(dead_code)]
-pub fn commit(message: &str, files: &[&str]) -> Result<(), String> {
-    let mut args = vec!["commit", "-m", message];
-    if !files.is_empty() {
-        args.push("--");
-        args.extend_from_slice(files);
-    }
-    git(&args).map(|_| ())
-}
-
 /// `git diff <ref1>..<ref2>`.
 pub fn diff_refs(ref1: &str, ref2: &str) -> Result<String, String> {
     git(&["diff", &format!("{ref1}..{ref2}")])
 }
 
-/// `git branch --list [pattern]`. Strips the leading `* ` / `  ` from each
-/// line, matching the TS `branchList`.
+/// `git branch --list [pattern]`, one plain branch name per line.
+///
+/// Uses `--format` rather than parsing the decorated output. `git branch`
+/// prefixes each line with a marker -- `* ` for HEAD, `+ ` for a branch
+/// checked out in a linked worktree, two spaces otherwise -- and every
+/// branch planr creates is a worktree branch, so `+ ` is the common case.
+/// Asking git for the ref name sidesteps the decoration entirely.
+///
+/// `lstrip=2`, not `:short`: the short form is the shortest *unambiguous*
+/// name, so a tag sharing a branch's name makes it report `heads/plan/x`.
+/// Stripping the two leading components yields the branch name whatever
+/// else exists.
 pub fn branch_list(pattern: Option<&str>) -> Result<Vec<String>, String> {
-    let mut args = vec!["branch", "--list"];
+    let mut args = vec!["branch", "--list", "--format=%(refname:lstrip=2)"];
     if let Some(p) = pattern {
         args.push(p);
     }
     let out = git(&args)?;
     Ok(out
         .lines()
-        .map(|l| {
-            // Match TS: replace(/^\*\s/, '').replace(/^\s{2}/, '').trim()
-            // Strip "* " or "  " prefix exactly, then trim the rest.
-            if l.len() >= 2 && (&l[..2] == "* " || &l[..2] == "  ") {
-                l[2..].trim().to_string()
-            } else {
-                l.trim().to_string()
-            }
-        })
+        .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect())
 }
@@ -179,6 +211,30 @@ pub fn rev_parse_verify(ref_: &str) -> Result<String, String> {
 /// containing the process cwd.
 pub fn show_toplevel() -> Result<String, String> {
     Ok(git(&["rev-parse", "--show-toplevel"])?.trim().to_string())
+}
+
+/// The repository root, with "there is no repository here" as its own answer.
+///
+/// Git reports both outcomes as exit 128, so the message has to be read in
+/// full. The discovery failure says "not a git repository" on the first line
+/// and, when the search stops at a mount point, adds "Stopping at filesystem
+/// boundary" after it -- which is the line that survives when only the last
+/// one is kept. Match the first, or an ordinary run outside a repository is
+/// reported as a git failure.
+///
+/// Matching English text is sound only because `git_command` pins the child
+/// to `LC_ALL=C`; see there.
+pub fn toplevel_or_none() -> Result<Option<String>, String> {
+    let out = run_git_raw(None, &["rev-parse", "--show-toplevel"])?;
+    if out.status.success() {
+        return Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        ));
+    }
+    if String::from_utf8_lossy(&out.stderr).contains("not a git repository") {
+        return Ok(None);
+    }
+    Err(last_stderr_line(&out))
 }
 
 /// `git rev-parse --short <ref>`: abbreviated commit id for a commit-ish.
@@ -252,12 +308,12 @@ pub fn git_common_dir(cwd: &Path) -> Result<String, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
 
-    fn with_temp_repo<F: FnOnce(&TempDir, &Path)>(f: F) {
+    pub(crate) fn with_temp_repo<F: FnOnce(&TempDir, &Path)>(f: F) {
         let tmp = TempDir::new().unwrap();
         let repo = tmp.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
@@ -277,19 +333,6 @@ mod tests {
             assert!(gd.ends_with(".git"), "gd = {gd}");
             let p = std::path::Path::new(&gd);
             assert!(p.is_absolute(), "git-common-dir should be absolute: {gd}");
-        });
-    }
-
-    #[test]
-    fn test_branch_list_format() {
-        // Pure parsing test -- branch_list output format
-        // The `branch_list` fn can't be tested in isolation because it calls
-        // git. Instead, use git_in to create a branch and verify the format.
-        with_temp_repo(|_tmp, repo| {
-            // Create a branch
-            git_in(repo, &["branch", "feature-a"]).unwrap();
-            // branch_list uses the global cwd -- can't easily test here.
-            // Integration testing covers this. Just verify git_common_dir.
         });
     }
 }

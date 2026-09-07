@@ -6,12 +6,13 @@
 //! - `close story <slug>` -- trunk-local: child-task gate -> done flip -> commit
 //! - `close epic <slug>` -- trunk-local: child-story gate -> done flip -> commit
 
+use crate::exclude;
+use crate::frontmatter::{flip_frontmatter, local_date_string};
 use crate::git;
 use crate::lock::PlanrLock;
 use crate::parse::extract_last_review_verdict;
-use crate::ticket::{parse_ticket, ParsedTicket};
+use crate::ticket::{find_by_slug, parse_ticket, ParsedTicket};
 use std::path::Path;
-use std::process::Command;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -19,6 +20,13 @@ use std::process::Command;
 
 /// Find child tickets of a given parent on trunk by scanning files in a
 /// plan subdirectory and reading the `parent:` field.
+///
+/// Every read is fatal. The close gates decide whether a parent has
+/// unfinished children from this list, and a list cut short by a listing
+/// that failed or a blob that would not `show` looks exactly like a parent
+/// whose children are all done -- so a ticket planr could not open would
+/// close the ticket above it. A child planr cannot read has no status, and
+/// saying so is the only honest answer.
 fn find_children_on_trunk(
     parent_slug: &str,
     kind_dir: &str, // e.g. "tasks" or "stories"
@@ -26,13 +34,10 @@ fn find_children_on_trunk(
     plan_dir: &str,
 ) -> Result<Vec<ParsedTicket>, String> {
     let dir = format!("{plan_dir}/{kind_dir}");
-    let files = git::ls_tree_md(trunk, &dir).unwrap_or_default();
+    let files = git::ls_tree_md(trunk, &dir)?;
     let mut children = Vec::new();
     for f in &files {
-        let blob = match git::show_ref(trunk, f) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
+        let blob = git::show_ref(trunk, f)?;
         let ticket = parse_ticket(&blob);
         if ticket.parent.as_deref() == Some(parent_slug) {
             children.push(ticket);
@@ -41,70 +46,21 @@ fn find_children_on_trunk(
     Ok(children)
 }
 
-/// Find the task file on a branch using NN-regex match.
+/// Find the task file on a branch by slug.
+///
+/// A listing that failed is not an empty listing. Either way there is no file
+/// to close and this refuses -- the direction to fail in -- but "no task file"
+/// sends the caller to look at the branch, when what happened is that git
+/// would not answer. Say which.
 fn find_task_file_on_branch(branch: &str, slug: &str, plan_dir: &str) -> Result<String, String> {
-    let files = git::ls_tree_md(branch, &format!("{plan_dir}/tasks")).unwrap_or_default();
-    let pattern = format!(r"/[0-9]+-{}\.md$", regex::escape(slug));
-    let re = regex::Regex::new(&pattern).unwrap();
-    files
-        .into_iter()
-        .find(|f| re.is_match(f))
-        .ok_or_else(|| format!("no task file for '{slug}' on {branch}"))
-}
-
-/// Local date string (YYYY-MM-DD).
-fn local_date_string() -> String {
-    let now = jiff::Zoned::now();
-    format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day())
-}
-
-/// Frontmatter-scoped flip: status + updated, with insert-if-absent
-/// (same pattern as claim.rs).
-fn flip_frontmatter(content: &str, new_status: &str, date: &str) -> Result<String, String> {
-    let sf = split_fm(content).ok_or_else(|| "no frontmatter".to_string())?;
-    let mut has_status = false;
-    let mut has_updated = false;
-    let mut out: Vec<String> = Vec::with_capacity(sf.fm_lines.len() + 2);
-
-    for line in &sf.fm_lines {
-        if line.starts_with("status:") {
-            out.push(format!("status: {new_status}"));
-            has_status = true;
-        } else if line.starts_with("updated:") {
-            out.push(format!("updated: {date}"));
-            has_updated = true;
-        } else {
-            out.push(line.to_string());
-        }
-    }
-    // TS order: check hasStatus first (unshift), then hasUpdated (unshift puts
-    // updated ABOVE status).
-    if !has_status {
-        out.insert(0, format!("status: {new_status}"));
-    }
-    if !has_updated {
-        out.insert(0, format!("updated: {date}"));
-    }
-
-    let fm_str = out.join("\n");
-    Ok(format!("---\n{fm_str}\n---\n{}", sf.rest))
-}
-
-struct FmSplit<'a> {
-    fm_lines: Vec<&'a str>,
-    rest: &'a str,
-}
-
-fn split_fm(blob: &str) -> Option<FmSplit<'_>> {
-    if !blob.starts_with("---\n") {
-        return None;
-    }
-    let end = blob[4..].find("\n---\n")?;
-    let fm_end = 4 + end;
-    let fm_str = &blob[4..fm_end];
-    let rest = &blob[fm_end + 5..];
-    let fm_lines: Vec<&str> = fm_str.lines().collect();
-    Some(FmSplit { fm_lines, rest })
+    let dir = format!("{plan_dir}/tasks");
+    let listed = git::ls_tree_md(branch, &dir);
+    let listing_failed = listed.as_ref().err().cloned();
+    let files = listed.unwrap_or_default();
+    find_by_slug(&files, slug).ok_or_else(|| match listing_failed {
+        Some(e) => format!("cannot list {dir} on {branch}: {e}"),
+        None => format!("no task file for '{slug}' on {branch}"),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -191,27 +147,107 @@ pub fn close_task(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
             // Flip is already on the merged branch commit; the merge brings it to trunk.
             // Cleanup: tolerant worktree remove + branch delete
             if let Some(ref wt) = wt_path {
-                let _ = git::worktree_remove(wt, false);
+                // The ignore rule may only go once the worktree it hides is
+                // gone. `worktree remove` without --force refuses whenever the
+                // worktree holds untracked or modified files -- a stray build
+                // artifact is enough -- and dropping the rule anyway leaves a
+                // live worktree unhidden, which is the gitlink corruption the
+                // rule exists to prevent. A stale rule is the lesser harm, and
+                // the next close of that path clears it. The arms below are
+                // where the conditions for dropping it are enforced.
+                //
+                // First, though: never remove a worktree that holds another
+                // one -- git's own safety check cannot see a nested worktree
+                // and deletes it recursively, uncommitted work and all. See
+                // `exclude::worktrees_under`.
+                match exclude::worktrees_under(wt, cwd) {
+                    Ok(nested) if !nested.is_empty() => {
+                        let paths: Vec<String> =
+                            nested.iter().map(|p| p.display().to_string()).collect();
+                        eprintln!(
+                            "warning: merged, but the worktree at {} was left in place: \
+                             it holds {} live worktree(s) ({}). Removing it would delete \
+                             them and any uncommitted work in them. Close or remove those \
+                             first, then `git worktree remove {}` and \
+                             `git branch -d {branch}` -- until the worktree goes the \
+                             branch cannot be deleted either, so `planr board` keeps \
+                             listing {slug} in flight",
+                            wt.display(),
+                            nested.len(),
+                            paths.join(", "),
+                            wt.display()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "warning: merged, but the worktree at {} was left in place: \
+                             could not check whether it holds other worktrees ({e}); \
+                             remove it by hand once you have",
+                            wt.display()
+                        );
+                    }
+                    Ok(_) => {
+                        // Nothing below may run from inside the directory
+                        // about to be deleted -- see `exclude::step_out_of`.
+                        // The trunk worktree is the one place guaranteed to
+                        // outlive this: the nested check above has already
+                        // established that no worktree lives under `wt`, so
+                        // `trunk_dir` is not one of them.
+                        let cwd = &exclude::step_out_of(wt, &trunk_dir, cwd);
+                        match git::worktree_remove(wt, false) {
+                            Ok(()) => {
+                                // The shared default rule covers a parent directory,
+                                // so it does not match here and survives.
+                                exclude::drop_exclude(wt, cwd);
+                            }
+                            // A stale record: the directory is gone *and* git has
+                            // forgotten it, so there is nothing left to hide and
+                            // keeping the rule would hide whatever is created at that
+                            // path next.
+                            //
+                            // Both halves are load-bearing. `try_exists().unwrap_or
+                            // (true)` keeps an I/O error from reading as "the
+                            // directory is gone". And the record has to be checked
+                            // too: a *locked* worktree whose directory was deleted
+                            // fails removal while staying registered, so judging by
+                            // the directory alone dropped the rule, let the branch
+                            // delete below fail silently, and reported unqualified
+                            // success while `board` still listed the task in flight.
+                            Err(_)
+                                if !wt.try_exists().unwrap_or(true)
+                                    && git::find_worktree_for_branch(&branch).is_none() =>
+                            {
+                                exclude::drop_exclude(wt, cwd);
+                            }
+                            Err(e) => {
+                                // The merge succeeded, so this is not a failure
+                                // of the close -- but it is not nothing. The
+                                // worktree survives, `git branch -d` below
+                                // refuses to delete a branch checked out in it,
+                                // and `planr board` keeps listing the task as
+                                // in flight.
+                                eprintln!(
+                            "warning: merged, but the worktree at {} could not be removed ({e}); \
+                             it and branch {branch} remain -- `git worktree remove --force {}` \
+                             to finish cleaning up",
+                            wt.display(),
+                            wt.display()
+                        );
+                            }
+                        }
+                    }
+                }
             }
             let _ = git::branch_delete(&branch, false, &trunk_dir);
 
-            // Check if parent story can also be closed
-            if let Some(ref pslug) = parent_story {
-                let siblings =
-                    find_children_on_trunk(pslug, "tasks", trunk, plan_dir).unwrap_or_default();
-                let all_done = siblings.iter().all(|t| t.status == "done");
-                if all_done && !siblings.is_empty() {
-                    Ok(format!(
-                        "merged {branch} into {trunk}; {slug} done\n\
-                         info: all tasks under story '{pslug}' are done. \
-                         you may also close parent story: planr close story {pslug}"
-                    ))
-                } else {
-                    Ok(format!("merged {branch} into {trunk}; {slug} done"))
-                }
-            } else {
-                Ok(format!("merged {branch} into {trunk}; {slug} done"))
-            }
+            Ok(with_parent_hint(
+                format!("merged {branch} into {trunk}; {slug} done"),
+                parent_story.as_deref(),
+                "tasks",
+                "story",
+                trunk,
+                plan_dir,
+            ))
         }
         Err(conflict_msg) => {
             // On conflict the merge was aborted; worktree+branch intact
@@ -230,7 +266,7 @@ fn try_merge(
     slug: &str,
     cwd: &Path,
 ) -> Result<String, String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = git::git_command();
     cmd.current_dir(cwd);
     cmd.args(["merge", "--no-ff", branch, "-m", message]);
 
@@ -245,7 +281,7 @@ fn try_merge(
         let full_log = format!("{stdout}{stderr}").trim().to_string();
 
         // List conflicted files
-        let conflicted = Command::new("git")
+        let conflicted = git::git_command()
             .current_dir(cwd)
             .args(["diff", "--name-only", "--diff-filter=U"])
             .output()
@@ -260,7 +296,7 @@ fn try_merge(
             .unwrap_or_else(|| "<unknown>".to_string());
 
         // Abort the merge
-        let _ = Command::new("git")
+        let _ = git::git_command()
             .current_dir(cwd)
             .args(["merge", "--abort"])
             .output();
@@ -295,13 +331,7 @@ pub fn close_story(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Resul
     let parent_epic = ticket.parent.clone();
 
     // Child task gate
-    let children = find_children_on_trunk(slug, "tasks", trunk, plan_dir)?;
-    let unfinished: Vec<String> = children
-        .iter()
-        .filter(|t| t.status != "done")
-        .map(|t| format!("{}({})", t.id, t.status))
-        .collect();
-
+    let unfinished = unfinished_children(slug, "tasks", trunk, plan_dir)?;
     if !unfinished.is_empty() {
         return Err(format!(
             "refuse close: story '{slug}' has unfinished tasks: {}\n\
@@ -314,23 +344,14 @@ pub fn close_story(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Resul
     let _lock = PlanrLock::exclusive(cwd).map_err(|e| format!("lock error: {e}"))?;
     flip_and_commit_kind(slug, "stories", trunk, plan_dir, cwd)?;
 
-    // Check if parent epic can also be closed
-    if let Some(ref pslug) = parent_epic {
-        let siblings =
-            find_children_on_trunk(pslug, "stories", trunk, plan_dir).unwrap_or_default();
-        let all_done = siblings.iter().all(|t| t.status == "done");
-        if all_done && !siblings.is_empty() {
-            Ok(format!(
-                "closed story {slug}; all tasks done\n\
-                 info: all stories under epic '{pslug}' are done. \
-                 you may also close parent epic: planr close epic {pslug}"
-            ))
-        } else {
-            Ok(format!("closed story {slug}; all tasks done"))
-        }
-    } else {
-        Ok(format!("closed story {slug}; all tasks done"))
-    }
+    Ok(with_parent_hint(
+        format!("closed story {slug}; all tasks done"),
+        parent_epic.as_deref(),
+        "stories",
+        "epic",
+        trunk,
+        plan_dir,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -339,13 +360,7 @@ pub fn close_story(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Resul
 
 pub fn close_epic(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result<String, String> {
     // Child story gate
-    let children = find_children_on_trunk(slug, "stories", trunk, plan_dir)?;
-    let unfinished: Vec<String> = children
-        .iter()
-        .filter(|t| t.status != "done")
-        .map(|t| format!("{}({})", t.id, t.status))
-        .collect();
-
+    let unfinished = unfinished_children(slug, "stories", trunk, plan_dir)?;
     if !unfinished.is_empty() {
         return Err(format!(
             "refuse close: epic '{slug}' has unfinished stories: {}\n\
@@ -366,7 +381,59 @@ pub fn close_epic(slug: &str, trunk: &str, plan_dir: &str, cwd: &Path) -> Result
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/// The children of `slug` under `kind_dir` that are not done, as `id(status)`
+/// for a refusal message. An empty list opens the gate.
+///
+/// Every read behind this is fatal, deliberately -- see
+/// `find_children_on_trunk`. A child planr could not open must not read as a
+/// child that is done.
+fn unfinished_children(
+    slug: &str,
+    kind_dir: &str,
+    trunk: &str,
+    plan_dir: &str,
+) -> Result<Vec<String>, String> {
+    Ok(find_children_on_trunk(slug, kind_dir, trunk, plan_dir)?
+        .iter()
+        .filter(|t| t.status != "done")
+        .map(|t| format!("{}({})", t.id, t.status))
+        .collect())
+}
+
+/// Append the "you may also close the parent" line to `done`, when the close
+/// that just happened was the last one the parent was waiting on.
+///
+/// A hint, not a gate: the read behind it is allowed to fail, because the
+/// close it suggests has a gate of its own. A failure costs the caller one
+/// line of advice. `children` is the plural kind of the parent's children,
+/// which is also the directory they live in under the plan directory.
+fn with_parent_hint(
+    done: String,
+    parent: Option<&str>,
+    children: &str,
+    parent_kind: &str,
+    trunk: &str,
+    plan_dir: &str,
+) -> String {
+    let Some(pslug) = parent else { return done };
+    let siblings = find_children_on_trunk(pslug, children, trunk, plan_dir).unwrap_or_default();
+    // No siblings at all is not "all of them are done": there is nothing the
+    // parent was waiting on, so there is nothing to report.
+    if siblings.is_empty() || !siblings.iter().all(|t| t.status == "done") {
+        return done;
+    }
+    format!(
+        "{done}\n\
+         info: all {children} under {parent_kind} '{pslug}' are done. \
+         you may also close parent {parent_kind}: planr close {parent_kind} {pslug}"
+    )
+}
+
 /// Find a ticket file on trunk under a given kind directory by slug.
+///
+/// The listing is allowed to fail and still refuse, as in
+/// `find_task_file_on_branch`, and for the same reason the message
+/// distinguishes the two.
 pub(crate) fn find_ticket_by_slug(
     slug: &str,
     kind_dir: &str,
@@ -374,13 +441,34 @@ pub(crate) fn find_ticket_by_slug(
     plan_dir: &str,
 ) -> Result<String, String> {
     let dir = format!("{plan_dir}/{kind_dir}");
-    let files = git::ls_tree_md(trunk, &dir).unwrap_or_default();
-    let pattern = format!(r"/[0-9]+-{}\.md$", regex::escape(slug));
-    let re = regex::Regex::new(&pattern).unwrap();
-    files
-        .into_iter()
-        .find(|f| re.is_match(f))
-        .ok_or_else(|| format!("no {kind_dir} file for slug '{slug}' on {trunk}"))
+    let listed = git::ls_tree_md(trunk, &dir);
+    let listing_failed = listed.as_ref().err().cloned();
+    let files = listed.unwrap_or_default();
+    find_by_slug(&files, slug).ok_or_else(|| match listing_failed {
+        Some(e) => format!("cannot list {dir} on {trunk}: {e}"),
+        None => format!("no {kind_dir} file for slug '{slug}' on {trunk}"),
+    })
+}
+
+/// Write `content` to `file` inside the trunk working tree and commit it.
+///
+/// `file` is repo-relative, as git named it, so the directory it lands in may
+/// not exist in this working tree yet.
+pub(crate) fn write_and_commit_on_trunk(
+    trunk_dir: &Path,
+    file: &str,
+    content: &str,
+    message: &str,
+) -> Result<(), String> {
+    let fpath = trunk_dir.join(file);
+    let parent = fpath.parent().unwrap_or(trunk_dir);
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("cannot create dir {}: {e}", parent.display()))?;
+    std::fs::write(&fpath, content)
+        .map_err(|e| format!("cannot write {}: {e}", fpath.display()))?;
+
+    git::add_file(file, trunk_dir)?;
+    git::commit_in(message, trunk_dir)
 }
 
 /// Flip a trunk-local ticket to done and commit.
@@ -402,71 +490,10 @@ fn flip_and_commit_kind(
     let date = local_date_string();
     let new_content = flip_frontmatter(&blob, "done", &date)?;
 
-    // The file is available in the trunk working tree.
-    let fpath = trunk_dir.join(&file);
-    let parent = fpath.parent().unwrap_or(&trunk_dir);
-    std::fs::create_dir_all(parent)
-        .map_err(|e| format!("cannot create dir {}: {e}", parent.display()))?;
-    std::fs::write(&fpath, &new_content)
-        .map_err(|e| format!("cannot write {}: {e}", fpath.display()))?;
-
-    git::add_file(&file, &trunk_dir)?;
-    git::commit_in(&format!("plan: close {kind_dir} {slug}"), &trunk_dir)?;
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ---- frontmatter helpers ----
-
-    #[test]
-    fn test_split_fm_simple() {
-        let blob = "---\nid: x\nstatus: todo\n---\nbody";
-        let sf = split_fm(blob).unwrap();
-        assert_eq!(sf.fm_lines[0], "id: x");
-        assert_eq!(sf.fm_lines[1], "status: todo");
-        assert_eq!(sf.rest, "body");
-    }
-
-    #[test]
-    fn test_split_fm_no_fm() {
-        assert!(split_fm("no frontmatter").is_none());
-    }
-
-    #[test]
-    fn test_flip_frontmatter_replaces() {
-        let content = "---\nid: x\nstatus: review\nupdated: 2026-01-01\n---\nbody\n";
-        let result = flip_frontmatter(content, "done", "2026-08-05").unwrap();
-        assert!(result.contains("status: done"));
-        assert!(result.contains("updated: 2026-08-05"));
-        assert!(result.contains("id: x"));
-        assert!(result.ends_with("body\n"));
-    }
-
-    #[test]
-    fn test_flip_frontmatter_inserts_if_absent() {
-        let content = "---\nid: x\n---\nbody\n";
-        let result = flip_frontmatter(content, "done", "2026-08-05").unwrap();
-        let sep = result.find("\n---\n").unwrap();
-        let fm_part = &result[4..sep];
-        assert!(fm_part.contains("status: done"));
-        assert!(fm_part.contains("updated: 2026-08-05"));
-    }
-
-    // ---- local_date_string ----
-
-    #[test]
-    fn test_local_date_string_format() {
-        let s = local_date_string();
-        assert_eq!(s.len(), 10);
-        assert_eq!(&s[4..5], "-");
-        assert_eq!(&s[7..8], "-");
-    }
+    write_and_commit_on_trunk(
+        &trunk_dir,
+        &file,
+        &new_content,
+        &format!("plan: close {kind_dir} {slug}"),
+    )
 }
