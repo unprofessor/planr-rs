@@ -130,10 +130,6 @@ impl Authority {
             Authority::Branch { ref_ } | Authority::Trunk { ref_ } => ref_,
         }
     }
-
-    pub fn is_branch(&self) -> bool {
-        matches!(self, Authority::Branch { .. })
-    }
 }
 
 /// The ref name the authority rule looks for. One spelling, so nothing can

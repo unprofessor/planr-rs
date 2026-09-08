@@ -75,17 +75,30 @@ pub struct Finding {
     pub detail: String,
 }
 
-/// Every slug's events, bucketed, WITHOUT the authority narrowing.
+/// Everything one walk of the whole ref set yields.
+struct Union {
+    /// Every slug's events, oldest-first.
+    buckets: BTreeMap<String, Vec<Event>>,
+    /// The `plan/` refs that exist, fully qualified. Membership answers "does
+    /// this ticket have a branch" without a process per ticket.
+    live: BTreeSet<String>,
+}
+
+/// Every slug's events, WITHOUT the authority narrowing.
 ///
 /// The check needs the union that `all_by_ticket` narrows away: a shadowed
 /// declaration is invisible to the fold by design, and reporting what the fold
-/// cannot see is the entire job. Duplicating the walk here rather than adding a
-/// flag to `all_by_ticket` keeps the reader's ref set a single expression --
-/// the reader must never gain a mode in which it sees more.
-fn union_by_ticket(trunk: &str) -> Result<BTreeMap<String, Vec<Event>>, String> {
+/// cannot see is the entire job. Walking here rather than adding a flag to
+/// `all_by_ticket` keeps the reader's ref set a single expression -- the reader
+/// must never gain a mode in which it sees more.
+fn union_by_ticket(trunk: &str) -> Result<Union, String> {
+    let live: BTreeSet<String> = git::for_each_ref("refs/heads/plan/")?.into_iter().collect();
     let mut refs: Vec<String> = vec![trunk.to_string()];
-    refs.extend(git::for_each_ref("refs/heads/plan/")?);
-    events::bucket_over(&refs)
+    refs.extend(live.iter().cloned());
+    Ok(Union {
+        buckets: events::bucket_over(&refs)?,
+        live,
+    })
 }
 
 /// A slug's kind, for every ticket that still has a file on trunk.
@@ -155,8 +168,21 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
     }
 
     let kinds = kinds_on_trunk(ctx)?;
-    let buckets = union_by_ticket(&ctx.trunk)?;
+    let Union { buckets, live } = union_by_ticket(&ctx.trunk)?;
     let mut findings = Vec::new();
+
+    // Which of these commits trunk cannot reach, for the whole backlog in one
+    // process. Every ticket without a live branch is answered from this set,
+    // so the check costs O(claimed) processes rather than O(tickets) -- the
+    // same trick `all_by_ticket` uses, for the same reason.
+    let every_commit: Vec<String> = buckets
+        .values()
+        .flat_map(|evs| evs.iter().map(|e| e.commit.clone()))
+        .collect();
+    let off_trunk: BTreeSet<String> =
+        git::rev_list(&every_commit, std::slice::from_ref(&ctx.trunk))?
+            .into_iter()
+            .collect();
 
     for (slug, all) in &buckets {
         if slug.is_empty() {
@@ -200,25 +226,36 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
         }
 
         // ---- ordering: is the fold's winner the graph's winner? ----
-        let authority = match kind {
-            Some(kind) => events::authority(kind, slug, &ctx.trunk)?,
-            None => events::Authority::Trunk {
-                ref_: ctx.trunk.clone(),
-            },
+        //
+        // The same authority rule the reader applies, resolved from the ref
+        // list rather than by asking whether each ticket's branch exists.
+        // `integrated` is still the one definition of the predicate.
+        let own = kind.map(|kind| events::own_ref(kind, slug));
+        let branch = match own {
+            Some(own) if live.contains(&own) && !events::integrated(&ctx.trunk, &own)? => Some(own),
+            _ => None,
         };
 
         // What the fold can actually see, in the same one-ref terms it reads.
-        let commits: Vec<String> = all.iter().map(|e| e.commit.clone()).collect();
-        let unreachable: BTreeSet<String> =
-            git::rev_list(&commits, &[authority.ref_().to_string()])?
-                .into_iter()
-                .collect();
+        let unreachable: BTreeSet<String> = match &branch {
+            Some(branch) => {
+                let commits: Vec<String> = all.iter().map(|e| e.commit.clone()).collect();
+                git::rev_list(&commits, std::slice::from_ref(branch))?
+                    .into_iter()
+                    .collect()
+            }
+            None => all
+                .iter()
+                .map(|e| e.commit.clone())
+                .filter(|c| off_trunk.contains(c))
+                .collect(),
+        };
 
         let hidden: Vec<&Event> = all
             .iter()
             .filter(|e| unreachable.contains(&e.commit) && declares_state(&ctx.schema, kind, e))
             .collect();
-        if !hidden.is_empty() && authority.is_branch() {
+        if let (false, Some(branch)) = (hidden.is_empty(), &branch) {
             findings.push(Finding {
                 slug: slug.clone(),
                 kind: Kind::Shadowed,
@@ -227,7 +264,7 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
                      another lane: {}. The branch wins by the authority rule, and the trunk lane \
                      is applied when the branch integrates -- unless the two disagree, which is \
                      a decision for the people who made them",
-                    authority.ref_(),
+                    branch,
                     hidden.len(),
                     hidden
                         .iter()
