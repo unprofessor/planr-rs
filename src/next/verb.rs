@@ -424,6 +424,10 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
         .ok_or_else(|| format!("no verb '{verb_name}' applies to kind '{kind}'"))?
         .clone();
 
+    // Resolved qualified; displayed short. Keeping the two apart matters more
+    // than it looks: a report that printed `refs/heads/plan/task/foo` was the
+    // visible tell that the same qualified string was reaching a comparison
+    // built for branch names, in `sync_path`.
     let base_ref = match verb.base {
         Base::Home => ctx.trunk.clone(),
         Base::Own => {
@@ -434,6 +438,10 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
             }
             own.clone()
         }
+    };
+    let base_display = match verb.base {
+        Base::Home => ctx.trunk.clone(),
+        Base::Own => own_short.clone(),
     };
 
     // The state machine: `from` is structural and checked before `require`.
@@ -532,7 +540,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
         Effect::Advance => {
             git::update_ref(&base_ref, &commit, &base_sha)?;
             sync(&mut report, &base_ref, &commit);
-            report.push(format!("{base_ref} -> {}", &commit[..7]));
+            report.push(format!("{base_display} -> {}", &commit[..7]));
         }
         Effect::Create => {
             git::create_ref(&own, &commit)?;
@@ -561,7 +569,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
                 // Nothing in flight -- an ordinary advance on home.
                 git::update_ref(&base_ref, &commit, &base_sha)?;
                 sync(&mut report, &base_ref, &commit);
-                report.push(format!("{base_ref} -> {}", &commit[..7]));
+                report.push(format!("{base_display} -> {}", &commit[..7]));
             }
             if git::ref_exists(&own) {
                 let path = worktree_path(ctx, &kind, slug);

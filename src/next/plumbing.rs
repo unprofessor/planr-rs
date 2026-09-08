@@ -181,9 +181,19 @@ pub fn for_each_ref(prefix: &str) -> Result<Vec<String>, String> {
 /// the new ticket as staged for deletion.
 ///
 /// Only the authored path is touched, so a user's unrelated edits are safe.
+///
+/// **Both sides of the comparison are fully qualified**, and that is not
+/// cosmetic. `symbolic-ref --short` returns a branch name, and once ticket refs
+/// became qualified the equality could never hold for a `base: own` verb -- so
+/// the guard that means "this worktree is on that ref, reconcile it" silently
+/// became "elsewhere, skip". The declaration commit still landed, so the folded
+/// state stayed right and no test noticed; what was lost was the `annotate`
+/// content. A reviewer running `request-changes` from inside the worktree left
+/// the stale copy STAGED, and the worker's next ordinary commit reverted the
+/// `## Review` note -- the only thing that verb writes.
 pub fn sync_path(ref_: &str, commit: &str, path: &str) -> Result<(), String> {
-    let head = run(&["symbolic-ref", "--quiet", "--short", "HEAD"]).unwrap_or_default();
-    if head.trim() != ref_ {
+    let head = run(&["symbolic-ref", "--quiet", "HEAD"]).unwrap_or_default();
+    if head.trim() != qualify(ref_) {
         return Ok(()); // this worktree is elsewhere; nothing to reconcile
     }
     if show(commit, path).is_ok() {

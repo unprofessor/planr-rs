@@ -55,6 +55,12 @@ fn planr(dir: &Path, args: &[&str]) -> (bool, String, String) {
     )
 }
 
+/// Run planr from a directory that is not the repository root -- a ticket's
+/// own worktree, say, which is where a worker sits.
+fn planr_in(dir: &Path, args: &[&str]) -> (bool, String, String) {
+    planr(dir, args)
+}
+
 fn ok(dir: &Path, args: &[&str]) -> String {
     let (success, stdout, stderr) = planr(dir, args);
     assert!(success, "planr {args:?} failed:\n{stderr}");
@@ -737,4 +743,54 @@ fn a_tag_named_after_a_ticket_cannot_shadow_its_branch() {
     drive_to_approved(dir, "t1");
     let state = ok(dir, &["next", "state", "t1"]);
     assert!(state.contains("t1: approved"), "{state}");
+}
+
+#[test]
+fn a_verb_run_from_inside_the_worktree_reconciles_it() {
+    // A regression the folded state cannot see. `sync_path` decides whether
+    // this worktree is the one to reconcile by comparing HEAD against the ref
+    // the verb moved -- and once ticket refs became fully qualified, that
+    // comparison was branch-name against ref-path and could never hold. The
+    // guard meaning "reconcile it" silently became "skip".
+    //
+    // The declaration commit still landed, so state stayed correct and the
+    // whole suite stayed green. What was lost was the `annotate` CONTENT: the
+    // stale copy was left STAGED, so a reviewer's `## Review` note existed on
+    // the branch tip and not in the worktree, and the worker's next ordinary
+    // commit reverted it -- the only thing that verb writes.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+
+    ok(dir, &["next", "new", "task", "t1", "Task one"]);
+    ok(dir, &["next", "do", "claim", "t1", ""]);
+
+    // Stop at `review`. `request-changes` is the own/advance verb that carries
+    // content, and it is exactly what a reviewer runs from inside the worktree.
+    let wt = dir.join(".plan/worktrees/task/t1");
+    let ticket = wt.join(".plan/tickets/t1.md");
+    let mut seeded = std::fs::read_to_string(&ticket).unwrap();
+    seeded.push_str("\n## Validation\n\nchecked\n");
+    std::fs::write(&ticket, seeded).unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["commit", "-m", "validation"]);
+    ok(dir, &["next", "do", "submit", "t1", ""]);
+
+    let (success, _, stderr) =
+        planr_in(&wt, &["next", "do", "request-changes", "t1", "needs work"]);
+    assert!(success, "request-changes failed:\n{stderr}");
+
+    let on_disk = std::fs::read_to_string(&ticket).unwrap();
+    assert!(
+        on_disk.contains("needs work"),
+        "the worktree still holds the pre-verb copy, so the next commit reverts the note:\n{on_disk}"
+    );
+
+    // And nothing is left staged -- the staged-stale-copy is what made the
+    // loss silent rather than merely inconvenient.
+    let status = git_out(&wt, &["status", "--porcelain", "--", ".plan/tickets/t1.md"]);
+    assert!(
+        status.trim().is_empty(),
+        "the verb left its own ticket file dirty in the worktree: {status:?}"
+    );
 }

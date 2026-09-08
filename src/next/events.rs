@@ -362,9 +362,14 @@ pub fn all_by_ticket(trunk: &str) -> Result<BTreeMap<String, Vec<Event>>, String
     // ref checked out in ANOTHER worktree with "+ ", which is every claimed
     // ticket, and the marker travelled into the revision list as part of the
     // name. Board then failed outright whenever any ticket was claimed.
+    // Qualified, so this is the same ref set the reservation and the
+    // single-ticket walk compute rather than merely a set that agrees with
+    // them today. `%(refname:short)` names a branch, and a tag of that name
+    // wins git's lookup order -- which produced an `is ambiguous` warning git
+    // writes to stderr and this code discards on success.
     let mut refs: Vec<String> = vec![trunk.to_string()];
     if let Ok(listed) = git::for_each_ref("refs/heads/plan/") {
-        refs.extend(listed);
+        refs.extend(listed.into_iter().map(|r| format!("refs/heads/{r}")));
     }
 
     let format = format!("--format={}", log_format());
