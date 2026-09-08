@@ -722,6 +722,12 @@ fn percent_decode(s: &str) -> String {
 // Style
 // ---------------------------------------------------------------------------
 
+/// The whole stylesheet, inlined into every page: no CDN, no second request.
+///
+/// Load-bearing ordering: `a[href^='/dangling/']` has the same specificity as
+/// `.md a`, so it only wins by coming after it. Keep the dangling rules last
+/// among the link rules, or a broken wiki-link in a body renders in the live
+/// link's color and stops reading as broken.
 const STYLE: &str = "\
 :root{--bg:#fff;--fg:#1a1a1a;--dim:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;\
 --warn:#b45309;--warnbg:#fffbeb;--err:#b91c1c;--code:#f6f7f9}\
@@ -752,6 +758,9 @@ tr.error td{background:color-mix(in srgb,var(--err) 8%,transparent)}\
 a.slug{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;\
 color:var(--accent);text-decoration:none}\
 a.slug:hover{text-decoration:underline}\
+.md a{color:var(--accent);text-decoration:underline;text-underline-offset:2px;\
+text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent)}\
+.md a:hover{text-decoration-color:currentColor}\
 a[href^='/dangling/']{color:var(--err);text-decoration:underline wavy}\
 a[href^='/dangling/']:after{content:'?';vertical-align:super;font-size:9px}\
 .none{color:var(--dim)}\
@@ -787,3 +796,22 @@ color:var(--dim)}\
 .md li input[type=checkbox]{margin-right:6px}\
 .md table{display:table}\
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::STYLE;
+
+    /// `.md a` and `a[href^='/dangling/']` tie on specificity, so source order
+    /// decides which one colors a broken wiki-link in a ticket body.
+    #[test]
+    fn test_dangling_link_rule_follows_the_body_link_rule() {
+        let body = STYLE.find(".md a{").expect("no body link rule");
+        let dangling = STYLE
+            .find("a[href^='/dangling/']{")
+            .expect("no dangling link rule");
+        assert!(
+            dangling > body,
+            "the dangling rule must come after `.md a` to win the tie"
+        );
+    }
+}
