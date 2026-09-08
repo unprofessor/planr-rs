@@ -12,6 +12,12 @@
   wiki-link routes to a page naming who refers to the slug, rather than
   reading as a live link.
 
+  The board leads with what is in flight -- the claimed branches and the task
+  each one carries -- above the epic, story, and task tables. A ticket page
+  shows one status badge, the one its own file declares; when an in-flight
+  branch disagrees, the page names that branch and its value beside the badge
+  rather than showing a second one.
+
   It takes the same optional ref as `board`, so `planr serve HEAD~5` browses
   an older backlog. `--port` defaults to one the OS picks, and the socket
   binds to `127.0.0.1` only. Nothing writes; the backlog is re-read on every
