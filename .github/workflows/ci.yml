@@ -62,11 +62,30 @@ jobs:
           toolchain: stable
       - run: cargo test --workspace
 
+  # The `serve` feature is on by default, so every job above builds it and
+  # none of them builds without it. A `#[cfg(feature = "serve")]` that has
+  # drifted -- a match arm left ungated, a helper only the server calls --
+  # then breaks `cargo install --no-default-features` and nothing here
+  # notices until a user reports it.
+  check-no-default:
+    name: check (no default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable
+          components: clippy
+      - run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+      - run: cargo test --workspace --no-default-features
+
   publish:
     name: publish
     # Only runs on release-tag pushes; fmt/clippy/test still gate on them.
     if: github.ref_type == 'tag'
-    needs: [fmt, clippy, test]
+    needs: [fmt, clippy, test, check-no-default]
     runs-on: ubuntu-latest
     environment: publish
     permissions:
@@ -97,7 +116,7 @@ jobs:
   release:
     name: release (${{ matrix.target }})
     if: github.ref_type == 'tag'
-    needs: [fmt, clippy, test]
+    needs: [fmt, clippy, test, check-no-default]
     strategy:
       fail-fast: false
       matrix:

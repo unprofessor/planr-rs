@@ -15,11 +15,19 @@ pkg-fmt = "tgz"
 lto = true
 strip = true
 
+# `serve` is on by default: the browser view is part of what planr is for, and
+# a default-off feature is a feature nobody has. `--no-default-features`
+# builds the CLI alone, without tiny_http or pulldown-cmark -- keep the cfgs
+# tight enough that it still compiles, which the CI `check-no-default` job is
+# there to prove.
+#
+# `next` is the 0.4 typed-graph model, on by default while it is being
+# experimented with so it stays compiled and tested. It is reached only
+# through `planr next`, so 0.3's surface is unchanged either way; drop it from
+# `default` to build a release without the experiment.
 [features]
-# The 0.4 typed-graph model. Enabled by default while it is being
-# experimented with, so it stays compiled and tested; drop it from `default`
-# to build a release without the experiment.
-default = ["next"]
+default = ["serve", "next"]
+serve = ["dep:tiny_http", "dep:pulldown-cmark"]
 next = []
 
 [dependencies]
@@ -29,6 +37,15 @@ serde_yaml = "0.9"
 regex = "1"
 fs2 = "0.4"
 jiff = { version = "0.2", default-features = false, features = ["std"] }
+# tiny_http -- blocking HTTP/1.1 for `planr serve`. Four leaf dependencies
+# against an async stack's eighty, for a loopback server with no concurrency
+# story worth the difference.
+tiny_http = { version = "0.12", optional = true }
+# pulldown-cmark -- CommonMark for the ticket body. `default-features = false`
+# drops the bundled binary's getopts/unicode-width; `html` is the renderer.
+pulldown-cmark = { version = "0.13", optional = true, default-features = false, features = [
+  "html",
+] }
 
 [build-dependencies]
 # semvertag-shell -- derive a SemVer version from git describe at build time

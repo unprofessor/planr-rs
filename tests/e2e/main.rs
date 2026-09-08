@@ -15,3 +15,5 @@ mod lint;
 mod new_ticket;
 mod plan_dir;
 mod secondary_worktree;
+#[cfg(feature = "serve")]
+mod serve;

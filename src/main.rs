@@ -21,6 +21,8 @@ mod new_cmd;
 mod next;
 mod parse;
 mod review;
+#[cfg(feature = "serve")]
+mod serve;
 mod ticket;
 
 // ---------------------------------------------------------------------------
@@ -100,6 +102,17 @@ enum Command {
     Lint {
         /// Optional git ref to lint (omit for working tree)
         r#ref: Option<String>,
+    },
+
+    /// Browse the backlog in a browser: board, tickets, and wiki-links
+    #[cfg(feature = "serve")]
+    Serve {
+        /// Commit-ish to read tickets from, e.g. main, HEAD, a branch, or a
+        /// SHA (default: the current on-disk working tree)
+        r#ref: Option<String>,
+        /// Port to listen on, on 127.0.0.1 (default: one the OS picks)
+        #[arg(long, default_value_t = 0)]
+        port: u16,
     },
 
     /// Scaffold a new ticket file
@@ -533,6 +546,16 @@ fn main() {
             }
             if report.error_count > 0 {
                 process::exit(1);
+            }
+        }
+        #[cfg(feature = "serve")]
+        Command::Serve { r#ref, port } => {
+            let ref_ = r#ref.filter(|r| !r.is_empty());
+            if ref_.is_none() {
+                warn_if_plan_dir_missing(&cli.plan_dir);
+            }
+            if let Err(e) = serve::run(port, ref_, &cli.plan_dir) {
+                fail(&e);
             }
         }
         Command::New {
