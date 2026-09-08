@@ -48,6 +48,12 @@
 
 ### Fixed
 
+- **Links in a ticket body are styled like the rest of the page.** `planr
+  serve` styled the slug links in a ticket's metadata and relations but left
+  body links to the browser default, which on a dark background is a navy
+  barely separable from the text. They now use the same accent color, so a
+  live wiki-link reads as a link and a dangling one still reads as broken.
+
 - **A `[[slug]]` written inside code is no longer read as a wiki-link.**
   Fenced blocks were already skipped; inline code spans were not, so a ticket
   documenting the link syntax -- `` `[[a|label]]` `` -- was scanned as if it
