@@ -25,7 +25,25 @@ impl Ctx {
         format!("{}/tickets/{slug}.md", self.plan_dir)
     }
 
+    /// The ticket's own ref, **fully qualified**.
+    ///
+    /// `git rev-parse <name>` searches `refs/<name>`, then `refs/tags/<name>`,
+    /// then `refs/heads/<name>`, so the short form resolves a *tag* of the same
+    /// name in preference to the branch. A tag named after a ticket then
+    /// shadowed its branch everywhere a ref was resolved: the verb runner built
+    /// on the tag's tree, so `submit` could not see a `## Validation` section
+    /// the branch demonstrably had, and the ticket froze in a state no verb
+    /// could advance. Naming `refs/heads/` removes git's resolution order --
+    /// which the ref backend may change -- from every answer.
+    ///
+    /// Use [`Ctx::own_ref_short`] for anything a human reads, and for
+    /// `git worktree add`, which wants a branch name rather than a ref path.
     pub fn own_ref(&self, kind: &str, slug: &str) -> String {
+        format!("refs/heads/plan/{kind}/{slug}")
+    }
+
+    /// The same ref as a branch name, for display and for `worktree add`.
+    pub fn own_ref_short(&self, kind: &str, slug: &str) -> String {
         format!("plan/{kind}/{slug}")
     }
 }
@@ -396,6 +414,9 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
     let ticket = read_ticket(ctx, &ctx.trunk, slug)?;
     let kind = ticket.kind.clone();
     let own = ctx.own_ref(&kind, slug);
+    // Everything a human reads, and `worktree add`, take the branch name; every
+    // resolution takes the qualified one.
+    let own_short = ctx.own_ref_short(&kind, slug);
 
     let verb = ctx
         .schema
@@ -408,7 +429,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
         Base::Own => {
             if !git::ref_exists(&own) {
                 return Err(format!(
-                    "refuse {verb_name}: '{slug}' has no branch {own} -- there is nothing on a branch to work from"
+                    "refuse {verb_name}: '{slug}' has no branch {own_short} -- there is nothing on a branch to work from"
                 ));
             }
             own.clone()
@@ -474,7 +495,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
     }
     if let Some((tip, ahead)) = &preserving {
         body.push_str(&format!(
-            "\n\nPreserved {ahead} unmerged commit(s) from {own} at {tip} in history; \
+            "\n\nPreserved {ahead} unmerged commit(s) from {own_short} at {tip} in history; \
              the work itself is not applied to {}.",
             ctx.trunk
         ));
@@ -484,39 +505,62 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
 
     // ---- one ref movement ----
     let mut report = Vec::new();
+
+    // Reconciling this worktree cannot fail the step -- `docs/semantics.md`
+    // section 3.1: "The workspace is never history. Step 7 cannot fail the
+    // step, and nothing in R or G depends on it."
+    //
+    // Propagating it did, and under `merge` the damage was not merely a
+    // misleading message: the sync sits BETWEEN the merge and the ref release,
+    // so a read-only checkout left trunk moved, the ticket transitioned, and
+    // the branch and worktree leaked -- with no way to finish, because the
+    // only verb that releases the ref then refused on its own `from` gate.
+    // A half-applied verb with no completion path is much worse than a dirty
+    // worktree.
+    let sync = |report: &mut Vec<String>, ref_: &str, commit: &str| {
+        let path = ctx.ticket_path(slug);
+        if let Err(e) = git::sync_path(ref_, commit, &path) {
+            report.push(format!(
+                "warning: this worktree could not be updated to match: {e}\n  \
+                 run `git restore --source={} -- {path}` once the cause is cleared",
+                &commit[..7]
+            ));
+        }
+    };
+
     match verb.effect {
         Effect::Advance => {
             git::update_ref(&base_ref, &commit, &base_sha)?;
-            git::sync_path(&base_ref, &commit, &ctx.ticket_path(slug))?;
+            sync(&mut report, &base_ref, &commit);
             report.push(format!("{base_ref} -> {}", &commit[..7]));
         }
         Effect::Create => {
             git::create_ref(&own, &commit)?;
-            report.push(format!("created {own} at {}", &commit[..7]));
+            report.push(format!("created {own_short} at {}", &commit[..7]));
         }
         Effect::Merge => {
             let merge_msg = format!(
                 "plan: {verb_name} {slug}\n\nPlanr-Verb: {verb_name}\nPlanr-Ticket: {slug}\n"
             );
             let merged = git::merge_into(&ctx.trunk, &commit, &merge_msg)?;
-            git::sync_path(&ctx.trunk, &merged, &ctx.ticket_path(slug))?;
+            sync(&mut report, &ctx.trunk, &merged);
             report.push(format!("merged into {} at {}", ctx.trunk, &merged[..7]));
             git::delete_ref(&own)?;
-            report.push(format!("released {own}"));
+            report.push(format!("released {own_short}"));
         }
         Effect::TicketOnly => {
             if let Some((_tip, ahead)) = &preserving {
                 let merged = git::merge_ticket_only(&ctx.trunk, &own, &tree, &commit_msg)?;
-                git::sync_path(&ctx.trunk, &merged, &ctx.ticket_path(slug))?;
+                sync(&mut report, &ctx.trunk, &merged);
                 report.push(format!(
-                    "{} -> {} (ticket only: {ahead} commit(s) from {own} preserved in history, not applied)",
+                    "{} -> {} (ticket only: {ahead} commit(s) from {own_short} preserved in history, not applied)",
                     ctx.trunk,
                     &merged[..7]
                 ));
             } else {
                 // Nothing in flight -- an ordinary advance on home.
                 git::update_ref(&base_ref, &commit, &base_sha)?;
-                git::sync_path(&base_ref, &commit, &ctx.ticket_path(slug))?;
+                sync(&mut report, &base_ref, &commit);
                 report.push(format!("{base_ref} -> {}", &commit[..7]));
             }
             if git::ref_exists(&own) {
@@ -526,7 +570,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
                     report.push(format!("removed worktree {}", path.display()));
                 }
                 git::delete_ref(&own)?;
-                report.push(format!("released {own}"));
+                report.push(format!("released {own_short}"));
             }
         }
     }
@@ -545,7 +589,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
                 if let Some(parent) = path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                git::worktree_add(&path.to_string_lossy(), &own)?;
+                git::worktree_add(&path.to_string_lossy(), &own_short)?;
                 report.push(format!("worktree {}", path.display()));
             }
         }

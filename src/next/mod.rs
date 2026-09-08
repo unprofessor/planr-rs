@@ -11,6 +11,7 @@ pub mod schema;
 pub mod verb;
 
 use schema::Schema;
+use schema::SLUG_MAX;
 use verb::Ctx;
 
 pub fn load_ctx(plan_dir: &str, trunk: &str) -> Result<Ctx, String> {
@@ -131,25 +132,22 @@ pub fn new_ticket(
 /// It also means the reservation cannot be sidestepped by decoration: a slug
 /// that trims to a taken one is rejected here, before the walk that compares
 /// them.
-/// A slug has to survive its own trailer AND be a usable filename, and those
-/// are two obligations, not one.
 ///
-/// The pattern covers the first: it admits only characters git neither trims
-/// nor treats as structure, so a slug reads back from `Planr-Ticket` byte for
-/// byte. It says nothing about the second, and a 253-character slug passed
-/// validation, committed its genesis to trunk, and only then failed in
-/// `sync_path` with ENAMETOOLONG -- leaving the identity written in history,
-/// the slug burned, the working tree permanently dirty, and every subsequent
-/// `git clone` unable to check out at all. Recovering from that needs history
-/// surgery, which the reservation now refuses to reason about.
+/// **Two obligations, not one.** The pattern covers surviving the trailer: it
+/// admits only characters git neither trims nor treats as structure, so a slug
+/// reads back byte for byte. It says nothing about being a usable *filename*,
+/// and a 253-character slug passed validation, committed its genesis to trunk,
+/// and only then failed in `sync_path` with ENAMETOOLONG -- leaving the
+/// identity written in history, the slug burned, the working tree permanently
+/// dirty, and every subsequent `git clone` unable to check out at all.
+/// Recovering from that needs history surgery, which the reservation now
+/// refuses to reason about.
 ///
-/// The bound is well under the 255-byte filesystem limit on `<slug>.md`,
-/// because the slug is also interpolated into `plan/<kind>/<slug>` ref names
-/// and into worktree paths, each of which sits inside a directory of unknown
-/// depth. Nothing here is at risk of hitting it: it is a guard against a
-/// generated or pasted name, not a budget anyone should plan against.
-use schema::SLUG_MAX;
-
+/// [`schema::SLUG_MAX`] is well under the 255-byte filesystem limit on
+/// `<slug>.md`, because the slug is also interpolated into
+/// `plan/<kind>/<slug>` ref names and into worktree paths, each sitting inside
+/// a directory of unknown depth. Nothing real is at risk of hitting it: it is
+/// a guard against a generated or pasted name, not a budget to plan against.
 fn check_slug(slug: &str) -> Result<(), String> {
     let pattern = regex::Regex::new(schema::SLUG_PATTERN)
         .map_err(|e| format!("the slug pattern does not compile: {e}"))?;
@@ -208,7 +206,7 @@ fn reserve_slug(slug: &str, rev: &str) -> Result<(), String> {
     // in a shallow clone is wrong too, but transiently -- deepen the clone and
     // it is right again. A duplicate genesis record is permanent, so this is
     // the one operation that refuses rather than guesses.
-    if plumbing::is_shallow() {
+    if plumbing::is_shallow()? {
         return Err(format!(
             "cannot create '{slug}': this is a shallow clone, so a slug cannot be shown to be \
              unused -- the walk runs out of history rather than reaching the ticket's creation. \

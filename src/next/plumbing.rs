@@ -214,10 +214,11 @@ pub fn log_raw(args: &[&str]) -> Result<String, String> {
 /// It matters only where ABSENCE is the answer: a walk that runs out of
 /// history reports "no such record" in exactly the way a walk that reached the
 /// root does. Anything treating absence as proof has to know the difference.
-pub fn is_shallow() -> bool {
-    run(&["rev-parse", "--is-shallow-repository"])
-        .map(|out| out.trim() == "true")
-        .unwrap_or(false)
+/// Errs rather than guessing. `unwrap_or(false)` would fail open into the very
+/// hole the caller is guarding -- reporting a repository as fully cloned
+/// because the question could not be asked.
+pub fn is_shallow() -> Result<bool, String> {
+    run(&["rev-parse", "--is-shallow-repository"]).map(|out| out.trim() == "true")
 }
 
 /// Hand every WHOLE record in `pending` to `on_record`, leaving the partial
@@ -485,11 +486,26 @@ pub fn commit_tree(tree: &str, parents: &[&str], message: &str) -> Result<String
     Ok(run(&refs)?.trim().to_string())
 }
 
+/// `refs/heads/<name>`, unless it already names a ref path.
+///
+/// Idempotent on purpose. A ticket's own ref is resolved fully qualified --
+/// the short form lets a same-named tag win git's lookup order and shadow the
+/// branch -- while trunk stays as the user wrote it, because `--trunk` accepts
+/// a commit-ish and `refs/heads/HEAD` names nothing. These helpers take both,
+/// so neither caller has to know which it is holding.
+fn qualify(name: &str) -> String {
+    if name.starts_with("refs/") {
+        name.to_string()
+    } else {
+        format!("refs/heads/{name}")
+    }
+}
+
 /// Create a branch atomically: the empty old-value means "must not exist", so
 /// two concurrent claims of one ticket resolve by compare-and-swap and the
 /// loser gets a clear failure rather than a silent overwrite.
 pub fn create_ref(name: &str, new: &str) -> Result<(), String> {
-    run(&["update-ref", &format!("refs/heads/{name}"), new, ""])
+    run(&["update-ref", &qualify(name), new, ""])
         .map_err(|e| format!("cannot create branch '{name}': {e}"))?;
     Ok(())
 }
@@ -502,7 +518,7 @@ pub fn create_ref(name: &str, new: &str) -> Result<(), String> {
 /// not, which made the safety look like a property of claiming rather than of
 /// moving a ref.
 pub fn update_ref(name: &str, new: &str, old: &str) -> Result<(), String> {
-    run(&["update-ref", &format!("refs/heads/{name}"), new, old]).map_err(|e| {
+    run(&["update-ref", &qualify(name), new, old]).map_err(|e| {
         format!("cannot move '{name}': {e}\nit moved since this verb read it -- re-run to work from the new tip")
     })?;
     Ok(())
@@ -512,7 +528,7 @@ pub fn delete_ref(name: &str) -> Result<(), String> {
     if !ref_exists(name) {
         return Ok(()); // idempotent -- a re-run after partial failure completes
     }
-    run(&["update-ref", "-d", &format!("refs/heads/{name}")])?;
+    run(&["update-ref", "-d", &qualify(name)])?;
     Ok(())
 }
 

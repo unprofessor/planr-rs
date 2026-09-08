@@ -111,11 +111,26 @@ pub struct Walk {
 /// BEFORE an earlier branch one, and the fold silently took the wrong winner.
 /// Ordering has to come from the commit graph, never from which ref an event
 /// was read through.
-fn walk_refs<'a>(trunk: &'a str, own: &'a str) -> (Vec<&'a str>, bool) {
-    if git::ref_exists(own) {
-        (vec!["--date-order", trunk, own], true)
+/// **Fully qualified, deliberately.** `git rev-parse <name>` searches
+/// `refs/<name>`, then `refs/tags/<name>`, then `refs/heads/<name>`, so an
+/// unqualified `plan/<kind>/<slug>` resolves a *tag* of that name in
+/// preference to the branch. That made the reader's ref set larger than the
+/// reservation's, which enumerates `refs/heads/plan/` -- so a tag named after
+/// a ticket was invisible to the check and live to the read, and once the
+/// ticket was claimed the tag permanently shadowed its real branch, freezing
+/// the ticket in a state no verb could advance. Naming `refs/heads/` here
+/// makes all three ref-set computations the same set by construction rather
+/// than by agreement, and takes git's resolution order -- which the ref
+/// backend may change -- out of the answer entirely.
+fn walk_refs(trunk: &str, own: &str) -> (Vec<String>, bool) {
+    let qualified = format!("refs/heads/{own}");
+    if git::ref_exists(&qualified) {
+        (
+            vec!["--date-order".to_string(), trunk.to_string(), qualified],
+            true,
+        )
     } else {
-        (vec![trunk], false)
+        (vec![trunk.to_string()], false)
     }
 }
 
@@ -157,7 +172,7 @@ pub fn for_ticket(
     let (refs, union) = walk_refs(trunk, &own);
 
     let mut args: Vec<&str> = vec![&format];
-    args.extend(refs);
+    args.extend(refs.iter().map(String::as_str));
 
     let mut events = Vec::new();
     let scanned = git::log_streaming(&args, RS as u8, |record| {
@@ -207,7 +222,7 @@ pub fn for_ticket_unbounded(slug: &str, kind: &str, trunk: &str) -> Result<Walk,
     let (refs, union) = walk_refs(trunk, &own);
 
     let mut args: Vec<&str> = vec![&format];
-    args.extend(refs);
+    args.extend(refs.iter().map(String::as_str));
 
     let out = git::log_raw(&args)?;
     let mut events = parse_log(&out);
@@ -279,11 +294,19 @@ pub fn lineage(slug: &str, rev: &str) -> Result<Lineage, String> {
     let mut latest: Option<Event> = None;
     let mut genesis: Option<Event> = None;
 
+    // Fatal rather than ignored: a swallowed failure here silently narrows the
+    // ref set back to the single rev, which is exactly the bug this widening
+    // fixes. Absence must not be mistaken for proof anywhere in this check.
     let suffix = format!("/{slug}");
     let mut refs: Vec<String> = vec![rev.to_string()];
-    if let Ok(listed) = git::for_each_ref("refs/heads/plan/") {
-        refs.extend(listed.into_iter().filter(|r| r.ends_with(&suffix)));
-    }
+    let listed = git::for_each_ref("refs/heads/plan/")
+        .map_err(|e| format!("cannot list 'plan/' refs, so a slug cannot be shown unused: {e}"))?;
+    refs.extend(
+        listed
+            .into_iter()
+            .filter(|r| r.ends_with(&suffix))
+            .map(|r| format!("refs/heads/{r}")),
+    );
     let mut args: Vec<&str> = vec![&format, "--date-order"];
     args.extend(refs.iter().map(String::as_str));
 

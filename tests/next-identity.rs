@@ -629,3 +629,112 @@ fn a_relative_plan_dir_names_the_same_backlog_from_any_directory() {
     let board_nested = ok(&nested, &["--plan-dir", ".plan", "next", "board"]);
     assert_eq!(board_root, board_nested);
 }
+
+/// Drive a claimed task to `approved`, which is what `close` needs.
+fn drive_to_approved(dir: &Path, slug: &str) {
+    let wt = dir.join(format!(".plan/worktrees/task/{slug}"));
+    let ticket = wt.join(format!(".plan/tickets/{slug}.md"));
+    let mut s = std::fs::read_to_string(&ticket).unwrap();
+    s.push_str("\n## Validation\n\nchecked\n");
+    std::fs::write(&ticket, s).unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["commit", "-m", "validation"]);
+    ok(dir, &["next", "do", "submit", slug, ""]);
+    ok(dir, &["next", "do", "approve", slug, "looks good"]);
+}
+
+#[test]
+fn a_worktree_that_cannot_be_updated_does_not_half_apply_a_verb() {
+    // The workspace is never history (semantics.md 3.1), and `merge` is where
+    // ignoring that hurt most: the sync sat BETWEEN the merge and the ref
+    // release, so a read-only checkout left trunk moved and the ticket `done`
+    // while the branch and the worktree leaked -- with no way to finish,
+    // because the only verb that releases the ref then refused on its own
+    // `from` gate. A half-applied verb with no completion path is far worse
+    // than a dirty worktree, and the earlier fix reached only `new`.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+
+    ok(dir, &["next", "new", "task", "t1", "Task one"]);
+    ok(dir, &["next", "do", "claim", "t1", ""]);
+    drive_to_approved(dir, "t1");
+
+    // Fail the sync for a reason that is not the slug's fault.
+    let tickets = dir.join(".plan/tickets");
+    let mut perms = std::fs::metadata(&tickets).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&tickets, perms).unwrap();
+
+    let (success, stdout, stderr) = planr(dir, &["next", "do", "close", "t1", ""]);
+
+    let mut perms = std::fs::metadata(&tickets).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(&tickets, perms).unwrap();
+
+    assert!(
+        success,
+        "a worktree that cannot be updated must not fail the verb:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("warning"),
+        "the failure should be reported, not swallowed:\n{stdout}"
+    );
+    // The verb ran to completion: the ref was released rather than leaked.
+    let refs = git_out(
+        dir,
+        &["for-each-ref", "--format=%(refname)", "refs/heads/plan/"],
+    );
+    assert!(
+        !refs.contains("plan/task/t1"),
+        "the ticket's ref leaked, so the verb was half-applied:\n{refs}"
+    );
+}
+
+#[test]
+fn a_tag_named_after_a_ticket_cannot_shadow_its_branch() {
+    // `git rev-parse <name>` searches refs/<name>, then refs/tags/<name>, then
+    // refs/heads/<name>. An unqualified `plan/<kind>/<slug>` therefore resolved
+    // a TAG in preference to the branch -- so the reader's ref set was larger
+    // than the reservation's, which enumerates refs/heads/plan/. Worse, once a
+    // ticket was claimed the tag permanently shadowed its real branch and the
+    // ticket froze: `state` read the tag forever, so no `from` gate could be
+    // met again.
+    //
+    // Fixed by narrowing the reader rather than widening the checker. Naming
+    // refs/heads/ makes all three ref-set computations the same set by
+    // construction and takes git's resolution order -- which the ref backend
+    // may change -- out of the answer.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+
+    ok(dir, &["next", "new", "task", "t1", "Task one"]);
+    ok(dir, &["next", "do", "claim", "t1", ""]);
+    let branch = git_out(dir, &["rev-parse", "refs/heads/plan/task/t1"])
+        .trim()
+        .to_string();
+
+    // A tag of the same name pointing somewhere else entirely.
+    let root = git_out(dir, &["rev-list", "--max-parents=0", "HEAD"])
+        .trim()
+        .to_string();
+    git(dir, &["tag", "plan/task/t1", &root]);
+    assert_ne!(
+        branch, root,
+        "the tag must point elsewhere for this to prove anything"
+    );
+
+    // The read follows the branch, not the tag: the ticket is claimed.
+    let state = ok(dir, &["next", "state", "t1"]);
+    assert!(
+        state.contains("t1: in_progress"),
+        "a tag shadowed the ticket's branch: {state}"
+    );
+
+    // And the ticket is still advanceable, which is what freezing broke.
+    drive_to_approved(dir, "t1");
+    let state = ok(dir, &["next", "state", "t1"]);
+    assert!(state.contains("t1: approved"), "{state}");
+}

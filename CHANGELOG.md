@@ -85,6 +85,26 @@
   in the engine and in the published schema together, and the cap is checked
   before anything is committed.
 
+- **A tag named after a ticket can no longer shadow its branch.**
+  `git rev-parse <name>` searches `refs/<name>`, then `refs/tags/<name>`, then
+  `refs/heads/<name>`, so the unqualified `plan/<kind>/<slug>` resolved a tag of
+  that name in preference to the ticket's branch. The verb runner then built on
+  the tag's tree -- `submit` could not find a `## Validation` section the branch
+  demonstrably had -- and reads followed the tag too, so the ticket froze in a
+  state no verb could advance. Ticket refs are now resolved fully qualified
+  everywhere, which also makes the reservation and the two readers compute the
+  same ref set by construction rather than by agreement.
+
+- **No verb reports failure for work it already did.** Reconciling the working
+  tree happens after the ref has moved, and under `merge` it sat between the
+  merge and the release of the ticket's branch -- so a read-only checkout left
+  trunk moved and the ticket `done` while the branch and its worktree leaked,
+  with no way to finish, because the only verb that releases the ref then
+  refused on its own `from` gate. A half-applied verb with no completion path
+  is worse than a dirty worktree. Every verb now reports the workspace failure
+  as a warning naming the `git restore` that fixes it, and completes. The
+  workspace is never history.
+
 - **A `planr next new` that cannot update the working tree no longer reports
   failure for a ticket it created.** Reconciling this worktree happens after
   the commit and the ref move, so any failure there -- a read-only checkout, a
