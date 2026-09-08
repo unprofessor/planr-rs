@@ -237,6 +237,28 @@ fn page_board(ctx: &Context, snap: &Snapshot, index: &Index) -> String {
         ));
     }
 
+    // In flight leads the board. It is the only section that answers "what is
+    // anyone doing right now"; the three backlog tables answer "what exists",
+    // which is the slower question and reads fine below the fold.
+    if !snap.branches.is_empty() {
+        body.push_str("<h2>in flight <span class=\"n\">");
+        body.push_str(&snap.branches.len().to_string());
+        body.push_str("</span></h2>");
+        body.push_str(
+            "<table><thead><tr><th>branch</th><th>status</th><th>task</th>\
+                       </tr></thead><tbody>",
+        );
+        for b in &snap.branches {
+            body.push_str(&format!(
+                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td></tr>",
+                escape(&b.branch),
+                status_badge(b.status.display()),
+                slug_link(&b.slug, index)
+            ));
+        }
+        body.push_str("</tbody></table>");
+    }
+
     for (label, kind) in [
         ("epics", Kind::Epic),
         ("stories", Kind::Story),
@@ -302,25 +324,6 @@ fn page_board(ctx: &Context, snap: &Snapshot, index: &Index) -> String {
         body.push_str("</tbody></table>");
     }
 
-    if !snap.branches.is_empty() {
-        body.push_str("<h2>in flight <span class=\"n\">");
-        body.push_str(&snap.branches.len().to_string());
-        body.push_str("</span></h2>");
-        body.push_str(
-            "<table><thead><tr><th>branch</th><th>status</th><th>task</th>\
-                       </tr></thead><tbody>",
-        );
-        for b in &snap.branches {
-            body.push_str(&format!(
-                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td></tr>",
-                escape(&b.branch),
-                status_badge(b.status.display()),
-                slug_link(&b.slug, index)
-            ));
-        }
-        body.push_str("</tbody></table>");
-    }
-
     layout("board", None, &body)
 }
 
@@ -350,18 +353,20 @@ fn page_ticket(t: &ParsedTicket, snap: &Snapshot, index: &Index) -> String {
 
     body.push_str("<dl class=\"meta\">");
     body.push_str(&format!("<dt>kind</dt><dd>{}</dd>", kind_name(&t.kind)));
-    let branch_status = snap
-        .branches
-        .iter()
-        .find(|b| b.slug == t.id)
-        .and_then(|b| b.status.status());
+    // One badge, always. The ticket file is what this page is about, and a
+    // second pill beside it reads as the same field rendered twice rather
+    // than as two sources disagreeing. The branch's value is a footnote to
+    // the badge, in prose, naming the branch that carries it.
+    let branch = snap.branches.iter().find(|b| b.slug == t.id);
     body.push_str(&format!(
         "<dt>status</dt><dd>{}{}</dd>",
         status_badge(&t.status),
-        match branch_status {
-            Some(s) if s != t.status => format!(
-                " <span class=\"note\">branch reports {}</span>",
-                status_badge(s)
+        match branch {
+            Some(b) if b.status.status() != Some(t.status.as_str()) => format!(
+                " <span class=\"note\"><code>{}</code> reports \
+                 <span class=\"branch-st\">{}</span></span>",
+                escape(&b.branch),
+                escape(b.status.display())
             ),
             _ => String::new(),
         }
@@ -775,6 +780,7 @@ border:1px solid var(--line);white-space:nowrap}\
 .warn{background:var(--warnbg);border-left:3px solid var(--warn);padding:8px 12px;\
 margin:12px 0}\
 .note,.hint{color:var(--dim);font-size:12px}\
+.branch-st{font-family:ui-monospace,monospace;color:var(--fg)}\
 dl.meta{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:14px 0}\
 dl.meta dt{color:var(--dim);font-size:12px;text-transform:uppercase;\
 letter-spacing:.05em}\
