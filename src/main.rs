@@ -201,6 +201,9 @@ enum NextCommand {
     Lifecycle { kind: Option<String> },
     /// List every live ticket with its folded state
     Board,
+    /// Check that every ticket's history still supports the fold: exactly one
+    /// reachable creation per slug, and a state the commit graph orders
+    Check,
     /// Run a schema-declared verb
     Do {
         verb: String,
@@ -469,7 +472,21 @@ fn main() {
                 Ok(c) => c,
                 Err(e) => fail(&e),
             };
+            // `check` reports a verdict rather than a value, so it exits
+            // non-zero on a fault the way a linter does -- the report still
+            // goes to stdout, because a CI job that fails must still be able
+            // to show what it found.
+            if let NextCommand::Check = command {
+                match next::cmd_check(&ctx) {
+                    Ok((report, faulted)) => {
+                        println!("{report}");
+                        std::process::exit(if faulted { 1 } else { 0 });
+                    }
+                    Err(e) => fail(&e),
+                }
+            }
             let out = match command {
+                NextCommand::Check => unreachable!("handled above"),
                 NextCommand::New {
                     kind,
                     slug,

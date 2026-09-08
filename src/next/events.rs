@@ -7,21 +7,18 @@
 //! `git log -- <ticket path>` silently SKIPS exactly those declarations.
 //! Enumeration must therefore go through trailers, never paths.
 //!
-//! Two ref sets, deliberately both:
+//! ONE ref answers for a ticket, chosen by the authority rule -- its own
+//! branch while that branch is live and unintegrated, and trunk otherwise. See
+//! [`authority`] for why that is a correctness property and not a shortcut.
+//! Trailers are the only thing that still works once a ticket has been archived
+//! and its file no longer exists in any tree, which is why enumeration never
+//! gets to use a pathspec.
 //!
-//! * a union walk over trunk and the ticket's own ref -- the fast path for a
-//!   single slug. It must be ONE walk: ordering has to come from the commit
-//!   graph, because trunk can move after a branch is cut and a later trunk
-//!   declaration must not be folded before an earlier branch one.
-//! * trunk alone, for a ticket with no ref. Trailers are the only thing that
-//!   still works once a ticket has been archived and its file no longer exists
-//!   in any tree, which is why enumeration never gets to use a pathspec.
-//!
-//! Both are BOUNDED: the walk stops at the newest event that decides the
-//! answer instead of reading history back to the ticket's birth. See
-//! [`for_ticket`] for why that is a theorem rather than a heuristic.
+//! The walk is BOUNDED: it stops at the newest event that decides the answer
+//! instead of reading history back to the ticket's birth. See [`for_ticket`]
+//! for why that is a theorem rather than a heuristic.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::plumbing as git;
 
@@ -36,6 +33,21 @@ pub struct Event {
 // Field/record separators chosen to be absent from commit metadata.
 const FS: char = '\x1f';
 const RS: char = '\x1e';
+
+/// Every walk in this module passes it, and the difference from git's default
+/// is the whole stop rule.
+///
+/// `git log` with no ordering flag emits in PURE committer-date order, which
+/// can place a commit before its own ancestors -- a graft, an imported history,
+/// or two machines whose clocks disagree all produce that. The backwards scan
+/// then meets a ticket's `new` record before the declarations that descend from
+/// it, floors there, and reports the initial state for a ticket that has moved
+/// several times. `--date-order` keeps committer date as the tiebreak and adds
+/// the constraint that decides it: no parent is emitted before its children.
+///
+/// The bound is a theorem about the event SEQUENCE, so the sequence has to
+/// respect the graph before the theorem says anything. Do not drop this flag.
+const DATE_ORDER: &str = "--date-order";
 
 fn log_format() -> String {
     format!(
@@ -100,17 +112,72 @@ pub struct Walk {
     pub scanned: usize,
 }
 
-/// The refs a ticket's events can live on, plus a label for the pair.
+/// Which single ref answers for a ticket.
 ///
-/// ONE walk over the union, date-ordered. An earlier version walked the two
-/// refs separately and concatenated, on the reasoning that a branch's events
-/// are strictly newer than the trunk events it descends from. That is false
-/// the moment trunk moves after the branch was cut -- which is exactly what an
-/// integration-lane verb on a claimed ticket does, and the authority rule
-/// explicitly allows. Concatenating then ordered a later trunk declaration
-/// BEFORE an earlier branch one, and the fold silently took the wrong winner.
-/// Ordering has to come from the commit graph, never from which ref an event
-/// was read through.
+/// A ticket's own branch while that branch is live and carries commits trunk
+/// cannot reach; trunk once it does not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Authority {
+    /// `refs/heads/plan/<kind>/<slug>`, live and not yet integrated.
+    Branch { ref_: String },
+    /// No branch of that name, or one trunk has already integrated.
+    Trunk { ref_: String },
+}
+
+impl Authority {
+    pub fn ref_(&self) -> &str {
+        match self {
+            Authority::Branch { ref_ } | Authority::Trunk { ref_ } => ref_,
+        }
+    }
+
+    pub fn is_branch(&self) -> bool {
+        matches!(self, Authority::Branch { .. })
+    }
+}
+
+/// The ref name the authority rule looks for. One spelling, so nothing can
+/// look for a ticket's branch under a name nothing else uses.
+pub fn own_ref(kind: &str, slug: &str) -> String {
+    format!("refs/heads/plan/{kind}/{slug}")
+}
+
+/// Has trunk already taken everything this ref carries?
+///
+/// The single definition of "integrated", used by every caller of the authority
+/// rule. `git for-each-ref --merged` answers the same question in bulk and was
+/// the obvious way to make board cheaper; it is deliberately not used, because
+/// two implementations of one predicate is how the last several defects in this
+/// module were built -- they agree until the day they do not.
+pub fn integrated(trunk: &str, ref_: &str) -> Result<bool, String> {
+    Ok(git::rev_list(&[ref_.to_string()], &[trunk.to_string()])?.is_empty())
+}
+
+/// The authority rule: a claimed unit's branch is authoritative for its
+/// lifecycle state until it is integrated.
+///
+/// **This is what makes a read's answer come from the commit graph rather than
+/// from committer clocks.** The previous ref set was the union of trunk and the
+/// branch, date-ordered, and a union has no total order to offer: the two lanes
+/// are concurrent by construction -- that is the entire point of cutting a
+/// branch -- so `--date-order` was arbitrating between a worker's `submit` and
+/// a leader's trunk-lane declaration, and skew between two machines' clocks
+/// flipped the ticket's state. Under a terminating backwards scan that is not
+/// one wrong event among many; it is the whole answer.
+///
+/// Reading ONE ref does not make the history a chain -- a merge commit puts two
+/// incomparable declarations under a single tip -- but it removes the source of
+/// incomparability this model manufactures on every claim. What remains is
+/// genuinely anomalous, and `planr next check` reports it rather than letting
+/// the fold quietly pick a winner.
+///
+/// The trunk-lane declarations a live branch shadows are not lost, only
+/// deferred: every integration verb builds a merge commit that descends from
+/// both lanes, so once the branch is integrated the graph orders them and the
+/// fold sees all of them. A clash that genuinely disagrees -- a leader
+/// abandoning while a worker submits -- is meant to reach a human, and the
+/// check is where it does.
+///
 /// **Fully qualified, deliberately.** `git rev-parse <name>` searches
 /// `refs/<name>`, then `refs/tags/<name>`, then `refs/heads/<name>`, so an
 /// unqualified `plan/<kind>/<slug>` resolves a *tag* of that name in
@@ -119,19 +186,21 @@ pub struct Walk {
 /// a ticket was invisible to the check and live to the read, and once the
 /// ticket was claimed the tag permanently shadowed its real branch, freezing
 /// the ticket in a state no verb could advance. Naming `refs/heads/` here
-/// makes all three ref-set computations the same set by construction rather
-/// than by agreement, and takes git's resolution order -- which the ref
-/// backend may change -- out of the answer entirely.
-fn walk_refs(trunk: &str, own: &str) -> (Vec<String>, bool) {
-    let qualified = format!("refs/heads/{own}");
-    if git::ref_exists(&qualified) {
-        (
-            vec!["--date-order".to_string(), trunk.to_string(), qualified],
-            true,
-        )
-    } else {
-        (vec![trunk.to_string()], false)
+/// makes every ref-set computation the same set by construction rather than by
+/// agreement, and takes git's resolution order -- which the ref backend may
+/// change -- out of the answer entirely.
+pub fn authority(kind: &str, slug: &str, trunk: &str) -> Result<Authority, String> {
+    let own = own_ref(kind, slug);
+    // Unintegrated, not merely present: a branch left standing after its work
+    // landed carries nothing trunk does not already have, so letting it stay
+    // authoritative would hide trunk-lane declarations forever rather than
+    // until integration.
+    if git::ref_exists(&own) && !integrated(trunk, &own)? {
+        return Ok(Authority::Branch { ref_: own });
     }
+    Ok(Authority::Trunk {
+        ref_: trunk.to_string(),
+    })
 }
 
 /// Every event that can still affect one ticket's folded state, oldest-first.
@@ -158,21 +227,20 @@ fn walk_refs(trunk: &str, own: &str) -> (Vec<String>, bool) {
 ///   passed in rather than derived here to keep this module schema-agnostic.
 ///
 /// Termination also concentrates the ordering assumption (`docs/semantics.md`
-/// section 6, assumption 2): committer-date skew across machines already made
-/// `--date-order` a guess, but under an unbounded fold a misordering was one
-/// wrong event among many, and here it is the whole answer.
+/// section 6, assumption 2): a misordering under an unbounded fold was one
+/// wrong event among many, and here it is the whole answer. [`authority`] is
+/// what keeps that assumption from being load-bearing in the ordinary case --
+/// the walk reads one ref, so the two lanes a claim creates are no longer
+/// asked to be ordered by committer date.
 pub fn for_ticket(
     slug: &str,
     kind: &str,
     trunk: &str,
     terminates: impl Fn(&str) -> bool,
 ) -> Result<Walk, String> {
-    let own = format!("plan/{kind}/{slug}");
+    let authority = authority(kind, slug, trunk)?;
     let format = format!("--format={}", log_format());
-    let (refs, union) = walk_refs(trunk, &own);
-
-    let mut args: Vec<&str> = vec![&format];
-    args.extend(refs.iter().map(String::as_str));
+    let args: Vec<&str> = vec![&format, DATE_ORDER, authority.ref_()];
 
     let mut events = Vec::new();
     let scanned = git::log_streaming(&args, RS as u8, |record| {
@@ -190,7 +258,7 @@ pub fn for_ticket(
 
     Ok(Walk {
         events,
-        how: label(union, true),
+        how: label(&authority, true),
         scanned,
     })
 }
@@ -208,28 +276,24 @@ pub fn for_ticket(
 /// are invisible to it BY CONSTRUCTION: the two would agree on the same wrong
 /// answer.
 ///
-/// The sharp case is the ordering assumption. Give a trunk declaration and a
-/// branch declaration that are neither ancestor nor descendant a committer
-/// date skew, and flipping one date flips the folded state -- with both walks
-/// still agreeing, the bounded one after reading a single commit. Catching
-/// that needs an oracle that derives order from the commit graph rather than
-/// from dates, which is a different mechanism and not this one.
+/// The sharp case is the ordering assumption, and it stays out of reach here:
+/// both walks read the same ref through the same date order, so a history whose
+/// declarations the commit graph declines to order makes them agree on the same
+/// arbitrary winner. That question belongs to a different mechanism -- see
+/// [`crate::next::check`], which asks the graph directly.
 ///
 /// Reached by tests through `PLANR_NEXT_ORACLE`; it is not a CLI mode.
 pub fn for_ticket_unbounded(slug: &str, kind: &str, trunk: &str) -> Result<Walk, String> {
-    let own = format!("plan/{kind}/{slug}");
+    let authority = authority(kind, slug, trunk)?;
     let format = format!("--format={}", log_format());
-    let (refs, union) = walk_refs(trunk, &own);
-
-    let mut args: Vec<&str> = vec![&format];
-    args.extend(refs.iter().map(String::as_str));
+    let args: Vec<&str> = vec![&format, DATE_ORDER, authority.ref_()];
 
     let out = git::log_raw(&args)?;
     let mut events = parse_log(&out);
     events.retain(|e| e.ticket == slug);
     Ok(Walk {
         events,
-        how: label(union, false),
+        how: label(&authority, false),
         scanned: count_records(&out),
     })
 }
@@ -304,7 +368,7 @@ pub fn lineage(slug: &str, rev: &str) -> Result<Lineage, String> {
     // `for_each_ref` already returns full ref names, so the suffix filter runs
     // against `refs/heads/plan/<kind>/<slug>` and needs no reconstruction.
     refs.extend(listed.into_iter().filter(|r| r.ends_with(&suffix)));
-    let mut args: Vec<&str> = vec![&format, "--date-order"];
+    let mut args: Vec<&str> = vec![&format, DATE_ORDER];
     args.extend(refs.iter().map(String::as_str));
 
     git::log_streaming(&args, RS as u8, |record| {
@@ -333,16 +397,39 @@ pub fn lineage(slug: &str, rev: &str) -> Result<Lineage, String> {
     })
 }
 
-fn label(union: bool, bounded: bool) -> &'static str {
-    match (union, bounded) {
-        (true, true) => "branch-ref fast path (union walk)",
-        (true, false) => "branch-ref union walk, UNBOUNDED",
-        (false, true) => "trunk trailer scan",
-        (false, false) => "trunk trailer scan, UNBOUNDED",
+fn label(authority: &Authority, bounded: bool) -> &'static str {
+    match (authority, bounded) {
+        (Authority::Branch { .. }, true) => "branch trailer scan (authoritative)",
+        (Authority::Branch { .. }, false) => "branch trailer scan (authoritative), UNBOUNDED",
+        (Authority::Trunk { .. }, true) => "trunk trailer scan",
+        (Authority::Trunk { .. }, false) => "trunk trailer scan, UNBOUNDED",
     }
 }
 
-/// Every event in the repository, bucketed by ticket, from a SINGLE walk.
+/// Every event reachable from `refs`, bucketed by ticket, oldest-first within
+/// each bucket.
+///
+/// One walk, one date order, one parser -- shared by the board and by the
+/// integrity check so that "what events exist" has a single answer and only
+/// "which of them count" differs between them.
+pub fn bucket_over(refs: &[String]) -> Result<BTreeMap<String, Vec<Event>>, String> {
+    let format = format!("--format={}", log_format());
+    let mut args: Vec<&str> = vec![&format, DATE_ORDER];
+    args.extend(refs.iter().map(String::as_str));
+
+    let out = git::log_raw(&args)?;
+    let mut buckets: BTreeMap<String, Vec<Event>> = BTreeMap::new();
+    for event in parse_log(&out) {
+        if event.ticket.is_empty() {
+            continue;
+        }
+        buckets.entry(event.ticket.clone()).or_default().push(event);
+    }
+    Ok(buckets)
+}
+
+/// Every event in the repository, bucketed by ticket, from a SINGLE walk --
+/// then narrowed per ticket to what its authoritative ref can reach.
 ///
 /// This is what a board wants. Folding tickets one at a time costs a full
 /// history walk each -- O(tickets x commits) -- because an event carries no
@@ -354,7 +441,23 @@ fn label(union: bool, bounded: bool) -> &'static str {
 /// ticket's branch-lane declarations are included. Git deduplicates commits
 /// reachable from several refs, and `--date-order` keeps the ordering from the
 /// commit graph rather than from which ref reached a commit first.
-pub fn all_by_ticket(trunk: &str) -> Result<BTreeMap<String, Vec<Event>>, String> {
+///
+/// **The narrowing is not an optimization; it is what makes board agree with
+/// `state`.** [`for_ticket`] reads exactly one ref, chosen by [`authority`],
+/// and a union walk reads more than that -- so without this pass a claimed
+/// ticket whose trunk lane also declared would fold a different set of events
+/// in the two commands, and the board would report a state no `from` gate
+/// would accept. `kinds` supplies each slug's kind because that is what names
+/// its branch; a slug the caller cannot type is answered by trunk, which is
+/// what [`for_ticket`] does when no branch of that name exists.
+///
+/// Cost is one extra `rev-list` for the whole trunk-authoritative population
+/// and one per live branch -- O(claimed), not O(tickets), and each over a
+/// handful of commit ids rather than a history.
+pub fn all_by_ticket(
+    trunk: &str,
+    kinds: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, Vec<Event>>, String> {
     // `for-each-ref`, not `git branch --list`: branch porcelain prefixes a
     // ref checked out in ANOTHER worktree with "+ ", which is every claimed
     // ticket, and the marker travelled into the revision list as part of the
@@ -369,17 +472,40 @@ pub fn all_by_ticket(trunk: &str) -> Result<BTreeMap<String, Vec<Event>>, String
         refs.extend(listed);
     }
 
-    let format = format!("--format={}", log_format());
-    let mut args: Vec<&str> = vec![&format, "--date-order"];
-    args.extend(refs.iter().map(|s| s.as_str()));
+    let mut buckets = bucket_over(&refs)?;
 
-    let out = git::log_raw(&args)?;
-    let mut buckets: BTreeMap<String, Vec<Event>> = BTreeMap::new();
-    for event in parse_log(&out) {
-        if event.ticket.is_empty() {
-            continue;
+    // The refs that exist, so membership answers "is there a branch" without a
+    // process per slug. Everything else about authority goes through
+    // `integrated`, which is the one definition of the predicate.
+    let live: BTreeSet<String> = refs.iter().skip(1).cloned().collect();
+
+    // Everything the union saw that trunk cannot reach. ONE process settles
+    // every trunk-authoritative ticket at once -- including a ticket whose
+    // events were declared from some other ticket's branch, which is a slug
+    // with no branch of its own and events that trunk has never seen.
+    let all: Vec<String> = buckets
+        .values()
+        .flat_map(|evs| evs.iter().map(|e| e.commit.clone()))
+        .collect();
+    let off_trunk: BTreeSet<String> = git::rev_list(&all, &[trunk.to_string()])?
+        .into_iter()
+        .collect();
+
+    for (slug, events) in buckets.iter_mut() {
+        let own = kinds.get(slug).map(|kind| own_ref(kind, slug));
+        let branch = match own {
+            Some(own) if live.contains(&own) && !integrated(trunk, &own)? => Some(own),
+            _ => None,
+        };
+        match branch {
+            Some(branch) => {
+                let commits: Vec<String> = events.iter().map(|e| e.commit.clone()).collect();
+                let drop: BTreeSet<String> =
+                    git::rev_list(&commits, &[branch])?.into_iter().collect();
+                events.retain(|e| !drop.contains(&e.commit));
+            }
+            None => events.retain(|e| !off_trunk.contains(&e.commit)),
         }
-        buckets.entry(event.ticket.clone()).or_default().push(event);
     }
     Ok(buckets)
 }

@@ -4,6 +4,50 @@
 
 ### Added
 
+- **A claimed ticket's branch answers for it, so its state no longer depends on
+  a clock.** Reading a ticket walked trunk and the ticket's branch as one
+  date-ordered union, and a union of two refs has no order to offer: cutting a
+  branch is what makes two lanes concurrent, so committer dates were arbitrating
+  between a worker's `submit` and a leader's trunk-lane declaration. Skew
+  between two machines flipped the answer, and under a bounded walk that is not
+  one wrong event among many -- it is the whole answer. The reader now picks one
+  ref by the authority rule: `plan/<kind>/<slug>` while that branch exists and
+  carries commits trunk cannot reach, trunk otherwise. A trunk-lane declaration
+  a live branch shadows is deferred rather than lost, because every integration
+  effect builds a merge commit descending from both lanes. `next board` applies
+  the same rule, at one `rev-list` per claimed ticket, so it folds exactly the
+  events `next state` does -- otherwise the board reports states a `from` gate
+  would refuse.
+
+- **`planr next check`** reports the histories the fold cannot answer for, and
+  exits non-zero. `new` refuses a slug that any reachable commit has created,
+  but that is all a creation-time check can do: two clones each creating the
+  same slug both pass legitimately, and their merge is *clean*, because archival
+  deleted the file on one side and a deletion and an addition do not conflict.
+  Four findings, over trunk and every `plan/` ref:
+
+  - `duplicate-genesis` -- two `new` records for one slug. A bounded walk floors
+    at whichever it meets first, so the ticket's state is clock-chosen.
+  - `severed` -- events with no reachable creation, from a graft or a rewrite.
+    The fold still answers for them, so the slug is neither free nor explicable.
+    Stated as *exactly* one genesis rather than *at most* one, because a `>= 2`
+    rule walks straight past this half.
+  - `divergent` -- the declaration the fold takes as the winner does not descend
+    from every other one, so committer date decides the ticket's state and
+    another machine can read it differently. This is the ordering oracle a
+    differential test could never be: a bounded and an unbounded walk read the
+    same stream in the same order and agree on the same wrong answer, so the
+    check asks git for reachability instead.
+  - `shadowed` -- a live branch is authoritative over a trunk-lane declaration.
+    Reported because a leader abandoning while a worker submits is two people
+    disagreeing about a ticket's fate, and exits zero because it is the rule
+    working rather than a broken repository.
+
+  It reports and never repairs: every finding is a history that already exists,
+  and the remedies are history surgery, a schema decision, or a conversation.
+  Like `new`, it refuses outright in a shallow clone rather than certify a
+  history it cannot see -- three of the four findings are absence claims.
+
 - **`planr next state` is bounded, and says what it cost.** Reading a ticket's
   state walked its whole reachable history and then discarded all but the last
   state-changing event. The backwards scan now stops at that event: an event
@@ -50,7 +94,7 @@
 
   One case no check at creation time can cover: two lineages that each create
   the same slug, whose merge is clean because archival deleted the file on one
-  side. That needs a check at integration and is not yet implemented.
+  side. That needs a check at integration, which is `planr next check`.
 
 - **`planr next new` validates the slug**, which it did not do at all. A slug
   is both the ticket's filename and its identity in the event log, and
@@ -194,6 +238,18 @@
   checked out.
 
 ### Fixed
+
+- **A ticket whose history was imported or grafted could report its initial
+  state forever.** The trailer walk passed `--date-order` only when it had two
+  refs to merge; the single-ref walk took git's default, which orders a queue by
+  committer date alone. A merge is where that parts company with ancestry --
+  both parents enter the frontier at once, so a back-dated declaration is
+  emitted *after* the commit it descends from. The backwards scan then met the
+  ticket's `new` record before the declarations that descend from it and floored
+  there, reporting `todo` for a ticket that had been abandoned. The bound is a
+  theorem about a sequence that respects the graph, so every walk now passes
+  `--date-order`, whose one added constraint is exactly the missing one: no
+  parent before all of its children.
 
 - **`PLANR_NEXT_ORACLE` parses its value instead of its presence.** The
   unbounded state read is a diagnostic reached by tests; setting the variable

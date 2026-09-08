@@ -432,6 +432,41 @@ pub fn count_unreachable(base: &str, tip: &str) -> Result<usize, String> {
         .map_err(|e| format!("cannot count commits on {tip}: {e}"))
 }
 
+/// Commits reachable from `includes` that nothing in `excludes` can reach --
+/// `git rev-list <includes> --not <excludes>` -- in ONE process.
+///
+/// Every ancestry question this model asks is a question about a SET, and
+/// answering it pairwise with `merge-base --is-ancestor` costs a process per
+/// pair. Two questions, one call:
+///
+/// * *has this branch been integrated?* -- `rev_list([own], [trunk])` is empty.
+/// * *does one commit descend from all the others?* -- `rev_list(rest, [m])`
+///   is empty. That is the exact condition for a fold's winner to be decided
+///   by the commit graph rather than by committer dates, and it is what the
+///   integrity check tests instead of assuming.
+///
+/// An empty `includes` yields nothing without asking git: `rev-list` with only
+/// exclusions is an error, and the callers reach that case whenever a ticket
+/// has fewer than two declarations.
+pub fn rev_list(includes: &[String], excludes: &[String]) -> Result<Vec<String>, String> {
+    if includes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut args: Vec<&str> = vec!["rev-list"];
+    args.extend(includes.iter().map(String::as_str));
+    if !excludes.is_empty() {
+        args.push("--not");
+        args.extend(excludes.iter().map(String::as_str));
+    }
+    let out = run(&args)?;
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect())
+}
+
 pub fn is_ancestor(a: &str, b: &str) -> bool {
     Command::new("git")
         .args(["merge-base", "--is-ancestor", a, b])

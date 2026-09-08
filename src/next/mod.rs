@@ -4,6 +4,7 @@
 //! additive, so the two can coexist until a migration path exists. The model
 //! is experimental and the schema is deliberately in-tree and unpinned.
 
+pub mod check;
 pub mod events;
 pub mod fold;
 pub mod plumbing;
@@ -327,14 +328,20 @@ pub fn cmd_lifecycle(ctx: &Ctx, kind: Option<&str>) -> Result<String, String> {
 
 /// A minimal board: every live ticket with its folded state.
 ///
-/// Two git processes for the whole board, regardless of ticket count: one
-/// history walk ([`events::all_by_ticket`]) and one `cat-file --batch` for the
-/// ticket blobs. Folding per ticket cost a walk each; reading per ticket cost
-/// a spawn each, and once the walk was shared the spawns were what remained.
+/// Three git processes plus one per claimed ticket: one history walk
+/// ([`events::all_by_ticket`]), one `cat-file --batch` for the ticket blobs,
+/// one `rev-list` that settles every unclaimed ticket's ref reachability at
+/// once, and one more for each live branch. Folding per ticket cost a walk
+/// each; reading per ticket cost a spawn each, and once the walk was shared the
+/// spawns were what remained.
+///
+/// The blobs are read BEFORE the walk, because each ticket's kind names the
+/// branch the authority rule asks about. Reading them afterward would leave the
+/// walk unable to tell which ref answers for which slug, and board would fold a
+/// wider event set than `state` does.
 pub fn cmd_board(ctx: &Ctx) -> Result<String, String> {
     let dir = format!("{}/tickets", ctx.plan_dir);
     let files = crate::git::ls_tree_md(&ctx.trunk, &dir)?;
-    let events = events::all_by_ticket(&ctx.trunk)?;
 
     let slugs: Vec<String> = files
         .iter()
@@ -348,15 +355,30 @@ pub fn cmd_board(ctx: &Ctx) -> Result<String, String> {
     let specs: Vec<String> = files.iter().map(|f| format!("{}:{f}", ctx.trunk)).collect();
     let blobs = plumbing::cat_file_batch(&specs)?;
 
+    // The kind still has to be read, because it selects the sub-machine the
+    // fold runs against and the branch the authority rule looks for -- but it
+    // is a tree read, not a history walk, and not a process per ticket either.
+    let parsed: Vec<(String, Result<verb::Ticket, String>)> = slugs
+        .iter()
+        .cloned()
+        .zip(blobs)
+        .map(|(slug, blob)| {
+            let ticket = blob
+                .ok_or_else(|| format!("no blob for '{slug}'"))
+                .and_then(|b| verb::parse_ticket(&slug, &b));
+            (slug, ticket)
+        })
+        .collect();
+    let kinds: std::collections::BTreeMap<String, String> = parsed
+        .iter()
+        .filter_map(|(slug, t)| t.as_ref().ok().map(|t| (slug.clone(), t.kind.clone())))
+        .collect();
+
+    let events = events::all_by_ticket(&ctx.trunk, &kinds)?;
+
     let mut rows = Vec::new();
-    for (slug, blob) in slugs.iter().zip(blobs) {
-        // The kind still has to be read, because it selects the sub-machine
-        // the fold runs against -- but it is a tree read, not a history walk,
-        // and now not a process either.
-        let row = match blob
-            .ok_or_else(|| format!("no blob for '{slug}'"))
-            .and_then(|b| verb::parse_ticket(slug, &b))
-        {
+    for (slug, ticket) in &parsed {
+        let row = match ticket {
             Ok(ticket) => {
                 let ticket_events = events.get(slug).map(Vec::as_slice).unwrap_or(&[]);
                 match fold::fold_state(&ctx.schema, &ticket.kind, ticket_events) {
@@ -377,4 +399,15 @@ pub fn cmd_board(ctx: &Ctx) -> Result<String, String> {
         return Ok("no tickets".to_string());
     }
     Ok(format!("{} ticket(s)\n{}", rows.len(), rows.join("\n")))
+}
+
+/// The integration half of the identity invariant -- see [`check`].
+///
+/// Returns the report and whether it contains a fault, so the caller can exit
+/// non-zero. The distinction matters: a shadowed declaration is the authority
+/// rule working, and a check that failed on it would fail on every claimed
+/// ticket whose leader touched trunk.
+pub fn cmd_check(ctx: &Ctx) -> Result<(String, bool), String> {
+    let findings = check::run(ctx)?;
+    Ok(check::report(&findings))
 }

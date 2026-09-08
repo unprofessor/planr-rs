@@ -268,13 +268,45 @@ Named so that breaking one is a decision rather than an accident.
    a retry counter, a conditional transition -- breaks absorption, and the
    backwards bound of section 4 becomes *wrong*, not merely slower. This is the
    most expensive assumption in the document and the least visible in the YAML.
-2. **Event order is total, and given by `--date-order` over trunk and the
-   `plan/` refs together.** Committer-date skew across machines breaks it.
-   Under a terminating backwards scan a misordering is not one wrong event
-   among many; it is the whole answer. No differential test can catch this:
-   a bounded and an unbounded walk read the same date-ordered stream, so they
-   agree on the same wrong answer. Detecting it needs an oracle that derives
-   order from the commit graph rather than from dates.
+2. **Event order comes from the commit graph, with committer date only as a
+   tiebreak -- and every use of the tiebreak is reported.**
+
+   The original form of this assumption was that order came from `--date-order`
+   over trunk and the `plan/` refs *together*, and that was the most expensive
+   sentence in the document. A union of two refs has no order to offer: cutting
+   a branch is what makes two lanes concurrent, so the walk was asking committer
+   clocks to arbitrate between a worker's `submit` and a leader's trunk-lane
+   declaration on every claimed ticket. Under a terminating backwards scan that
+   is not one wrong event among many; it is the whole answer.
+
+   **The authority rule** (design,
+   [§4.1](typed-graph-design.md#41-refs-actors-and-the-two-lanes-r7))
+   removes it. One ref answers for a ticket -- `own(t)` while that ref exists
+   and carries commits `home` cannot reach, `home` otherwise -- so the lanes
+   this model manufactures are no longer asked to be ordered by clock. A
+   trunk-lane declaration a live branch shadows is deferred, not lost: every
+   integration effect builds a merge commit descending from both lanes, so the
+   graph orders them as soon as the branch lands.
+
+   What remains is real but rare: one ref's history is still a DAG, so a merge
+   can put two declarations under a single tip with no ancestry between them.
+   There `--date-order` decides, and `planr next check` reports it -- the
+   winning declaration must descend from every other one, which is exactly the
+   condition for the answer to be graph-determined. Every place the clock still
+   decides is therefore visible rather than assumed.
+
+   Two smaller things this rests on:
+
+   * **`--date-order`, never git's default.** The default walks a queue ordered
+     by committer date alone, and a merge is where that parts company with
+     ancestry: both parents enter the frontier at once, so a back-dated
+     declaration is emitted *after* the commit it descends from. The backwards
+     scan then floors on a `new` record that is not the newest thing it should
+     have seen. `--date-order` adds the one constraint that fixes it -- no
+     parent before all of its children.
+   * **No differential test can catch a misordering.** A bounded and an
+     unbounded walk read the same stream in the same order, so they agree on the
+     same wrong answer. That is why the check asks git for reachability instead.
 3. **A ticket's events all descend from its creation commit**, which is what
    makes that commit a valid floor. It rests on a slug never being reused: the
    mapping from slug to file path is one-to-one and permanent, and `new`
@@ -310,27 +342,30 @@ Named so that breaking one is a decision rather than an accident.
    > from the ref set the fold reads
 
    Both guards are corollaries. `new` enforces it at creation against the refs
-   it can see; the integration detector enforces it over trunk. Anything that
-   makes the fold read a wider set makes both read that set too, rather than
-   opening a fourth gap.
+   it can see; `planr next check` enforces it over the whole ref set once the
+   histories are in one repository. Anything that makes the fold read a wider
+   set makes both read that set too, rather than opening a fourth gap.
 
    Note **exactly** one, not at most one. The two failures are mirror images: two
    reachable geneses make the floor clock-determined, and zero with events
    present make a used slug read as free. A `> 1` rule walks straight past the
    second.
 
-   **Enforced against one lineage, assumed across several.** `new` can only
-   consult a history it can reach, so two clones that each create the same slug
-   both pass legitimately, and their merge is *clean* -- archival deleted the
-   file on one side, so a deletion and an addition do not conflict. Two genesis
-   records then coexist, permanently and mutually non-ancestral, and a bounded
-   walk terminates at whichever one it meets first: the floor becomes
-   clock-determined, by assumption 2. So the honest claim is *true modulo no
-   two lineages independently creating the same slug*. Frequent integration
-   keeps the window small; that is mitigation, not guarantee. Closing it needs
-   the integration half of the invariant above -- which is the same detector
-   assumption 2 needs, for the same reason: the fold being asked to arbitrate
-   between events git declines to order.
+   **Enforced at creation against one lineage, checked afterward across
+   several.** `new` can only consult a history it can reach, so two clones that
+   each create the same slug both pass legitimately, and their merge is *clean*
+   -- archival deleted the file on one side, so a deletion and an addition do
+   not conflict. Two genesis records then coexist, permanently and mutually
+   non-ancestral, and a bounded walk terminates at whichever one it meets first:
+   the floor becomes clock-determined, by assumption 2.
+
+   No creation-time check can cover that, because the second lineage does not
+   exist yet when the first one asks. `planr next check` covers it afterward,
+   which is the earliest point at which it is answerable -- and it is the same
+   mechanism assumption 2 needs, for the same reason: the fold being asked to
+   arbitrate between events git declines to order. It **reports and never
+   repairs**; the remedies are history surgery or a conversation between two
+   people, and neither is a tool's call.
 
    Without any of this the assumption is simply false: a re-created slug folds
    its dead predecessor's events, and a bounded read stopping at the newer
