@@ -4,6 +4,26 @@
 
 ### Added
 
+- **`planr serve`** renders the backlog as linked HTML on a loopback web
+  server: the board, a page per ticket, and the lint report. Wiki-links in a
+  ticket body become navigation, and each ticket page carries the three
+  reverse edges the backlog never writes down -- its children, the tickets
+  that depend on it, and the tickets whose bodies link to it. A dangling
+  wiki-link routes to a page naming who refers to the slug, rather than
+  reading as a live link.
+
+  It takes the same optional ref as `board`, so `planr serve HEAD~5` browses
+  an older backlog. `--port` defaults to one the OS picks, and the socket
+  binds to `127.0.0.1` only. Nothing writes; the backlog is re-read on every
+  request, so a page reloads into whatever the agents have since committed.
+
+  The command lives behind a `serve` cargo feature that is **on by default**.
+  `cargo install planr --no-default-features` builds the CLI without it, and
+  without `tiny_http` or `pulldown-cmark`.
+
+- Raw HTML in a ticket body is dropped rather than rendered, so reading a
+  branch someone else wrote cannot run code in your browser.
+
 - **`planr board`** now prints a source header before the board, showing
   where the tickets were read from: the working-tree path, the resolved
   commit id, and the ref name (the current branch in parentheses, or the
@@ -27,6 +47,14 @@
   checked out.
 
 ### Fixed
+
+- **A `[[slug]]` written inside code is no longer read as a wiki-link.**
+  Fenced blocks were already skipped; inline code spans were not, so a ticket
+  documenting the link syntax -- `` `[[a|label]]` `` -- was scanned as if it
+  referred to a ticket named `a`. `planr lint` reported those as dangling
+  links no author had written. Expect the warning count to drop on any
+  backlog whose tickets discuss wiki-links: in this repository's own backlog
+  it goes from 16 to 3, and the 3 that remain are real.
 
 - **A task's status is whatever its file says, even when that reads like one
   of the board's stand-ins.** The branch scan reports `(no task file)` and

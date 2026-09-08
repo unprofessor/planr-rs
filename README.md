@@ -12,6 +12,16 @@ The fastest way to install `planr` is via crates.io (Rust package registry):
 cargo install planr
 ```
 
+### Cargo features
+
+`serve` is on by default. It builds `planr serve`, the loopback web server
+that renders the backlog as browsable HTML, and pulls in `tiny_http` and
+`pulldown-cmark`. To build the CLI without either:
+
+```bash
+cargo install planr --no-default-features
+```
+
 ### Prebuilt binaries
 
 Prebuilt binaries are not yet published. Once the first tagged release is out
