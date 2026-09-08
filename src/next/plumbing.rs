@@ -160,10 +160,22 @@ pub fn cat_file_batch(specs: &[String]) -> Result<Vec<Option<String>>, String> {
     Ok(results)
 }
 
-/// Ref names under a prefix, in plumbing form -- no decoration, no current
-/// branch marker, no "checked out elsewhere" marker.
+/// Ref names under a prefix, **fully qualified**, in plumbing form -- no
+/// decoration, no current branch marker, no "checked out elsewhere" marker.
+///
+/// `%(refname)`, not `%(refname:short)`. The short form is the shortest
+/// *unambiguous* name rather than the path minus its prefix, so git LENGTHENS
+/// it when a tag shares the branch's name -- `plan/task/foo` becomes
+/// `heads/plan/task/foo`, precisely so the `refs/<refname>` lookup rule still
+/// resolves it. Callers that prefixed `refs/heads/` onto that produced
+/// `refs/heads/heads/plan/task/foo`, which names nothing, and the qualification
+/// broke in the one scenario it exists to defend against.
+///
+/// Returning full names removes the last place in the engine where a short ref
+/// name is manufactured, which is what makes the claim that every ref-set
+/// computation agrees BY CONSTRUCTION true rather than aspirational.
 pub fn for_each_ref(prefix: &str) -> Result<Vec<String>, String> {
-    let out = run(&["for-each-ref", "--format=%(refname:short)", prefix])?;
+    let out = run(&["for-each-ref", "--format=%(refname)", prefix])?;
     Ok(out
         .lines()
         .map(str::trim)

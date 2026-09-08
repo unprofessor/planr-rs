@@ -301,12 +301,9 @@ pub fn lineage(slug: &str, rev: &str) -> Result<Lineage, String> {
     let mut refs: Vec<String> = vec![rev.to_string()];
     let listed = git::for_each_ref("refs/heads/plan/")
         .map_err(|e| format!("cannot list 'plan/' refs, so a slug cannot be shown unused: {e}"))?;
-    refs.extend(
-        listed
-            .into_iter()
-            .filter(|r| r.ends_with(&suffix))
-            .map(|r| format!("refs/heads/{r}")),
-    );
+    // `for_each_ref` already returns full ref names, so the suffix filter runs
+    // against `refs/heads/plan/<kind>/<slug>` and needs no reconstruction.
+    refs.extend(listed.into_iter().filter(|r| r.ends_with(&suffix)));
     let mut args: Vec<&str> = vec![&format, "--date-order"];
     args.extend(refs.iter().map(String::as_str));
 
@@ -362,14 +359,14 @@ pub fn all_by_ticket(trunk: &str) -> Result<BTreeMap<String, Vec<Event>>, String
     // ref checked out in ANOTHER worktree with "+ ", which is every claimed
     // ticket, and the marker travelled into the revision list as part of the
     // name. Board then failed outright whenever any ticket was claimed.
-    // Qualified, so this is the same ref set the reservation and the
+    // Fully qualified, so this is the same ref set the reservation and the
     // single-ticket walk compute rather than merely a set that agrees with
-    // them today. `%(refname:short)` names a branch, and a tag of that name
-    // wins git's lookup order -- which produced an `is ambiguous` warning git
-    // writes to stderr and this code discards on success.
+    // them today. The names come from `for_each_ref` already qualified --
+    // reconstructing them from a short name is what broke when a tag shadowed
+    // a branch and git lengthened the short form to disambiguate it.
     let mut refs: Vec<String> = vec![trunk.to_string()];
     if let Ok(listed) = git::for_each_ref("refs/heads/plan/") {
-        refs.extend(listed.into_iter().map(|r| format!("refs/heads/{r}")));
+        refs.extend(listed);
     }
 
     let format = format!("--format={}", log_format());

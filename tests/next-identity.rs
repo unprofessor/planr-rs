@@ -739,6 +739,29 @@ fn a_tag_named_after_a_ticket_cannot_shadow_its_branch() {
         "a tag shadowed the ticket's branch: {state}"
     );
 
+    // `board` and the reservation walk `plan/*` by enumeration rather than by
+    // name, and that is a second way to get this wrong. `%(refname:short)` is
+    // the shortest UNAMBIGUOUS name, so a same-named tag makes git lengthen it
+    // to `heads/plan/task/t1` -- and a caller reconstructing `refs/heads/{r}`
+    // from that names nothing. Board died with git's usage blurb and the
+    // reservation lost its refusal, both only when a tag was present, which is
+    // the one case the qualification exists for.
+    let board = ok(dir, &["next", "board"]);
+    assert!(
+        board.contains("t1") && board.contains("in_progress"),
+        "board could not read a backlog with a shadowing tag present:\n{board}"
+    );
+    let err = refused(dir, &["next", "new", "task", "t1", "Again"]);
+    assert!(
+        err.contains("already exists") || err.contains("has been used"),
+        "the reservation answered with git's usage blurb rather than a refusal \
+         when a tag shadowed the branch: {err}"
+    );
+    assert!(
+        !err.contains("[<revision>"),
+        "a malformed revision reached git: {err}"
+    );
+
     // And the ticket is still advanceable, which is what freezing broke.
     drive_to_approved(dir, "t1");
     let state = ok(dir, &["next", "state", "t1"]);
