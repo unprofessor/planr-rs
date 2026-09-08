@@ -503,3 +503,129 @@ fn the_oracle_seam_is_decided_by_its_value_and_not_by_its_presence() {
     );
     assert!(stderr.contains("PLANR_NEXT_ORACLE"), "{stderr}");
 }
+
+#[test]
+fn a_slug_alive_on_a_branch_is_refused_from_a_ref_that_cannot_see_it() {
+    // The gap between the reservation and the fold, one dimension over. An
+    // earlier round closed it on the KIND of event; this is the same
+    // asymmetry in the REF SET. Reads walk trunk unioned with the ticket's
+    // own ref, and `board` walks trunk plus every `plan/*`, but the
+    // reservation walked a single rev -- a strict subset. So a slug could be
+    // unused to the check and live to the reader.
+    //
+    // Nothing exotic reaches it: cut a release branch, create and claim a
+    // ticket on the mainline, then plan against the release branch. That
+    // branch cannot see the ticket, its ref `plan/task/relx` is sitting right
+    // there, and `--trunk` is an ordinary flag.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+
+    git(dir, &["branch", "release"]);
+    ok(dir, &["next", "new", "task", "relx", "On mainline"]);
+    ok(dir, &["next", "do", "claim", "relx", ""]);
+
+    // The claim commit lives ONLY on plan/task/relx, so a refusal that names
+    // it proves the walk reached past the rev it was handed.
+    let branch_only = git_out(dir, &["log", "--format=%s", "release..plan/task/relx"]);
+    assert!(
+        branch_only.contains("claim relx"),
+        "the claim should be unreachable from release: {branch_only}"
+    );
+
+    let err = refused(
+        dir,
+        &["--trunk", "release", "next", "new", "task", "relx", "Again"],
+    );
+    assert!(err.contains("has been used"), "{err}");
+    assert!(
+        err.contains("claim"),
+        "the refusal should name the declaration only the branch carries: {err}"
+    );
+
+    // Exactly one genesis exists, which is what the integration detector will
+    // later assert globally.
+    let geneses = git_out(
+        dir,
+        &["log", "--all", "--format=%s", "--grep=^plan: new relx"],
+    );
+    assert_eq!(
+        geneses.lines().filter(|l| !l.trim().is_empty()).count(),
+        1,
+        "expected one genesis for 'relx', got:\n{geneses}"
+    );
+}
+
+#[test]
+fn an_overlong_slug_is_refused_before_anything_is_committed() {
+    // A slug has two obligations and the pattern covers one. It must survive
+    // its own trailer -- which a 300-character slug does -- and it must be a
+    // usable filename, which it does not. Unbounded, `check_slug` passed,
+    // `commit_tree` and `update_ref` succeeded, and only then did `sync_path`
+    // fail with ENAMETOOLONG: the genesis was in history, the slug was burned,
+    // the working tree was permanently dirty, and every later `git clone`
+    // failed to check out with `files checked out: 0`. Recovering needed
+    // history surgery, which the reservation refuses to reason about.
+    //
+    // So the assertion that matters is not the refusal, it is that trunk did
+    // not move.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+
+    let before = git_out(dir, &["rev-parse", "main"]);
+    let long = "a".repeat(300);
+    let err = refused(dir, &["next", "new", "task", &long, "Too long"]);
+    assert!(err.contains("over the"), "{err}");
+    assert!(err.contains("300 characters"), "{err}");
+
+    let after = git_out(dir, &["rev-parse", "main"]);
+    assert_eq!(before, after, "trunk moved for a slug that was refused");
+
+    let history = git_out(dir, &["log", "--all", "--format=%s"]);
+    assert!(
+        !history.contains(&long),
+        "a refused slug reached history:\n{history}"
+    );
+    ok(dir, &["next", "new", "task", "short-enough", "Fine"]);
+}
+
+#[test]
+fn a_relative_plan_dir_names_the_same_backlog_from_any_directory() {
+    // 0.4's commands run behind `enter_repo_root()`, the same as 0.3's, so a
+    // relative `--plan-dir` resolves from the repository root rather than the
+    // caller's directory. Every other test passes an absolute path and so
+    // could not tell the difference -- but the point of entering the root is
+    // that two invocations cannot disagree about where the backlog is, which
+    // is worth pinning rather than assuming.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    let nested = dir.join("deep/nested");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    ok(
+        dir,
+        &[
+            "--plan-dir",
+            ".plan",
+            "next",
+            "new",
+            "task",
+            "alpha",
+            "Alpha",
+        ],
+    );
+
+    let from_root = ok(dir, &["--plan-dir", ".plan", "next", "state", "alpha"]);
+    let from_nested = ok(&nested, &["--plan-dir", ".plan", "next", "state", "alpha"]);
+    assert!(from_root.contains("alpha: todo"), "{from_root}");
+    assert_eq!(
+        from_root, from_nested,
+        "the same relative --plan-dir named two different backlogs"
+    );
+
+    let board_root = ok(dir, &["--plan-dir", ".plan", "next", "board"]);
+    let board_nested = ok(&nested, &["--plan-dir", ".plan", "next", "board"]);
+    assert_eq!(board_root, board_nested);
+}

@@ -90,13 +90,30 @@ pub fn new_ticket(
             ctx.trunk
         )
     })?;
-    plumbing::sync_path(&ctx.trunk, &commit, &path)?;
-
-    let state = fold::initial_state(&ctx.schema, kind)?;
-    Ok(format!(
-        "new {kind} '{slug}' at {} ({state})\n  {path}",
-        &commit[..7]
-    ))
+    // Past the compare-and-swap the ticket EXISTS: the commit is on trunk and
+    // its genesis trailer is the ticket's identity. Reconciling this worktree
+    // is a convenience, and a convenience must not be able to report failure
+    // for an operation that has already succeeded -- `docs/semantics.md`
+    // section 3.1 says the workspace is never history and step 7 cannot fail
+    // the step. Propagating this error told the user their `new` had failed
+    // when it had not, which is worse than a dirty worktree: it invites a
+    // retry that is then correctly refused by name.
+    //
+    // Syncing BEFORE the ref move is not the alternative it looks like -- it
+    // would put the worktree ahead of the ref it is checked out on, which is
+    // the same inconsistency a step earlier and with no commit to point at.
+    let mut out = format!("new {kind} '{slug}' at {} ({})\n  {path}", &commit[..7], {
+        fold::initial_state(&ctx.schema, kind)?
+    });
+    if let Err(e) = plumbing::sync_path(&ctx.trunk, &commit, &path) {
+        out.push_str(&format!(
+            "\n  warning: the ticket is committed, but this worktree could not be \
+             updated to match: {e}\n  run `git restore --source={} -- {path}` once the \
+             cause is cleared",
+            &commit[..7]
+        ));
+    }
+    Ok(out)
 }
 
 /// A slug has to be exactly what comes back out of its own `Planr-Ticket`
@@ -114,10 +131,38 @@ pub fn new_ticket(
 /// It also means the reservation cannot be sidestepped by decoration: a slug
 /// that trims to a taken one is rejected here, before the walk that compares
 /// them.
+/// A slug has to survive its own trailer AND be a usable filename, and those
+/// are two obligations, not one.
+///
+/// The pattern covers the first: it admits only characters git neither trims
+/// nor treats as structure, so a slug reads back from `Planr-Ticket` byte for
+/// byte. It says nothing about the second, and a 253-character slug passed
+/// validation, committed its genesis to trunk, and only then failed in
+/// `sync_path` with ENAMETOOLONG -- leaving the identity written in history,
+/// the slug burned, the working tree permanently dirty, and every subsequent
+/// `git clone` unable to check out at all. Recovering from that needs history
+/// surgery, which the reservation now refuses to reason about.
+///
+/// The bound is well under the 255-byte filesystem limit on `<slug>.md`,
+/// because the slug is also interpolated into `plan/<kind>/<slug>` ref names
+/// and into worktree paths, each of which sits inside a directory of unknown
+/// depth. Nothing here is at risk of hitting it: it is a guard against a
+/// generated or pasted name, not a budget anyone should plan against.
+use schema::SLUG_MAX;
+
 fn check_slug(slug: &str) -> Result<(), String> {
     let pattern = regex::Regex::new(schema::SLUG_PATTERN)
         .map_err(|e| format!("the slug pattern does not compile: {e}"))?;
     if pattern.is_match(slug) {
+        if slug.len() > SLUG_MAX {
+            return Err(format!(
+                "slug is {} characters, over the {SLUG_MAX} allowed: it is also a filename \
+                 ('{slug}.md'), a ref name and a worktree path, and a name too long for the \
+                 filesystem commits its own genesis before the write fails -- leaving a \
+                 repository no clone can check out",
+                slug.len()
+            ));
+        }
         return Ok(());
     }
     Err(format!(
@@ -195,10 +240,11 @@ fn reserve_slug(slug: &str, rev: &str) -> Result<(), String> {
         events::Lineage::Severed { latest } => Err(format!(
             "slug '{slug}' has events but no reachable creation: last declared '{}' at {}, and \
              no '{}' record for it is reachable\n\
-             that is a rewritten or grafted history rather than a name collision, so this \
-             repository cannot say whether the slug is free -- a ticket created here would fold \
-             those events into its own state. Restore the history carrying its creation, or \
-             choose another slug.",
+             the history may have been rewritten or grafted, or these events may predate the \
+             ticket's creation -- a seeded migration chain does that legitimately. Either way \
+             this repository cannot say whether the slug is free, and a ticket created here \
+             would fold those events into its own state. Restore the history carrying its \
+             creation, or choose another slug.",
             latest.verb,
             &latest.commit[..7],
             events::GENESIS

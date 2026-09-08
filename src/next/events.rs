@@ -263,12 +263,31 @@ pub enum Lineage {
 /// over the creation commit, or a `filter-branch` that drops it, leaves the
 /// later trailers reachable and the `new` record not -- and the walk was
 /// already holding the evidence when it threw it away.
+///
+/// **The ref set has to be the fold's, not just the caller's tip.** Reads walk
+/// trunk unioned with the ticket's own ref, and `all_by_ticket` walks trunk
+/// plus every `plan/*`; a reservation that walked one rev was asking about a
+/// strict subset, so a slug could be unused to the check and live to the
+/// reader. It needs no rewrite to hit: cut a release branch, create and claim a
+/// ticket on the mainline, and `new` against the release branch accepts a slug
+/// whose `plan/<kind>/<slug>` ref is sitting right there. Every `plan/*` ref
+/// ending in this slug is included rather than only the one for the kind being
+/// created, because a stale branch under a DIFFERENT kind collides just as
+/// hard and the kind is not knowable from the slug.
 pub fn lineage(slug: &str, rev: &str) -> Result<Lineage, String> {
     let format = format!("--format={}", log_format());
     let mut latest: Option<Event> = None;
     let mut genesis: Option<Event> = None;
 
-    git::log_streaming(&[&format, rev], RS as u8, |record| {
+    let suffix = format!("/{slug}");
+    let mut refs: Vec<String> = vec![rev.to_string()];
+    if let Ok(listed) = git::for_each_ref("refs/heads/plan/") {
+        refs.extend(listed.into_iter().filter(|r| r.ends_with(&suffix)));
+    }
+    let mut args: Vec<&str> = vec![&format, "--date-order"];
+    args.extend(refs.iter().map(String::as_str));
+
+    git::log_streaming(&args, RS as u8, |record| {
         let Some(event) = parse_record(record) else {
             return true;
         };

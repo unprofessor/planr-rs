@@ -50,7 +50,8 @@
     "slug": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9_-]*$",
-      "description": "A ticket's identity, and its primary key. The slug is the filename stem and the last segment of its branch ref; it carries no numeric prefix and must not contain a slash. The mapping from slug to file path is one-to-one and permanent: archival deletes the file but does not release the name, because every event is attributed by 'Planr-Ticket: <slug>' and a reused slug would make one identifier name two tickets, folding a dead ticket's events into a live one."
+      "maxLength": 96,
+      "description": "A ticket's identity, and its primary key. The slug is the filename stem and the last segment of its branch ref; it carries no numeric prefix and must not contain a slash. The mapping from slug to file path is one-to-one and permanent: archival deletes the file but does not release the name, because every event is attributed by 'Planr-Ticket: <slug>' and a reused slug would make one identifier name two tickets, folding a dead ticket's events into a live one. The length bound is a filesystem constraint rather than a stylistic one: the slug is also '<slug>.md' on disk and a segment of a worktree path, and a name that overruns the filesystem limit is committed to history before the write that fails, leaving a repository no clone can check out."
     },
 
     "kinds": {

@@ -1913,48 +1913,64 @@ claimed otherwise on the strength of a bad measurement -- timing the whole `new`
 command, which spawns seven gits and is dominated by start-up, rather than the
 check. Measured in isolation, best of seven:
 
-| the check alone | 500 commits | 2000 commits |
+**Pack the objects before measuring anything.** Two independent runs of the same
+benchmark disagreed by a factor of two, and the cause was not the machine: a
+harness that builds N commits in a loop with `gc.auto 0` leaves N *loose*
+objects, so `%(trailers:...)` does N separate open-read-inflate round trips
+instead of streaming one packfile. Every real repository has run `gc`. The loose
+column below is a measurement artifact, kept only because it is what an
+unpacked benchmark reports and the discrepancy is worth being able to recognize.
+
+| the trailer walk alone | loose | packed | packed + commit-graph |
+| --- | --- | --- | --- |
+| 250 commits | 6ms | 6ms | 3ms |
+| 500 commits | 11ms | 6ms | 5ms |
+| 1000 commits | 16ms | 6ms | 6ms |
+| 2000 commits | 29ms | **9ms** | **9ms** |
+| 4000 commits | 55ms | 15ms | 15ms |
+
+Head-to-head against the check it replaced, on one repository in both
+configurations:
+
+| 2002 commits | trailer walk | path-keyed miss |
 | --- | --- | --- |
-| trailer walk, no commit-graph | 10-12ms | **29-36ms** |
-| trailer walk, `--changed-paths` | 9-13ms | 28-34ms |
-| path-keyed miss, no commit-graph | 17ms | 59ms |
-| path-keyed miss, `--changed-paths` | 3ms | **3ms** |
+| loose, no commit-graph | 29ms | 59ms |
+| loose, `--changed-paths` | 29ms | 3ms |
+| packed, no commit-graph | **8ms** | **7ms** |
+| packed, `--changed-paths` | 8ms | **3ms** |
 
 Reference points on the same machine: planr start-up with no git spawn is 4ms,
-one bare `git rev-parse HEAD` is 3ms, and `git log --format=%H` over the same
-2000 commits is 5ms.
+a bare `git rev-parse HEAD` is 2ms, and `git log --format=%H` over 2000 commits
+is 4ms.
 
-Three things follow, and the third is the one that matters.
+Four things follow.
 
-- **The walk is O(C) with a small constant, not flat.** 10ms to 29ms for four
-  times the history. The 5ms figure for `--format=%H` over the same range locates
-  the cost precisely: roughly 26 of the 31ms is `%(trailers:...)` forcing every
-  commit message to be loaded and parsed. That is the walk, not the spawn.
-  A second independent measurement on the same shapes came out about half as
-  large -- 6ms and 16ms -- which is a useful reminder that the constant here is
-  machine- and harness-dependent and the *shape* is the finding. Both agree on
-  linear growth of roughly 5-10 microseconds per commit above a 3-4ms process
-  floor, which puts a 20k-commit history somewhere around 100-200ms.
+- **The walk is O(C) with a small constant, not flat.** The slope is
+  **2.4 microseconds per commit packed** and 13.1 loose, over a 3-4ms process
+  floor. A 20k-commit history extrapolates to roughly 55ms packed. The
+  `--format=%H` reference locates the cost: what the walk pays for beyond
+  traversal is `%(trailers:...)` loading and parsing every commit message.
 - **The early stop works, so the hit case is a range rather than a number.** An
-  archived slug costs 10ms or 40ms at 2000 commits depending only on how far back
-  its genesis sits. A *live* collision never reaches the trailer walk at all --
-  the tree read short-circuits it in 5-6ms.
-- **On a repository with a commit-graph this is a regression we accepted.** The
-  path-keyed miss was 3ms and unaffected by history size; the trailer walk is
-  29ms and unaccelerable, because changed-path filters answer questions about
-  paths and this is a question about commit messages. The miss is the common
-  case, so the common case got roughly ten times slower there. Without a
-  commit-graph it is the other way around -- 59ms to 29ms, about twice as fast --
-  but that is the configuration nobody optimizes for.
+  archived slug costs 11ms with its genesis at the tip against 21ms with it at
+  the root of a 2000-commit history. A *live* collision never reaches the trailer
+  walk at all -- the tree read short-circuits it.
+- **A commit-graph helps only on small histories.** It halves the walk at 250-500
+  commits, because it spares git parsing commit headers for the traversal, and
+  does nothing from 1000 upward, because the message body still has to be read.
+  Changed-path filters never help: they answer questions about paths and this is
+  a question about commit messages.
+- **On a packed repository with a commit-graph the check is about 2.7x slower
+  than the one it replaced** -- 8ms against 3ms at 2000 commits -- and without a
+  commit-graph it is a wash, 8ms against 7ms. An earlier draft of this section
+  put the regression at ten times, which was an unpacked trailer walk compared
+  against a packed and indexed path walk. Comparing like with like, the cost is
+  real and it is small.
 
 The honest summary is that the check costs a full trailer walk, once per ticket,
-and unlike the path-keyed check that cost cannot be accelerated. We took the
-trade for an identity check that cannot drift from the fold, and the correctness
-argument stands on its own; the performance argument does not support it and
-should not be made. At 2000 commits `new` takes 61-78ms end to end, of which
-about 31ms is this walk. That is fine now and will not be at 50k, and the
-mitigation the path-keyed design pointed at -- write a commit-graph -- no longer
-applies.
+and unlike the path-keyed check that cost cannot be accelerated by an index. We
+took that trade for an identity check that cannot drift from the fold. The
+correctness argument stands on its own and the performance argument neither
+supports nor seriously undercuts it.
 
 The cost lands on `new`, once per ticket, and never on a read.
 

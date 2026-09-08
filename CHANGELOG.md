@@ -35,12 +35,12 @@
   a path with `filter-branch` while every commit survives, or creating from a
   shallow clone each moved the path without touching the trailers, and each
   made a used slug look free. The cost is a full trailer walk -- linear in
-  history, and unlike the path-limited check it cannot be accelerated by a
-  commit-graph, because changed-path filters answer questions about paths and
-  this is a question about commit messages. On a repository that has one, the
-  common case is slower than it was. It lands on `new`, once per ticket, and
-  never on a read. `new` refuses outright in a shallow clone rather than issue
-  a reservation it cannot back.
+  history at roughly 2.4 microseconds per commit on a packed repository, and
+  unlike the path-limited check it cannot be accelerated by an index, because
+  changed-path filters answer questions about paths and this is a question about
+  commit messages. At 2000 commits that is about 2.7x the check it replaced. It
+  lands on `new`, once per ticket, and never on a read. `new` refuses outright
+  in a shallow clone rather than issue a reservation it cannot back.
 
   A slug whose events are reachable while its creation is not -- a `git replace
   --graft` over the creation commit, or a rewrite that drops it -- is refused
@@ -64,6 +64,35 @@
   schema's `^[a-z0-9][a-z0-9_-]*$`, and the refusal names the rule; the
   pattern is pinned against the published document by a test, since it is now
   written down in two places.
+
+- **`planr next new` refuses a slug that is alive on a branch the current
+  trunk cannot see.** The reservation walked one revision while every read
+  walks trunk unioned with the ticket's own `plan/<kind>/<slug>` ref, and
+  `board` walks trunk plus every `plan/*` -- so the check was asking about a
+  strict subset of what the reader answers for, and a slug could be unused to
+  one and live to the other. Reaching it took no rewrite and no second clone:
+  cut a release branch, create and claim a ticket on the mainline, then plan
+  against the release branch. The reservation now walks the same refs the fold
+  does, including every `plan/*` ref ending in the slug, so a stale branch
+  under a different kind counts too.
+
+- **`planr next new` bounds the slug's length.** The pattern says what survives
+  a commit trailer; it said nothing about what survives a filesystem. A slug of
+  253 characters or more passed validation, committed its genesis to trunk, and
+  only then failed writing `<slug>.md` -- leaving the identity in history, the
+  slug permanently taken, the working tree impossible to clean, and every later
+  `git clone` unable to check out at all. Slugs are now capped at 96 characters,
+  in the engine and in the published schema together, and the cap is checked
+  before anything is committed.
+
+- **A `planr next new` that cannot update the working tree no longer reports
+  failure for a ticket it created.** Reconciling this worktree happens after
+  the commit and the ref move, so any failure there -- a read-only checkout, a
+  permissions problem, a name the filesystem rejects -- announced an error for
+  an operation that had already succeeded, and invited a retry that was then
+  correctly refused by name. The ticket is reported as created, with a warning
+  naming the `git restore` that fixes the worktree. The workspace is never
+  history.
 
 - **Two concurrent `planr next new` calls can no longer both succeed.** The
   slug reservation read trunk, then the tip was read again separately, and the

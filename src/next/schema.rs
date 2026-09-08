@@ -28,6 +28,11 @@ use serde::Deserialize;
 /// would be a new drift rather than a shared rule.
 pub const SLUG_PATTERN: &str = "^[a-z0-9][a-z0-9_-]*$";
 
+/// The other half of the slug contract: the pattern says what survives a
+/// trailer, this says what survives a filesystem. Kept here beside the pattern
+/// so one test can pin both against the published document.
+pub const SLUG_MAX: usize = 96;
+
 /// Which ref a verb's commit is built on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -587,6 +592,14 @@ mod wf {
         assert_eq!(
             published, SLUG_PATTERN,
             "the engine and the published schema disagree about what a slug is"
+        );
+
+        let max = doc["$defs"]["slug"]["maxLength"]
+            .as_u64()
+            .expect("the published schema has no $defs/slug maxLength");
+        assert_eq!(
+            max as usize, SLUG_MAX,
+            "the engine and the published schema disagree about how long a slug may be"
         );
     }
 }

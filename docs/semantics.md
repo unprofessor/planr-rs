@@ -299,6 +299,26 @@ Named so that breaking one is a decision rather than an accident.
    there for the fold to answer from: reporting that slug free would hand them
    to a new ticket.
 
+   **The invariant, stated once.** Three consecutive review rounds each found a
+   different way for the reservation to ask a narrower question than the fold --
+   the *kind* of event it reacted to, the *ref set* it walked, and the lineages
+   it could reach. Each fix closed one dimension and the next round found
+   another, which is the signature of patching a check rather than stating a
+   rule. The rule is:
+
+   > every event for a slug descends from **exactly one** genesis reachable
+   > from the ref set the fold reads
+
+   Both guards are corollaries. `new` enforces it at creation against the refs
+   it can see; the integration detector enforces it over trunk. Anything that
+   makes the fold read a wider set makes both read that set too, rather than
+   opening a fourth gap.
+
+   Note **exactly** one, not at most one. The two failures are mirror images: two
+   reachable geneses make the floor clock-determined, and zero with events
+   present make a used slug read as free. A `> 1` rule walks straight past the
+   second.
+
    **Enforced against one lineage, assumed across several.** `new` can only
    consult a history it can reach, so two clones that each create the same slug
    both pass legitimately, and their merge is *clean* -- archival deleted the
@@ -308,10 +328,9 @@ Named so that breaking one is a decision rather than an accident.
    clock-determined, by assumption 2. So the honest claim is *true modulo no
    two lineages independently creating the same slug*. Frequent integration
    keeps the window small; that is mitigation, not guarantee. Closing it needs
-   a check at integration -- one that fails when a slug has more than one
-   genesis reachable from trunk -- which is the same detector assumption 2
-   needs, for the same reason: the fold being asked to arbitrate between events
-   git declines to order.
+   the integration half of the invariant above -- which is the same detector
+   assumption 2 needs, for the same reason: the fold being asked to arbitrate
+   between events git declines to order.
 
    Without any of this the assumption is simply false: a re-created slug folds
    its dead predecessor's events, and a bounded read stopping at the newer
