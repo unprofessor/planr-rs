@@ -14,11 +14,12 @@
 
   The board leads with what is in flight -- the claimed branches and the task
   each one carries -- above the epic, story, and task tables. A ticket page
-  shows one status badge, the one its own file declares; when an in-flight
-  branch disagrees, the reports the page is not showing sit in a hover-over
-  table of branch and status, and the board says where a branch-sourced
-  status came from in the badge's hover text rather than marking it with an
-  asterisk.
+  shows one status badge, and it is the claiming branch's value rather than
+  trunk's: trunk keeps the pre-claim status until the branch merges, so it
+  never reports `in_progress` or `review`. When the two disagree, a hover-over
+  table names every source and what it reports, the branch first and trunk
+  second. The board says where a branch-sourced status came from in the
+  badge's hover text rather than marking it with an asterisk.
 
   The lint report colors each finding by level and tints its row, and links
   the ticket column the way every other page links a slug.

@@ -358,19 +358,29 @@ fn page_ticket(t: &ParsedTicket, snap: &Snapshot, index: &Index) -> String {
 
     body.push_str("<dl class=\"meta\">");
     body.push_str(&format!("<dt>kind</dt><dd>{}</dd>", kind_name(&t.kind)));
-    // One badge in the field, always. The ticket file is what this page is
-    // about, and a second pill beside it reads as the same field rendered
-    // twice rather than as two sources disagreeing. One branch at most can be
-    // the other source: a branch's slug is its name with `plan/` stripped, and
-    // git will not hand out the same branch name twice.
-    let ignored = snap
+    // One badge in the field, and it is the claiming branch's value when there
+    // is one. Trunk keeps the pre-claim status until the branch merges, so it
+    // never reports in_progress or review -- reading trunk here would answer
+    // what was true before anyone started. Through `task_status_display` so
+    // this badge cannot drift from the one the board shows for the same task.
+    let in_flight: HashMap<&str, &str> = snap
+        .branches
+        .iter()
+        .filter_map(|b| b.status.status().map(|s| (b.slug.as_str(), s)))
+        .collect();
+    let (shown, _) = board::task_status_display(t, &in_flight);
+    // At most one branch can be the other source: a branch's slug is its name
+    // with `plan/` stripped, and git will not hand out the same branch name
+    // twice. Sources that agree need no hover-over -- there is nothing to
+    // resolve, and an unreadable branch is worth reporting even so.
+    let claimed = snap
         .branches
         .iter()
         .find(|b| b.slug == t.id && b.status.status() != Some(t.status.as_str()));
     body.push_str(&format!(
         "<dt>status</dt><dd>{}{}</dd>",
-        status_badge(&t.status),
-        ignored_report(ignored)
+        status_badge(shown.trim_end_matches(" *")),
+        status_reports(claimed, &t.status)
     ));
     body.push_str(&format!(
         "<dt>parent</dt><dd>{}</dd>",
@@ -688,28 +698,35 @@ fn status_badge_noted(status: &str, note: Option<&str>) -> String {
     )
 }
 
-/// The status this page does not show, behind a hover-over.
+/// Every status reported for this ticket, behind a hover-over.
 ///
-/// Branch and status are the two columns because they are the pair a reader
-/// acts on: which branch to go check out, and what its task file claims there.
-/// The status is a real badge -- the same pill the field above uses, so a
-/// reviewing branch reads as reviewing rather than as anonymous text.
+/// The badge beside it shows one of these; this is where a reader sees who
+/// said what. The claiming branch leads and trunk follows, which is the order
+/// they resolve in: the branch is the live answer, and trunk is the value it
+/// overwrites when it merges.
+///
+/// Branch and status are the columns because they are the pair a reader acts
+/// on: which branch to go check out, and what its task file claims there. The
+/// statuses are real badges -- the same pill the field uses, so a reviewing
+/// branch reads as reviewing rather than as anonymous text.
 ///
 /// `tabindex` is not decoration: hover is the only other way in, and a hover
-/// nobody can reach on a phone or by keyboard hides the row from half the
+/// nobody can reach on a phone or by keyboard hides the table from half the
 /// readers. Keep it, and keep the `:focus` rules that go with it.
-fn ignored_report(branch: Option<&BranchStatus>) -> String {
-    let b = match branch {
+fn status_reports(claimed: Option<&BranchStatus>, trunk: &str) -> String {
+    let b = match claimed {
         Some(b) => b,
         None => return String::new(),
     };
     format!(
-        " <div class=\"reports\" tabindex=\"0\">1 other report\
+        " <div class=\"reports\" tabindex=\"0\">2 reports\
          <div class=\"pop\"><table><thead><tr><th>branch</th><th>status</th></tr>\
          </thead><tbody><tr><td><code>{}</code></td><td>{}</td></tr>\
+         <tr><td><code>trunk</code></td><td>{}</td></tr>\
          </tbody></table></div></div>",
         escape(&b.branch),
-        status_badge(b.status.display())
+        status_badge(b.status.display()),
+        status_badge(trunk)
     )
 }
 

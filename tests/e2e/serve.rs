@@ -294,9 +294,9 @@ fn test_e2e_serve_ticket_status_is_one_badge() {
     claim_t1_on_a_branch(td.path());
     let s = start(td.path(), &["--port", "0"]);
 
-    // Trunk still says todo while the branch says in_progress. Both belong on
-    // the page, but a second pill beside the first reads as the same field
-    // rendered twice -- the branch's value lives in the hover-over.
+    // Trunk still says todo while the branch says in_progress. The branch is
+    // where the work is, so the field's one badge is in_progress; both reports
+    // and who made them live in the hover-over.
     let (_, body) = get(s.port, "/t/t1");
     let meta = body
         .split_once("<dl class=\"meta\">")
@@ -312,14 +312,18 @@ fn test_e2e_serve_ticket_status_is_one_badge() {
         "the status field itself renders more than one badge: {field}"
     );
     assert!(
-        pop.contains("<code>plan/t1</code>"),
-        "the hover-over does not name the branch it ignores: {pop}"
+        field.contains("class=\"st st-in_progress\""),
+        "the field shows trunk's status rather than the claiming branch's: {field}"
     );
-    // The ignored status is a real pill, not anonymous text: the same classes
-    // the field above uses, so it reads as a status at a glance.
+    // Both sources, each named, each status a real pill -- the same classes
+    // the field uses, so a status reads as a status at a glance.
     assert!(
-        pop.contains("class=\"st st-in_progress\""),
-        "the ignored report's status carries no badge classes: {pop}"
+        pop.contains("<code>plan/t1</code>") && pop.contains("<code>trunk</code>"),
+        "the hover-over does not name both sources: {pop}"
+    );
+    assert!(
+        pop.contains("class=\"st st-in_progress\"") && pop.contains("class=\"st st-todo\""),
+        "the hover-over does not badge both reported statuses: {pop}"
     );
 }
 
