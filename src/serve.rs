@@ -361,15 +361,16 @@ fn page_ticket(t: &ParsedTicket, snap: &Snapshot, index: &Index) -> String {
     // One badge in the field, always. The ticket file is what this page is
     // about, and a second pill beside it reads as the same field rendered
     // twice rather than as two sources disagreeing.
-    let ignored: Vec<&BranchStatus> = snap
+    // One branch at most: a branch's slug is its name with `plan/` stripped,
+    // and git will not hand out the same branch name twice.
+    let ignored = snap
         .branches
         .iter()
-        .filter(|b| b.slug == t.id && b.status.status() != Some(t.status.as_str()))
-        .collect();
+        .find(|b| b.slug == t.id && b.status.status() != Some(t.status.as_str()));
     body.push_str(&format!(
         "<dt>status</dt><dd>{}{}</dd>",
         status_badge(&t.status),
-        ignored_reports(&ignored)
+        ignored_report(ignored)
     ));
     body.push_str(&format!(
         "<dt>parent</dt><dd>{}</dd>",
@@ -687,33 +688,29 @@ fn status_badge_noted(status: &str, note: Option<&str>) -> String {
     )
 }
 
-/// The statuses this page does not show, behind a hover-over.
+/// The status this page does not show, behind a hover-over.
 ///
 /// Branch and status are the two columns because they are the pair a reader
 /// acts on: which branch to go check out, and what its task file claims there.
-/// The status cells are real badges -- the same pill the field above uses, so
-/// a reviewing branch reads as reviewing rather than as anonymous text.
-fn ignored_reports(branches: &[&BranchStatus]) -> String {
-    if branches.is_empty() {
-        return String::new();
-    }
-
-    let mut out = format!(
-        " <div class=\"reports\" tabindex=\"0\">{} other report{}\
+/// The status is a real badge -- the same pill the field above uses, so a
+/// reviewing branch reads as reviewing rather than as anonymous text.
+///
+/// `tabindex` is not decoration: hover is the only other way in, and a hover
+/// nobody can reach on a phone or by keyboard hides the row from half the
+/// readers. Keep it, and keep the `:focus` rules that go with it.
+fn ignored_report(branch: Option<&BranchStatus>) -> String {
+    let b = match branch {
+        Some(b) => b,
+        None => return String::new(),
+    };
+    format!(
+        " <div class=\"reports\" tabindex=\"0\">1 other report\
          <div class=\"pop\"><table><thead><tr><th>branch</th><th>status</th></tr>\
-         </thead><tbody>",
-        branches.len(),
-        if branches.len() == 1 { "" } else { "s" }
-    );
-    for b in branches {
-        out.push_str(&format!(
-            "<tr><td><code>{}</code></td><td>{}</td></tr>",
-            escape(&b.branch),
-            status_badge(b.status.display())
-        ));
-    }
-    out.push_str("</tbody></table></div></div>");
-    out
+         </thead><tbody><tr><td><code>{}</code></td><td>{}</td></tr>\
+         </tbody></table></div></div>",
+        escape(&b.branch),
+        status_badge(b.status.display())
+    )
 }
 
 fn kind_name(kind: &Option<Kind>) -> &'static str {
