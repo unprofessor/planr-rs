@@ -25,6 +25,38 @@ Agent instructions for the planr-rs repository. CLAUDE.md is a symlink to this f
 - Rust formatting/linting: `cargo fmt --check` and
   `cargo clippy --workspace --all-targets -- -D warnings` must pass.
 
+## Simplicity
+
+Prefer simple and stupid to complex and clever. The reader of this code is
+someone debugging it at speed, not someone admiring it.
+
+- **Solve the case in front of you.** Build what the current ticket asks
+  for and nothing else. A second caller, a second format, a second backend
+  -- those are tickets, not reasons to generalize now.
+- **Hardcode now, parametrize later.** A literal in one place is easy to
+  find and easy to lift into a parameter the day a second value exists.
+  A config knob with one setting is dead weight that still has to be read,
+  tested, and documented. The same goes for a trait with one impl, a
+  builder with one field, and a generic with one instantiation.
+- **Rule of three.** Two similar blocks stay duplicated. Extract on the
+  third, when the shape of the abstraction is actually visible. Duplication
+  is cheaper to undo than the wrong abstraction.
+- **Reach for the plain construct first.** A `match`, a `Vec`, a `for` loop,
+  a function that takes concrete types. Introduce an iterator chain, a
+  generic, a macro, or a new dependency only when the plain version is
+  demonstrably worse, and say why in the PR.
+- **Fewest moving parts wins.** Given two designs that pass the same tests,
+  take the one with fewer types, fewer files, fewer indirections -- even if
+  it is less elegant.
+- **No speculative extension points.** Do not add hooks, plugin seams,
+  `pub` surface, or `#[allow(dead_code)]` scaffolding for a future that has
+  no ticket. Delete code that nothing calls.
+- **Errors stay boring.** Fail with a clear message rather than building a
+  recovery path for a case nobody has hit.
+
+When a simple solution genuinely does not fit, say what breaks it in one
+sentence before writing the complex one.
+
 ## Releasing a new version
 
 1. Bump `version` in `Cargo.toml` (keep semver: the crate is pre-1.0, so
