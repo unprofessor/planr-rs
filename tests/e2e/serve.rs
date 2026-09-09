@@ -58,6 +58,12 @@ fn start(dir: &Path, args: &[&str]) -> Serving {
 
 /// GET `path` and return the status code and body.
 fn get(port: u16, path: &str) -> (u16, String) {
+    let (status, _, body) = get_full(port, path);
+    (status, body)
+}
+
+/// The response head as well, for the handful of assertions about a header.
+fn get_full(port: u16, path: &str) -> (u16, String, String) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("could not reach serve");
     write!(
         stream,
@@ -78,7 +84,7 @@ fn get(port: u16, path: &str) -> (u16, String) {
         .and_then(|c| c.parse().ok())
         .unwrap_or_else(|| panic!("no status code in {head:?}"));
 
-    (status, body.to_string())
+    (status, head.to_string(), body.to_string())
 }
 
 /// A backlog with one task pointing at another, one dangling link, a
@@ -193,12 +199,21 @@ fn test_e2e_serve_wiki_links_navigate_and_dangle() {
         "dangling wiki-link did not route to /dangling/: {body}"
     );
 
-    // The dangling page names who refers to the slug rather than 404ing bare.
-    let (code, missing) = get(s.port, "/dangling/no-such-ticket");
+    // Following one lands on the ordinary ticket URL: /dangling/ marks the
+    // link in the document, and has no business in the reader's address bar.
+    let (code, head, _) = get_full(s.port, "/dangling/no-such-ticket");
+    assert_eq!(code, 302, "a dangling link did not redirect: {head}");
+    assert!(
+        head.contains("Location: /t/no-such-ticket"),
+        "the redirect does not point at the ticket URL: {head}"
+    );
+
+    // Where it lands names who refers to the slug rather than 404ing bare.
+    let (code, missing) = get(s.port, "/t/no-such-ticket");
     assert_eq!(code, 404, "a slug nothing claims must not answer 200");
     assert!(
         missing.contains("referred to by") && missing.contains("href=\"/t/t1\""),
-        "dangling page does not name its referrer: {missing}"
+        "the missing-ticket page does not name its referrer: {missing}"
     );
 }
 
@@ -284,6 +299,69 @@ fn test_e2e_serve_in_flight_leads_the_board() {
     assert!(
         in_flight < first_table,
         "the in-flight section is not the first thing on the board: {body}"
+    );
+}
+
+/// Rework t1 on its branch the way a claim does: rename it, pick up a
+/// dependency, and write into the body. Trunk keeps none of it.
+fn rescope_t1_on_its_branch(dir: &Path) {
+    let t1 = t1_path_of(dir);
+    git_must(dir, &["checkout", "plan/t1"]);
+    let claimed = std::fs::read_to_string(dir.join(&t1)).unwrap();
+    write_file(
+        dir,
+        &t1,
+        &format!(
+            "{}\n\nSplit out of the original scope.\n",
+            claimed
+                .replace("title: Task One", "title: Task One, rescoped")
+                .replace("depends_on: []", "depends_on: [t2]")
+        ),
+    );
+    git_must(dir, &["commit", "-am", "rescope t1"]);
+    git_must(dir, &["checkout", "main"]);
+}
+
+#[test]
+fn test_e2e_serve_reads_a_claimed_ticket_off_its_branch() {
+    let td = tempfile::tempdir().unwrap();
+    seed_serve_repo(td.path());
+    claim_t1_on_a_branch(td.path());
+    rescope_t1_on_its_branch(td.path());
+    let s = start(td.path(), &["--port", "0"]);
+
+    // Status was never the only field a claim moves. Trunk holds the pre-claim
+    // copy of the whole file, so the page reads the branch's copy of all of it.
+    let (_, body) = get(s.port, "/t/t1");
+    assert!(
+        body.contains("Task One, rescoped</span>"),
+        "the ticket page shows trunk's title rather than the branch's: {body}"
+    );
+    assert!(
+        body.contains("Split out of the original scope."),
+        "the ticket page shows trunk's body rather than the branch's: {body}"
+    );
+    let meta = body
+        .split_once("<dl class=\"meta\">")
+        .and_then(|(_, rest)| rest.split_once("</dl>"))
+        .map(|(m, _)| m)
+        .expect("ticket page has no metadata block");
+    assert!(
+        meta.contains("href=\"/t/t2\""),
+        "the ticket page misses the dependency the branch added: {meta}"
+    );
+    // And it says which copy it is showing, because a branch can differ from
+    // trunk in a field the status hover-over says nothing about.
+    assert!(
+        meta.contains("on <code>plan/t1</code>"),
+        "the ticket page does not name the branch it read from: {meta}"
+    );
+
+    // The board reads the same copy, so the two cannot disagree about a title.
+    let (_, board) = get(s.port, "/");
+    assert!(
+        board.contains("<td>Task One, rescoped</td>"),
+        "the board shows trunk's title for a claimed task: {board}"
     );
 }
 

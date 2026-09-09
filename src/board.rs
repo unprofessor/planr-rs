@@ -49,6 +49,14 @@ pub struct BranchStatus {
     pub branch: String,
     pub status: BranchRead,
     pub slug: String,
+    /// The task file as the branch has it, when the scan read one.
+    ///
+    /// `status` is this ticket's status, and it is all the board needs, so the
+    /// board build does not carry the rest. The server does need the rest: a
+    /// claimed ticket's title, parent, dependencies and body live on the branch
+    /// too, and trunk keeps the pre-claim copy of all of them until it merges.
+    #[cfg(feature = "serve")]
+    pub ticket: Option<ParsedTicket>,
 }
 
 impl BranchStatus {
@@ -58,10 +66,16 @@ impl BranchStatus {
             branch: branch.to_string(),
             status,
             slug: slug.to_string(),
+            #[cfg(feature = "serve")]
+            ticket: None,
         }
     }
 
-    /// A branch reporting the status its own task file carries.
+    /// A branch reporting a status and nothing else.
+    ///
+    /// Test-only: the scan reads a whole task file and builds `claiming`, so
+    /// the only caller that wants a bare status is a board test writing one.
+    #[cfg(test)]
     pub fn of(branch: &str, slug: &str, status: &str) -> Self {
         Self::read(branch, slug, BranchRead::Status(status.to_string()))
     }
@@ -803,8 +817,21 @@ pub fn read_in_flight_branches(plan_dir: &str) -> Vec<BranchStatus> {
                         continue;
                     }
                 };
-                let ticket = crate::ticket::parse_ticket(&blob);
-                results.push(BranchStatus::of(b, slug, &ticket.status));
+                // Named after its file the same way a trunk ticket is, so a
+                // task file with no `id` of its own still answers for a slug
+                // and still records that the slug was the reader's guess.
+                //
+                // Built here rather than through a constructor because `ticket`
+                // is only a field under the `serve` feature, and a constructor
+                // taking it would be an unused parameter without it.
+                let ticket = name_from_file(crate::ticket::parse_ticket(&blob), f);
+                results.push(BranchStatus {
+                    branch: b.to_string(),
+                    status: BranchRead::Status(ticket.status.clone()),
+                    slug: slug.to_string(),
+                    #[cfg(feature = "serve")]
+                    ticket: Some(ticket),
+                });
             }
             None => {
                 results.push(BranchStatus::read(b, slug, BranchRead::NoTaskFile));
