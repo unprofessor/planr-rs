@@ -113,6 +113,23 @@ fn seed_serve_repo(dir: &Path) {
     git_must(dir, &["commit", "-m", "linked backlog"]);
 }
 
+/// Put t1 in flight: a `plan/t1` branch whose task file says `in_progress`,
+/// with trunk left at `todo`, which is exactly the disagreement the board and
+/// the ticket page have to report.
+fn claim_t1_on_a_branch(dir: &Path) {
+    let t1 = t1_path_of(dir);
+    let trunk = std::fs::read_to_string(dir.join(&t1)).unwrap();
+
+    git_must(dir, &["checkout", "-b", "plan/t1"]);
+    write_file(
+        dir,
+        &t1,
+        &trunk.replace("status: todo", "status: in_progress"),
+    );
+    git_must(dir, &["commit", "-am", "claim t1"]);
+    git_must(dir, &["checkout", "main"]);
+}
+
 // ---------------------------------------------------------------------------
 // Scenarios
 // ---------------------------------------------------------------------------
@@ -249,6 +266,55 @@ fn test_e2e_serve_ref_mode_reads_the_commit_not_the_tree() {
     assert!(
         from_ref.contains("href=\"/t/t1\""),
         "ref mode missed a committed ticket"
+    );
+}
+
+#[test]
+fn test_e2e_serve_in_flight_leads_the_board() {
+    let td = tempfile::tempdir().unwrap();
+    seed_serve_repo(td.path());
+    claim_t1_on_a_branch(td.path());
+    let s = start(td.path(), &["--port", "0"]);
+
+    let (_, body) = get(s.port, "/");
+    let in_flight = body
+        .find("in flight")
+        .expect("board has no in-flight section");
+    let first_table = body.find("<h2>epics").expect("board has no epics section");
+    assert!(
+        in_flight < first_table,
+        "the in-flight section is not the first thing on the board: {body}"
+    );
+}
+
+#[test]
+fn test_e2e_serve_ticket_status_is_one_badge() {
+    let td = tempfile::tempdir().unwrap();
+    seed_serve_repo(td.path());
+    claim_t1_on_a_branch(td.path());
+    let s = start(td.path(), &["--port", "0"]);
+
+    // Trunk still says todo while the branch says in_progress. Both belong on
+    // the page, but a second pill beside the first reads as the same field
+    // rendered twice -- the branch's value is prose, not a badge.
+    let (_, body) = get(s.port, "/t/t1");
+    let meta = body
+        .split_once("<dl class=\"meta\">")
+        .and_then(|(_, rest)| rest.split_once("</dl>"))
+        .map(|(m, _)| m)
+        .expect("ticket page has no metadata block");
+    assert_eq!(
+        meta.matches("class=\"st ").count(),
+        1,
+        "the status field renders more than one badge: {meta}"
+    );
+    assert!(
+        meta.contains("<code>plan/t1</code> reports"),
+        "the status field does not name the branch it disagrees with: {meta}"
+    );
+    assert!(
+        meta.contains("in_progress"),
+        "the branch's status is missing entirely: {meta}"
     );
 }
 

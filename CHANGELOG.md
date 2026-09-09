@@ -206,6 +206,16 @@
   wiki-link routes to a page naming who refers to the slug, rather than
   reading as a live link.
 
+  The board leads with what is in flight -- the claimed branches and the task
+  each one carries -- above the epic, story, and task tables. A ticket page
+  shows one status badge, the one its own file declares; when an in-flight
+  branch disagrees, the page names that branch and its value beside the badge
+  rather than showing a second one.
+
+  The pages follow the browser's light or dark preference, and every status
+  color clears WCAG AA (4.5:1) against both backgrounds -- a unit test reads
+  the palette out of the stylesheet and fails below that floor.
+
   It takes the same optional ref as `board`, so `planr serve HEAD~5` browses
   an older backlog. `--port` defaults to one the OS picks, and the socket
   binds to `127.0.0.1` only. Nothing writes; the backlog is re-read on every
@@ -289,6 +299,13 @@
   State now falls back to the last commit that still carried the file, and
   only when the file is genuinely absent: a ticket that is present but
   invalid still reports its own parse error.
+
+- **Links in a ticket body are styled like the rest of the page.** `planr
+  serve` styled the slug links in a ticket's metadata and relations but left
+  body links to the browser default, which on a dark background is a navy
+  barely separable from the text. They now use the same accent color, so a
+  live wiki-link reads as a link and a dangling one still reads as broken.
+
 - **A `[[slug]]` written inside code is no longer read as a wiki-link.**
   Fenced blocks were already skipped; inline code spans were not, so a ticket
   documenting the link syntax -- `` `[[a|label]]` `` -- was scanned as if it

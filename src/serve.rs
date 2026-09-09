@@ -237,6 +237,28 @@ fn page_board(ctx: &Context, snap: &Snapshot, index: &Index) -> String {
         ));
     }
 
+    // In flight leads the board. It is the only section that answers "what is
+    // anyone doing right now"; the three backlog tables answer "what exists",
+    // which is the slower question and reads fine below the fold.
+    if !snap.branches.is_empty() {
+        body.push_str("<h2>in flight <span class=\"n\">");
+        body.push_str(&snap.branches.len().to_string());
+        body.push_str("</span></h2>");
+        body.push_str(
+            "<table><thead><tr><th>branch</th><th>status</th><th>task</th>\
+                       </tr></thead><tbody>",
+        );
+        for b in &snap.branches {
+            body.push_str(&format!(
+                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td></tr>",
+                escape(&b.branch),
+                status_badge(b.status.display()),
+                slug_link(&b.slug, index)
+            ));
+        }
+        body.push_str("</tbody></table>");
+    }
+
     for (label, kind) in [
         ("epics", Kind::Epic),
         ("stories", Kind::Story),
@@ -302,25 +324,6 @@ fn page_board(ctx: &Context, snap: &Snapshot, index: &Index) -> String {
         body.push_str("</tbody></table>");
     }
 
-    if !snap.branches.is_empty() {
-        body.push_str("<h2>in flight <span class=\"n\">");
-        body.push_str(&snap.branches.len().to_string());
-        body.push_str("</span></h2>");
-        body.push_str(
-            "<table><thead><tr><th>branch</th><th>status</th><th>task</th>\
-                       </tr></thead><tbody>",
-        );
-        for b in &snap.branches {
-            body.push_str(&format!(
-                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td></tr>",
-                escape(&b.branch),
-                status_badge(b.status.display()),
-                slug_link(&b.slug, index)
-            ));
-        }
-        body.push_str("</tbody></table>");
-    }
-
     layout("board", None, &body)
 }
 
@@ -350,18 +353,20 @@ fn page_ticket(t: &ParsedTicket, snap: &Snapshot, index: &Index) -> String {
 
     body.push_str("<dl class=\"meta\">");
     body.push_str(&format!("<dt>kind</dt><dd>{}</dd>", kind_name(&t.kind)));
-    let branch_status = snap
-        .branches
-        .iter()
-        .find(|b| b.slug == t.id)
-        .and_then(|b| b.status.status());
+    // One badge, always. The ticket file is what this page is about, and a
+    // second pill beside it reads as the same field rendered twice rather
+    // than as two sources disagreeing. The branch's value is a footnote to
+    // the badge, in prose, naming the branch that carries it.
+    let branch = snap.branches.iter().find(|b| b.slug == t.id);
     body.push_str(&format!(
         "<dt>status</dt><dd>{}{}</dd>",
         status_badge(&t.status),
-        match branch_status {
-            Some(s) if s != t.status => format!(
-                " <span class=\"note\">branch reports {}</span>",
-                status_badge(s)
+        match branch {
+            Some(b) if b.status.status() != Some(t.status.as_str()) => format!(
+                " <span class=\"note\"><code>{}</code> reports \
+                 <span class=\"branch-st\">{}</span></span>",
+                escape(&b.branch),
+                escape(b.status.display())
             ),
             _ => String::new(),
         }
@@ -722,12 +727,26 @@ fn percent_decode(s: &str) -> String {
 // Style
 // ---------------------------------------------------------------------------
 
+/// The whole stylesheet, inlined into every page: no CDN, no second request.
+///
+/// Load-bearing ordering: `a[href^='/dangling/']` has the same specificity as
+/// `.md a`, so it only wins by coming after it. Keep the dangling rules last
+/// among the link rules, or a broken wiki-link in a body renders in the live
+/// link's color and stops reading as broken.
+///
+/// Every color is a variable with a value in both `:root` and the dark block.
+/// A literal hex in a rule is a color that only suits one theme -- the status
+/// badges were three such literals, and `in_progress` sat at 2.77:1 on the
+/// dark background. `test_status_badge_colors_meet_wcag_aa` reads these
+/// declarations and fails below 4.5:1, so add a badge color as a pair or the
+/// test will not find it.
 const STYLE: &str = "\
-:root{--bg:#fff;--fg:#1a1a1a;--dim:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;\
---warn:#b45309;--warnbg:#fffbeb;--err:#b91c1c;--code:#f6f7f9}\
+:root{--bg:#ffffff;--fg:#1a1a1a;--dim:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;\
+--warn:#b45309;--warnbg:#fffbeb;--err:#b91c1c;--code:#f6f7f9;\
+--st-done:#15803d;--st-progress:#1d4ed8;--st-review:#7c3aed}\
 @media(prefers-color-scheme:dark){:root{--bg:#111317;--fg:#e6e7e9;--dim:#9aa1ac;\
 --line:#272b32;--accent:#7aa2f7;--warn:#e0a33a;--warnbg:#2a2416;--err:#f07178;\
---code:#191c22}}\
+--code:#191c22;--st-done:#22c55e;--st-progress:#7aa2f7;--st-review:#a78bfa}}\
 *{box-sizing:border-box}\
 body{margin:0;background:var(--bg);color:var(--fg);\
 font:14px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}\
@@ -752,20 +771,26 @@ tr.error td{background:color-mix(in srgb,var(--err) 8%,transparent)}\
 a.slug{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;\
 color:var(--accent);text-decoration:none}\
 a.slug:hover{text-decoration:underline}\
+.md a{color:var(--accent);text-decoration:underline;text-underline-offset:2px;\
+text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent)}\
+.md a:hover{text-decoration-color:currentColor}\
 a[href^='/dangling/']{color:var(--err);text-decoration:underline wavy}\
 a[href^='/dangling/']:after{content:'?';vertical-align:super;font-size:9px}\
 .none{color:var(--dim)}\
 .st{display:inline-block;font-size:11px;padding:1px 7px;border-radius:9px;\
 border:1px solid var(--line);white-space:nowrap}\
-.st-done{color:#15803d;border-color:#15803d66}\
-.st-in_progress{color:#1d4ed8;border-color:#1d4ed866}\
-.st-review{color:#7c3aed;border-color:#7c3aed66}\
+.st-done{color:var(--st-done)}\
+.st-in_progress{color:var(--st-progress)}\
+.st-review{color:var(--st-review)}\
+.st-done,.st-in_progress,.st-review{\
+border-color:color-mix(in srgb,currentColor 45%,transparent)}\
 .st-blocked,.st-unknown{color:var(--err);border-color:currentColor}\
 .st-abandoned{color:var(--dim);text-decoration:line-through}\
 .source{color:var(--dim);font-family:ui-monospace,monospace;font-size:12px;margin:0}\
 .warn{background:var(--warnbg);border-left:3px solid var(--warn);padding:8px 12px;\
 margin:12px 0}\
 .note,.hint{color:var(--dim);font-size:12px}\
+.branch-st{font-family:ui-monospace,monospace;color:var(--fg)}\
 dl.meta{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:14px 0}\
 dl.meta dt{color:var(--dim);font-size:12px;text-transform:uppercase;\
 letter-spacing:.05em}\
@@ -787,3 +812,85 @@ color:var(--dim)}\
 .md li input[type=checkbox]{margin-right:6px}\
 .md table{display:table}\
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::STYLE;
+
+    /// `.md a` and `a[href^='/dangling/']` tie on specificity, so source order
+    /// decides which one colors a broken wiki-link in a ticket body.
+    #[test]
+    fn test_dangling_link_rule_follows_the_body_link_rule() {
+        let body = STYLE.find(".md a{").expect("no body link rule");
+        let dangling = STYLE
+            .find("a[href^='/dangling/']{")
+            .expect("no dangling link rule");
+        assert!(
+            dangling > body,
+            "the dangling rule must come after `.md a` to win the tie"
+        );
+    }
+
+    /// The value of `--name` in the light palette and again in the dark one.
+    ///
+    /// The sheet declares `:root` first and the `prefers-color-scheme: dark`
+    /// block second, so the first match is light and the second is dark.
+    fn theme_pair(name: &str) -> (String, String) {
+        let needle = format!("--{name}:#");
+        let mut found = STYLE.match_indices(&needle).map(|(at, _)| {
+            let hex = &STYLE[at + needle.len()..][..6];
+            assert!(
+                hex.chars().all(|c| c.is_ascii_hexdigit()),
+                "--{name} is {hex}...; write colors as six hex digits, not \
+                 shorthand, so this test can read them"
+            );
+            format!("#{hex}")
+        });
+        let light = found
+            .next()
+            .unwrap_or_else(|| panic!("--{name} is not declared"));
+        let dark = found
+            .next()
+            .unwrap_or_else(|| panic!("--{name} has no dark-mode value"));
+        (light, dark)
+    }
+
+    /// Relative luminance per WCAG 2.1.
+    fn luminance(hex: &str) -> f64 {
+        let channel = |at: usize| {
+            let c =
+                u8::from_str_radix(&hex[at..at + 2], 16).expect("not a hex color") as f64 / 255.0;
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5)
+    }
+
+    fn contrast(fg: &str, bg: &str) -> f64 {
+        let (a, b) = (luminance(fg), luminance(bg));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// Badge text is 11px, so the bar is WCAG AA for normal text: 4.5:1.
+    ///
+    /// Reading the colors out of `STYLE` rather than restating them here is
+    /// the point -- a test holding its own copy of the palette passes while
+    /// the page regresses.
+    #[test]
+    fn test_status_badge_colors_meet_wcag_aa() {
+        let (light_bg, dark_bg) = theme_pair("bg");
+        for name in ["st-done", "st-progress", "st-review", "err", "dim", "fg"] {
+            let (light, dark) = theme_pair(name);
+            for (theme, fg, bg) in [("light", &light, &light_bg), ("dark", &dark, &dark_bg)] {
+                let ratio = contrast(fg, bg);
+                assert!(
+                    ratio >= 4.5,
+                    "--{name} is {fg} on {bg} in {theme}: {ratio:.2}:1, below the 4.5:1 floor"
+                );
+            }
+        }
+    }
+}
