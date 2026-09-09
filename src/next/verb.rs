@@ -39,7 +39,7 @@ impl Ctx {
     /// Use [`Ctx::own_ref_short`] for anything a human reads, and for
     /// `git worktree add`, which wants a branch name rather than a ref path.
     pub fn own_ref(&self, kind: &str, slug: &str) -> String {
-        format!("refs/heads/plan/{kind}/{slug}")
+        events::own_ref(kind, slug)
     }
 
     /// The same ref as a branch name, for display and for `worktree add`.

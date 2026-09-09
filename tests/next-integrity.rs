@@ -361,6 +361,52 @@ fn concurrent_declarations_that_agree_are_not_a_fault() {
     assert!(!report.contains("divergent"), "{report}");
 }
 
+/// A declaration that does not descend from the ticket's creation.
+///
+/// The walk stops on the genesis record as well as on a state-changing verb, so
+/// the genesis is a contender for the floor like any other -- it denotes
+/// `const initial`. A lane cut BEFORE the creation commit puts a declaration
+/// beside it rather than below it, and which of the two the walk lands on is
+/// then a committer clock's choice: the same graph read `todo` or `abandoned`
+/// depending on one date, `board` gave a third answer, and the check called it
+/// sound. That is the *descent* half of assumption 3, which the genesis count
+/// alone does not cover.
+#[test]
+fn a_declaration_that_does_not_descend_from_the_creation_is_reported() {
+    let mut states = Vec::new();
+    // Straddling the creation commit's own date, which planr writes as "now":
+    // the walk meets whichever of the two is newer, so one date each side is
+    // what makes the clock's choice observable.
+    for when in ["2000-01-01T00:00:00Z", "2038-01-01T00:00:00Z"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        setup(dir);
+        let before = git_out(dir, &["rev-parse", "HEAD"]);
+        ok(dir, &["next", "new", "task", "foo", "Work"]);
+
+        // Cut where the slug did not yet exist, so the declaration and the
+        // creation commit are neither ancestor nor descendant.
+        git(dir, &["branch", "lane", &before]);
+        declare(dir, "lane", "abandon", "foo", when);
+        git(dir, &["merge", "--no-ff", "-m", "join", "lane"]);
+
+        let (success, report) = check(dir);
+        assert!(
+            !success,
+            "a declaration the creation commit does not order is a fault -- the floor is \
+             whichever of the two the clock puts first:\n{report}"
+        );
+        assert!(report.contains("divergent foo"), "{report}");
+
+        states.push(state(dir, "foo"));
+    }
+    assert_ne!(
+        states[0], states[1],
+        "the finding claims the clock decides; if moving the declaration's date did not move \
+         the state, it would be reporting a hazard that is not there"
+    );
+}
+
 /// Two state-changing declarations the commit graph declines to order, which
 /// declare DIFFERENT states.
 ///
@@ -476,6 +522,40 @@ fn an_archived_ticket_whose_branch_survives_is_not_certified_clean() {
         report.contains("refs/heads/plan/task/foo answers for this ticket"),
         "the check must resolve the same ref the fold does, or it reports on a state nobody \
          is reading:\n{report}"
+    );
+}
+
+/// When the kind cannot be read, the check says so rather than naming a ref.
+///
+/// The kind is what names a ticket's branch, so a ticket that will not parse
+/// leaves the authority rule with no question to ask. Resolving that to trunk
+/// and reporting trunk as the answering ref states as fact something that is
+/// false whenever a branch is standing -- and the advice that goes with it
+/// ("applied when the two are integrated") is wrong too.
+#[test]
+fn a_ticket_whose_kind_cannot_be_read_is_not_reported_against_trunk() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    ok(dir, &["next", "new", "task", "foo", "Work"]);
+    ok(dir, &["next", "do", "claim", "foo", ""]);
+
+    // A stored `status` is the one field the model forbids, so the ticket no
+    // longer parses and its kind is unreadable.
+    let path = dir.join(".plan/tickets/foo.md");
+    let blob = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, blob.replacen("---\n", "---\nstatus: todo\n", 1)).unwrap();
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-m", "break it"]);
+
+    let (_, report) = check(dir);
+    assert!(
+        report.contains("unresolvable foo"),
+        "the check cannot name the answering ref without the kind, so it must say that:\n{report}"
+    );
+    assert!(
+        !report.contains("main answers for this ticket"),
+        "trunk does not answer -- refs/heads/plan/task/foo is standing and unintegrated:\n{report}"
     );
 }
 

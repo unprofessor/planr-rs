@@ -328,13 +328,18 @@ pub fn cmd_lifecycle(ctx: &Ctx, kind: Option<&str>) -> Result<String, String> {
 
 /// A minimal board: every live ticket with its folded state.
 ///
-/// Six git processes plus one per CLAIMED ticket, counted rather than
-/// reasoned: `ls-tree` and `cat-file --batch` for the ticket files,
-/// `for-each-ref` and one `rev-list` resolving the authority rule for every
-/// ticket at once, one history walk, one `rev-list` settling ref reachability
-/// for the whole unclaimed population, and one `rev-list` per live branch to
-/// narrow it. Folding per ticket cost a walk each; reading per ticket cost a
-/// spawn each, and once the walk was shared the spawns were what remained.
+/// A FIXED number of git processes whatever the backlog holds, plus one
+/// `rev-list` per CLAIMED ticket: `rev-parse` for the repository root, `ls-tree`
+/// and `cat-file --batch` for the ticket files, `for-each-ref` and a `rev-list`
+/// resolving the authority rule for every ticket at once, one history walk, one
+/// `rev-list` settling ref reachability for the whole unclaimed population, and
+/// one `rev-list` per live branch to narrow it. Folding per ticket cost a walk
+/// each; reading per ticket cost a spawn each, and once the walk was shared the
+/// spawns were what remained.
+///
+/// The shape is the claim worth making. An exact total has been written down
+/// wrong twice, because it depends on which calls short-circuit on an empty
+/// backlog; `docs/typed-graph-design.md` carries the measured figures.
 ///
 /// The blobs are read BEFORE the walk, because each ticket's kind names the
 /// branch the authority rule asks about. Reading them afterward would leave the

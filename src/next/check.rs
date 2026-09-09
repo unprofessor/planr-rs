@@ -44,6 +44,9 @@ pub enum Kind {
     /// The authority rule is deciding: a live branch shadows a trunk-lane
     /// declaration. Correct, deliberate, and worth a human's attention.
     Shadowed,
+    /// A branch stands for the slug and its kind cannot be read, so which ref
+    /// answers is not knowable. Reported rather than guessed.
+    Unresolvable,
 }
 
 impl Kind {
@@ -53,6 +56,7 @@ impl Kind {
             Kind::Severed => "severed",
             Kind::Divergent => "divergent",
             Kind::Shadowed => "shadowed",
+            Kind::Unresolvable => "unresolvable",
         }
     }
 
@@ -171,10 +175,10 @@ fn declares(schema: &Schema, kind: Option<&String>, event: &Event) -> Option<Str
 
 /// Run every check over the whole backlog.
 pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
-    // Absence is not proof in a truncated history, and three of the four
-    // findings below are absence claims -- "no second genesis", "no genesis at
-    // all", "no ancestor relation". A shallow clone answers all three the same
-    // way a complete one does, so the check refuses rather than certifying a
+    // Absence is not proof in a truncated history, and most of the findings
+    // below are absence claims -- "no second genesis", "no genesis at all", "no
+    // ancestor relation". A shallow clone answers each of them the same way a
+    // complete one does, so the check refuses rather than certifying a
     // repository it cannot see.
     if git::is_shallow()? {
         return Err(
@@ -203,9 +207,6 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
             .collect();
 
     for (slug, all) in &buckets {
-        if slug.is_empty() {
-            continue;
-        }
         let kind = kinds.get(slug);
 
         // ---- genesis: exactly one, per assumption 3 ----
@@ -245,6 +246,29 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
 
         // ---- ordering: is the fold's answer the graph's answer? ----
         //
+        // A branch stands for this slug and its kind could not be read, so which
+        // ref answers is not knowable: the kind is what names the branch. Say
+        // that, rather than resolving to trunk and reporting trunk as fact --
+        // `authoritative_ref` cannot distinguish "no branch" from "cannot tell",
+        // and only the caller has the evidence.
+        if kind.is_none()
+            && unintegrated
+                .iter()
+                .any(|r| r.ends_with(&format!("/{slug}")))
+        {
+            findings.push(Finding {
+                slug: slug.clone(),
+                kind: Kind::Unresolvable,
+                detail:
+                    "a branch stands for this slug and its ticket cannot be read, so its kind is \
+                     unknown -- and the kind is what names the branch the authority rule looks \
+                     for. Which ref answers for this ticket cannot be determined until the ticket \
+                     parses"
+                        .to_string(),
+            });
+            continue;
+        }
+
         // The reader's own authority rule, through the reader's own function.
         let ref_ =
             events::authoritative_ref(&ctx.trunk, &unintegrated, kind.map(String::as_str), slug);
@@ -299,16 +323,32 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
         // faulted those repositories and told them their state was
         // clock-dependent when it demonstrably was not.
         //
-        // The set that has to agree is the MAXIMAL one: `--date-order` emits a
-        // commit before all of its ancestors, so the first state-changing
-        // record a backwards walk meets is always maximal, and which maximal
-        // one it meets is the clock's choice. If they all declare the same
-        // state the answer is the same whatever the clock says; if two declare
-        // different states, a topological order can end on either.
+        // The set that has to agree is the MAXIMAL one -- see
+        // `plumbing::merge_base_independent` for why a walk always lands on one
+        // of those. If they all declare the same state the answer is the same
+        // whatever the clock says; if two declare different states, a
+        // topological order can end on either.
+        //
+        // **The genesis is one of them.** `for_ticket` stops on it as well as on
+        // a state-changing verb, and it denotes `const initial` -- so a `new`
+        // record that no declaration descends from competes with that
+        // declaration for the floor, and which one the walk lands on is the
+        // clock's choice. Leaving it out let a lane cut BEFORE the creation
+        // commit read `todo` from `state`, `abandoned` from `board`, and clean
+        // from here. That is the descent half of assumption 3, which this
+        // module otherwise only enforces as a count.
         let declared: Vec<(&Event, String)> = all
             .iter()
             .filter(|e| !unreachable.contains(&e.commit))
-            .filter_map(|e| declares(&ctx.schema, kind, e).map(|to| (e, to)))
+            .filter_map(|e| {
+                if e.verb == events::GENESIS {
+                    let kind = kind?;
+                    return super::fold::initial_state(&ctx.schema, kind)
+                        .ok()
+                        .map(|to| (e, to));
+                }
+                declares(&ctx.schema, kind, e).map(|to| (e, to))
+            })
             .collect();
         let maximal: BTreeSet<String> = git::merge_base_independent(
             &declared

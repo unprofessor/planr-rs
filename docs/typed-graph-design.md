@@ -1687,14 +1687,13 @@ Two conclusions from the middle column, both still standing:
 
 **The process-spawn bottleneck this exposed is closed.** With the T multiplier
 gone, the cost moved from history walking to process spawning -- one `git show`
-per ticket to read its kind. `board` now runs six git processes for the whole
-board regardless of ticket count, counted with a shim rather than reasoned
-about: `ls-tree` and `cat-file --batch` for the ticket files, `for-each-ref`
-and one `rev-list` resolving the authority rule for every ticket at once, one
-history walk, and one `rev-list` settling ref reachability for the whole
-unclaimed population. Per-ticket cost fell from ~2.6 ms to ~0.5 ms and now
-*falls* with backlog size as the fixed cost amortizes, which is the signature
-of O(1) processes.
+per ticket to read its kind. `board` now runs a fixed number of git processes
+whatever the backlog holds -- `rev-parse` for the repository root, `ls-tree` and
+`cat-file --batch` for the ticket files, `for-each-ref` and one `rev-list`
+resolving the authority rule for every ticket at once, one history walk, and one
+`rev-list` settling ref reachability for the whole unclaimed population.
+Per-ticket cost fell from ~2.6 ms to ~0.5 ms and now *falls* with backlog size
+as the fixed cost amortizes, which is the signature of O(1) processes.
 
 The authority rule adds one further `rev-list` per **claimed** ticket, to narrow
 that ticket's events to its branch. That is O(claimed) rather than O(tickets) --
@@ -1702,6 +1701,25 @@ bounded by the number of workers, not by the backlog -- and each call is over a
 handful of commit ids rather than a history. It is not optional: `state` reads
 exactly one ref, so a board that folded the union would report states no `from`
 gate would accept.
+
+Counted with a `git` shim on `PATH`, at 6 tickets:
+
+| claimed | `board` | `check` |
+| --- | --- | --- |
+| 0 | 6 | 7 |
+| 1 | 8 | 10 |
+| 2 | 9 | 12 |
+| 3 | 10 | 14 |
+
+So `board` is 7 + *claimed*, and 6 in the degenerate case where nothing is
+claimed and the authority `rev-list` short-circuits on an empty ref set;
+`check` is 8 + 2 x *claimed*, its second per-ticket call being the
+`merge-base --independent` that any ticket with two visible declarations needs.
+**Prefer the shape to the total.** The exact figure was written down wrong
+twice -- once by omitting the `rev-parse` every command starts with, once by
+quoting the degenerate case as though it were general -- because it depends on
+which calls short-circuit. What does not move is that both are O(claimed), not
+O(tickets).
 
 The batch protocol frames records by declared byte length, so the parser must
 count bytes rather than scan for something header-shaped -- a ticket body
@@ -2019,8 +2037,9 @@ needs.
 | --- | --- |
 | `duplicate-genesis` | two lineages each created the slug; the floor is clock-determined |
 | `severed` | events with no reachable creation; the slug reads as free |
-| `divergent` | the folded winner does not descend from every other declaration, so committer date decides the state |
-| `shadowed` | a live branch is authoritative over a trunk-lane declaration -- the rule working, reported so a human sees the clash |
+| `divergent` | declarations the graph cannot order that declare different states, so committer date decides the state |
+| `shadowed` | the answering ref cannot reach a declaration on another lane -- the authority rule working, reported so a human sees the clash |
+| `unresolvable` | a branch stands for the slug and its ticket will not parse, so which ref answers is not knowable |
 
 `divergent` is the ordering oracle the differential test could never be: it
 asks git for reachability rather than re-reading the same date-ordered stream
@@ -2034,8 +2053,16 @@ the *maximal* set: `--date-order` emits a commit before all of its ancestors,
 so the declaration a backwards walk meets first is always maximal, and which
 maximal one it meets is the clock's choice. The check is therefore exact in both
 directions -- all maximal declarations agreeing means every topological order
-ends on the same state; two disagreeing means an order exists for each. It costs
-one `merge-base --independent` per ticket that has more than one visible
+ends on the same state; two disagreeing means an order exists for each.
+
+**The `new` record is one of the declarations.** The walk stops on it as well,
+and it denotes `const initial` -- so a lane cut *before* the creation commit
+puts a declaration beside the genesis rather than below it, and the two compete
+for the floor. Omitting it left a history that `next state` read as `todo`,
+`next board` as `abandoned`, and this check as sound. That is the *descent* half
+of assumption 3, which counting genesis records does not reach.
+
+It costs one `merge-base --independent` per ticket with more than one visible
 declaration.
 
 The check **reports and never repairs**. Every finding is a history that

@@ -160,29 +160,23 @@ pub fn cat_file_batch(specs: &[String]) -> Result<Vec<Option<String>>, String> {
     Ok(results)
 }
 
-/// Ref names under a prefix, **fully qualified**, in plumbing form -- no
-/// decoration, no current branch marker, no "checked out elsewhere" marker.
-///
-/// `%(refname)`, not `%(refname:short)`. The short form is the shortest
-/// *unambiguous* name rather than the path minus its prefix, so git LENGTHENS
-/// it when a tag shares the branch's name -- `plan/task/foo` becomes
-/// `heads/plan/task/foo`, precisely so the `refs/<refname>` lookup rule still
-/// resolves it. Callers that prefixed `refs/heads/` onto that produced
-/// `refs/heads/heads/plan/task/foo`, which names nothing, and the qualification
-/// broke in the one scenario it exists to defend against.
-///
-/// Returning full names removes the last place in the engine where a short ref
-/// name is manufactured, which is what makes the claim that every ref-set
-/// computation agrees BY CONSTRUCTION true rather than aspirational.
-///
-/// The tip comes back with the name because every caller that asks "is this
-/// branch integrated" needs it, and asking git a second time per ref is the
-/// difference between one process and one per claimed ticket.
+/// A ref and the commit it points at.
 pub struct Ref {
     pub name: String,
     pub tip: String,
 }
 
+/// Refs under a prefix, **fully qualified**, in plumbing form -- no decoration,
+/// no current branch marker, no "checked out elsewhere" marker.
+///
+/// Emit `%(refname)`, never `%(refname:short)`. The short form is the shortest
+/// *unambiguous* name rather than the path minus its prefix, so git lengthens it
+/// when a tag shares the branch's name. Do not reconstruct a full name from a
+/// short one anywhere.
+///
+/// The tip comes back with the name because every caller that asks "is this
+/// branch integrated" needs it, and asking git a second time per ref is the
+/// difference between one process and one per claimed ticket.
 pub fn for_each_ref(prefix: &str) -> Result<Vec<Ref>, String> {
     let out = run(&["for-each-ref", "--format=%(refname) %(objectname)", prefix])?;
     Ok(out
@@ -470,17 +464,14 @@ pub fn count_unreachable(base: &str, tip: &str) -> Result<usize, String> {
 ///
 /// Every ancestry question this model asks is a question about a SET, and
 /// answering it pairwise with `merge-base --is-ancestor` costs a process per
-/// pair. Two questions, one call:
+/// pair. The live callers ask two of them: *has this branch been integrated?*
+/// (`rev_list([tip], [trunk])` is empty) and *which of these commits can the
+/// answering ref not reach?*
 ///
-/// * *has this branch been integrated?* -- `rev_list([own], [trunk])` is empty.
-/// * *does one commit descend from all the others?* -- `rev_list(rest, [m])`
-///   is empty. That is the exact condition for a fold's winner to be decided
-///   by the commit graph rather than by committer dates, and it is what the
-///   integrity check tests instead of assuming.
-///
-/// An empty `includes` yields nothing without asking git: `rev-list` with only
-/// exclusions is an error, and the callers reach that case whenever a ticket
-/// has fewer than two declarations.
+/// An empty `includes` returns early to save a process, not for correctness:
+/// `git rev-list --not <ref>` exits 0 with no output. An empty backlog reaches
+/// it on every command. Contrast [`merge_base_independent`], whose guard IS
+/// required -- `merge-base --independent` with no arguments exits 1.
 pub fn rev_list(includes: &[String], excludes: &[String]) -> Result<Vec<String>, String> {
     if includes.is_empty() {
         return Ok(Vec::new());

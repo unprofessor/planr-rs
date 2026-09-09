@@ -137,6 +137,13 @@ pub fn unintegrated(trunk: &str) -> Result<BTreeSet<String>, String> {
         .collect())
 }
 
+/// A ticket's own ref. One spelling, so nothing looks for a ticket's branch
+/// under a name no verb creates -- move the layout and every claimed ticket
+/// would silently become trunk-authoritative, with nothing failing loudly.
+pub fn own_ref(kind: &str, slug: &str) -> String {
+    format!("refs/heads/plan/{kind}/{slug}")
+}
+
 /// The authority rule: which single ref answers for a ticket.
 ///
 /// A ticket's own branch while that branch is live and carries commits trunk
@@ -167,7 +174,7 @@ pub fn authoritative_ref(
     kind: Option<&str>,
     slug: &str,
 ) -> String {
-    let own = kind.map(|kind| format!("refs/heads/plan/{kind}/{slug}"));
+    let own = kind.map(|kind| own_ref(kind, slug));
     match own {
         Some(own) if unintegrated.contains(&own) => own,
         _ => trunk.to_string(),
@@ -419,8 +426,9 @@ pub fn bucket_over(refs: &[String]) -> Result<BTreeMap<String, Vec<Event>>, Stri
 /// this pass a claimed ticket whose trunk lane also declared would fold a
 /// different set of events in the two commands, and the board would report a
 /// state no `from` gate would accept. `kinds` supplies each slug's kind because
-/// that is what names its branch, and it must be the kind the reader would
-/// find, including for a ticket whose file archival deleted.
+/// that is what names its branch; a slug with no entry is answered by trunk.
+/// The caller need only supply kinds for the tickets it displays -- an archived
+/// slug is bucketed here and read by nobody.
 ///
 /// Cost is one `rev-list` for the whole trunk-authoritative population and one
 /// per live branch -- O(claimed), not O(tickets), and each over a handful of

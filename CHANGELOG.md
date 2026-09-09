@@ -15,16 +15,17 @@
   carries commits trunk cannot reach, trunk otherwise. A trunk-lane declaration
   a live branch shadows is deferred rather than lost, because every integration
   effect builds a merge commit descending from both lanes. `next board` applies
-  the same rule -- six git processes for the whole board plus one `rev-list` per
-  *claimed* ticket -- so it folds exactly the events `next state` does;
-  otherwise the board reports states a `from` gate would refuse.
+  the same rule -- a fixed number of git processes whatever the backlog holds,
+  plus one `rev-list` per *claimed* ticket -- so it folds exactly the events
+  `next state` does; otherwise the board reports states a `from` gate would
+  refuse.
 
 - **`planr next check`** reports the histories the fold cannot answer for, and
   exits non-zero. `new` refuses a slug that any reachable commit has created,
   but that is all a creation-time check can do: two clones each creating the
   same slug both pass legitimately, and their merge is *clean*, because archival
   deleted the file on one side and a deletion and an addition do not conflict.
-  Four findings, over trunk and every `plan/` ref:
+  Five findings, over trunk and every `plan/` ref:
 
   - `duplicate-genesis` -- two `new` records for one slug. A bounded walk floors
     at whichever it meets first, so the ticket's state is clock-chosen.
@@ -41,15 +42,23 @@
     differential test could never be -- a bounded and an unbounded walk read the
     same stream in the same order and agree on the same wrong answer, so the
     check asks git for reachability instead.
+    The ticket's `new` record is one of the contenders, because the walk stops
+    on it too: a lane cut *before* the creation commit puts a declaration beside
+    the genesis rather than below it, and the two then compete for the floor.
+    Left out, that history read `todo` from `next state`, `abandoned` from
+    `next board`, and sound from the check.
   - `shadowed` -- the ref that answers for a ticket cannot reach a declaration
     on another lane. Reported because a leader abandoning while a worker submits
     is two people disagreeing about a ticket's fate, and exits zero because it
     is the rule working rather than a broken repository.
+  - `unresolvable` -- a branch stands for the slug and its ticket will not
+    parse, so its kind is unknown and the kind is what names the branch. The
+    check says which ref answers or says it cannot tell; it never guesses trunk.
 
   It reports and never repairs: every finding is a history that already exists,
   and the remedies are history surgery, a schema decision, or a conversation.
   Like `new`, it refuses outright in a shallow clone rather than certify a
-  history it cannot see -- three of the four findings are absence claims.
+  history it cannot see -- most of the findings are absence claims.
 
 - **`planr next state` is bounded, and says what it cost.** Reading a ticket's
   state walked its whole reachable history and then discarded all but the last
