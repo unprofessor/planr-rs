@@ -733,12 +733,20 @@ fn percent_decode(s: &str) -> String {
 /// `.md a`, so it only wins by coming after it. Keep the dangling rules last
 /// among the link rules, or a broken wiki-link in a body renders in the live
 /// link's color and stops reading as broken.
+///
+/// Every color is a variable with a value in both `:root` and the dark block.
+/// A literal hex in a rule is a color that only suits one theme -- the status
+/// badges were three such literals, and `in_progress` sat at 2.77:1 on the
+/// dark background. `test_status_badge_colors_meet_wcag_aa` reads these
+/// declarations and fails below 4.5:1, so add a badge color as a pair or the
+/// test will not find it.
 const STYLE: &str = "\
-:root{--bg:#fff;--fg:#1a1a1a;--dim:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;\
---warn:#b45309;--warnbg:#fffbeb;--err:#b91c1c;--code:#f6f7f9}\
+:root{--bg:#ffffff;--fg:#1a1a1a;--dim:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;\
+--warn:#b45309;--warnbg:#fffbeb;--err:#b91c1c;--code:#f6f7f9;\
+--st-done:#15803d;--st-progress:#1d4ed8;--st-review:#7c3aed}\
 @media(prefers-color-scheme:dark){:root{--bg:#111317;--fg:#e6e7e9;--dim:#9aa1ac;\
 --line:#272b32;--accent:#7aa2f7;--warn:#e0a33a;--warnbg:#2a2416;--err:#f07178;\
---code:#191c22}}\
+--code:#191c22;--st-done:#22c55e;--st-progress:#7aa2f7;--st-review:#a78bfa}}\
 *{box-sizing:border-box}\
 body{margin:0;background:var(--bg);color:var(--fg);\
 font:14px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}\
@@ -771,9 +779,11 @@ a[href^='/dangling/']:after{content:'?';vertical-align:super;font-size:9px}\
 .none{color:var(--dim)}\
 .st{display:inline-block;font-size:11px;padding:1px 7px;border-radius:9px;\
 border:1px solid var(--line);white-space:nowrap}\
-.st-done{color:#15803d;border-color:#15803d66}\
-.st-in_progress{color:#1d4ed8;border-color:#1d4ed866}\
-.st-review{color:#7c3aed;border-color:#7c3aed66}\
+.st-done{color:var(--st-done)}\
+.st-in_progress{color:var(--st-progress)}\
+.st-review{color:var(--st-review)}\
+.st-done,.st-in_progress,.st-review{\
+border-color:color-mix(in srgb,currentColor 45%,transparent)}\
 .st-blocked,.st-unknown{color:var(--err);border-color:currentColor}\
 .st-abandoned{color:var(--dim);text-decoration:line-through}\
 .source{color:var(--dim);font-family:ui-monospace,monospace;font-size:12px;margin:0}\
@@ -819,5 +829,68 @@ mod tests {
             dangling > body,
             "the dangling rule must come after `.md a` to win the tie"
         );
+    }
+
+    /// The value of `--name` in the light palette and again in the dark one.
+    ///
+    /// The sheet declares `:root` first and the `prefers-color-scheme: dark`
+    /// block second, so the first match is light and the second is dark.
+    fn theme_pair(name: &str) -> (String, String) {
+        let needle = format!("--{name}:#");
+        let mut found = STYLE.match_indices(&needle).map(|(at, _)| {
+            let hex = &STYLE[at + needle.len()..][..6];
+            assert!(
+                hex.chars().all(|c| c.is_ascii_hexdigit()),
+                "--{name} is {hex}...; write colors as six hex digits, not \
+                 shorthand, so this test can read them"
+            );
+            format!("#{hex}")
+        });
+        let light = found
+            .next()
+            .unwrap_or_else(|| panic!("--{name} is not declared"));
+        let dark = found
+            .next()
+            .unwrap_or_else(|| panic!("--{name} has no dark-mode value"));
+        (light, dark)
+    }
+
+    /// Relative luminance per WCAG 2.1.
+    fn luminance(hex: &str) -> f64 {
+        let channel = |at: usize| {
+            let c =
+                u8::from_str_radix(&hex[at..at + 2], 16).expect("not a hex color") as f64 / 255.0;
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5)
+    }
+
+    fn contrast(fg: &str, bg: &str) -> f64 {
+        let (a, b) = (luminance(fg), luminance(bg));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// Badge text is 11px, so the bar is WCAG AA for normal text: 4.5:1.
+    ///
+    /// Reading the colors out of `STYLE` rather than restating them here is
+    /// the point -- a test holding its own copy of the palette passes while
+    /// the page regresses.
+    #[test]
+    fn test_status_badge_colors_meet_wcag_aa() {
+        let (light_bg, dark_bg) = theme_pair("bg");
+        for name in ["st-done", "st-progress", "st-review", "err", "dim", "fg"] {
+            let (light, dark) = theme_pair(name);
+            for (theme, fg, bg) in [("light", &light, &light_bg), ("dark", &dark, &dark_bg)] {
+                let ratio = contrast(fg, bg);
+                assert!(
+                    ratio >= 4.5,
+                    "--{name} is {fg} on {bg} in {theme}: {ratio:.2}:1, below the 4.5:1 floor"
+                );
+            }
+        }
     }
 }

@@ -18,6 +18,10 @@
   branch disagrees, the page names that branch and its value beside the badge
   rather than showing a second one.
 
+  The pages follow the browser's light or dark preference, and every status
+  color clears WCAG AA (4.5:1) against both backgrounds -- a unit test reads
+  the palette out of the stylesheet and fails below that floor.
+
   It takes the same optional ref as `board`, so `planr serve HEAD~5` browses
   an older backlog. `--port` defaults to one the OS picks, and the socket
   binds to `127.0.0.1` only. Nothing writes; the backlog is re-read on every
