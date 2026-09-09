@@ -15,12 +15,18 @@
   The board leads with what is in flight -- the claimed branches and the task
   each one carries -- above the epic, story, and task tables. A ticket page
   shows one status badge, the one its own file declares; when an in-flight
-  branch disagrees, the page names that branch and its value beside the badge
-  rather than showing a second one.
+  branch disagrees, the reports the page is not showing sit in a hover-over
+  table of branch and status, and the board says where a branch-sourced
+  status came from in the badge's hover text rather than marking it with an
+  asterisk.
+
+  The lint report colors each finding by level and tints its row, and links
+  the ticket column the way every other page links a slug.
 
   The pages follow the browser's light or dark preference, and every status
-  color clears WCAG AA (4.5:1) against both backgrounds -- a unit test reads
-  the palette out of the stylesheet and fails below that floor.
+  and level color clears WCAG AA (4.5:1) against both backgrounds -- a unit
+  test reads the palette out of the stylesheet and fails below that floor.
+  The scrollbar a wide table grows follows the theme too.
 
   It takes the same optional ref as `board`, so `planr serve HEAD~5` browses
   an older backlog. `--port` defaults to one the OS picks, and the socket

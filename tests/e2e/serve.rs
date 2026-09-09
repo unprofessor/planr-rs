@@ -296,25 +296,72 @@ fn test_e2e_serve_ticket_status_is_one_badge() {
 
     // Trunk still says todo while the branch says in_progress. Both belong on
     // the page, but a second pill beside the first reads as the same field
-    // rendered twice -- the branch's value is prose, not a badge.
+    // rendered twice -- the branch's value lives in the hover-over.
     let (_, body) = get(s.port, "/t/t1");
     let meta = body
         .split_once("<dl class=\"meta\">")
         .and_then(|(_, rest)| rest.split_once("</dl>"))
         .map(|(m, _)| m)
         .expect("ticket page has no metadata block");
+    let (field, pop) = meta
+        .split_once("<div class=\"pop\">")
+        .expect("the status field offers no hover-over for the branch that disagrees");
     assert_eq!(
-        meta.matches("class=\"st ").count(),
+        field.matches("class=\"st ").count(),
         1,
-        "the status field renders more than one badge: {meta}"
+        "the status field itself renders more than one badge: {field}"
     );
     assert!(
-        meta.contains("<code>plan/t1</code> reports"),
-        "the status field does not name the branch it disagrees with: {meta}"
+        pop.contains("<code>plan/t1</code>"),
+        "the hover-over does not name the branch it ignores: {pop}"
     );
+    // The ignored status is a real pill, not anonymous text: the same classes
+    // the field above uses, so it reads as a status at a glance.
     assert!(
-        meta.contains("in_progress"),
-        "the branch's status is missing entirely: {meta}"
+        pop.contains("class=\"st st-in_progress\""),
+        "the ignored report's status carries no badge classes: {pop}"
+    );
+}
+
+#[test]
+fn test_e2e_serve_board_does_not_asterisk_a_branch_status() {
+    let td = tempfile::tempdir().unwrap();
+    seed_serve_repo(td.path());
+    claim_t1_on_a_branch(td.path());
+    let s = start(td.path(), &["--port", "0"]);
+
+    let (_, body) = get(s.port, "/");
+    assert!(
+        !body.contains("<abbr"),
+        "the board still marks a branch status with an asterisk: {body}"
+    );
+    // The provenance survives the asterisk's removal, as hover text.
+    assert!(
+        body.contains("title=\"reported by plan/t1; trunk still records todo\""),
+        "the board no longer says where t1's status came from: {body}"
+    );
+}
+
+#[test]
+fn test_e2e_serve_lint_rows_read_like_every_other_page() {
+    let td = tempfile::tempdir().unwrap();
+    seed_serve_repo(td.path());
+    let s = start(td.path(), &["--port", "0"]);
+
+    let (code, body) = get(s.port, "/lint");
+    assert_eq!(code, 200);
+    // The ticket column is the same monospace slug link the board uses rather
+    // than a bare anchor -- one link style across the pages, and a filename no
+    // ticket answers for routes to /dangling/ instead of a dead /t/ URL.
+    assert!(
+        body.contains("<a class=\"slug\" href=\"/t/t1\">"),
+        "the lint page does not link its ticket column like the board: {body}"
+    );
+    // A finding's level is the first thing to read, so it carries a color of
+    // its own instead of arriving as plain text.
+    assert!(
+        body.contains("class=\"lv lv-warning\""),
+        "the lint page does not mark a finding's level: {body}"
     );
 }
 
