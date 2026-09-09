@@ -105,7 +105,17 @@ fn answer(request: Request, ctx: &Context) {
             Some(t) => (200, page_ticket(t, &snapshot, &index)),
             None => (404, page_missing(&p["/t/".len()..], &index)),
         },
-        p if p.starts_with("/dangling/") => (404, page_missing(&p["/dangling/".len()..], &index)),
+        // `/dangling/` is a marker, not a destination. The stylesheet reads the
+        // href written into the document, so the prefix is what lets a broken
+        // wiki-link render as broken before anyone clicks it; `/t/` cannot do
+        // that job, because a live link shares that prefix. Once clicked there
+        // is nothing left to mark, and the address bar should read like every
+        // other ticket URL -- so hand the browser to `/t/`, which answers the
+        // same 404 page. Do not point the links themselves at `/t/`.
+        p if p.starts_with("/dangling/") => {
+            let slug = percent_encode(&p["/dangling/".len()..]);
+            return redirect(request, &format!("/t/{slug}"));
+        }
         _ => (404, page_not_found(&path)),
     };
 
@@ -120,14 +130,37 @@ fn answer(request: Request, ctx: &Context) {
     let _ = request.respond(response);
 }
 
+/// Send the browser somewhere else, with nothing to render on the way.
+///
+/// `location` comes from `percent_encode`, which emits only unreserved ASCII,
+/// so no slug can carry a newline into the header and split the response.
+fn redirect(request: Request, location: &str) {
+    let header = format!("Location: {location}")
+        .parse::<Header>()
+        .expect("a percent-encoded location always parses");
+    let _ = request.respond(Response::empty(302).with_header(header));
+}
+
 // ---------------------------------------------------------------------------
 // Reading the backlog
 // ---------------------------------------------------------------------------
 
 /// One request's view of the backlog.
 struct Snapshot {
+    /// The backlog as the in-flight branches leave it: a ticket some
+    /// `plan/<slug>` branch claims is that branch's copy of the file.
+    ///
+    /// Trunk keeps the pre-claim copy until the branch merges, so reading
+    /// trunk answers what was true before anyone started -- for the status,
+    /// and equally for the title, the parent, the dependencies and the body.
+    /// Every page reads this field, so no page has to know the rule.
     tickets: Vec<ParsedTicket>,
     branches: Vec<BranchStatus>,
+    /// The status each ticket carries on trunk, before the overlay above.
+    ///
+    /// Only the pages that report the disagreement need it. Do not resolve a
+    /// status from here -- `tickets` already holds the resolved one.
+    trunk_status: HashMap<String, String>,
     /// Ticket files found, read or not -- see `board::TrunkTickets`.
     ticket_files: usize,
 }
@@ -138,11 +171,47 @@ impl Snapshot {
             Some(r) => board::read_ref_tickets(r, &ctx.plan_dir),
             None => board::read_working_tree_tickets(&ctx.plan_dir),
         };
+        let mut tickets = read.tickets;
+
+        // First claim wins, the same tie-break `Index::by_slug` makes, so the
+        // trunk status reported for a contested slug belongs to the ticket the
+        // page reporting it is showing.
+        let mut trunk_status: HashMap<String, String> = HashMap::new();
+        for t in &tickets {
+            trunk_status
+                .entry(t.id.clone())
+                .or_insert_with(|| t.status.clone());
+        }
+
+        // A branch whose task file the scan could not read overlays nothing:
+        // there is no copy to prefer, and trunk's is still the only one there
+        // is. The in-flight table reports the branch as the finding it is.
+        let branches = board::read_in_flight_branches(&ctx.plan_dir);
+        for b in &branches {
+            let Some(claimed) = &b.ticket else { continue };
+            if let Some(slot) = tickets.iter_mut().find(|t| t.id == b.slug) {
+                *slot = claimed.clone();
+            }
+        }
+
         Snapshot {
-            tickets: read.tickets,
-            branches: board::read_in_flight_branches(&ctx.plan_dir),
+            tickets,
+            branches,
+            trunk_status,
             ticket_files: read.ticket_files,
         }
+    }
+
+    /// What trunk records for a slug, falling back to what the page shows.
+    ///
+    /// The fallback makes an unrecorded slug agree with itself, which is what
+    /// the callers want: they render a disagreement, and there is none to
+    /// render when trunk has nothing to say.
+    fn trunk_status_of<'s>(&'s self, t: &'s ParsedTicket) -> &'s str {
+        self.trunk_status
+            .get(&t.id)
+            .map(String::as_str)
+            .unwrap_or(&t.status)
     }
 }
 
@@ -215,12 +284,6 @@ impl<'a> Index<'a> {
 // ---------------------------------------------------------------------------
 
 fn page_board(ctx: &Context, snap: &Snapshot, index: &Index) -> String {
-    let in_flight: HashMap<&str, &str> = snap
-        .branches
-        .iter()
-        .filter_map(|b| b.status.status().map(|s| (b.slug.as_str(), s)))
-        .collect();
-
     let mut body = String::new();
     body.push_str(&format!(
         "<p class=\"source\">{}</p>",
@@ -283,27 +346,22 @@ fn page_board(ctx: &Context, snap: &Snapshot, index: &Index) -> String {
         }
         body.push_str("<th>title</th></tr></thead><tbody>");
         for t in rows {
-            let (status, from_branch) = if is_tasks {
-                board::task_status_display(t, &in_flight)
-            } else {
-                (t.status.clone(), false)
-            };
-            // A branch value carries no mark of its own. Trunk disagreeing with
-            // a branch is rare and matters while debugging, which is a hover's
-            // job -- a glyph on the row puts it in every reader's way instead.
-            let note = if from_branch {
-                snap.branches
-                    .iter()
-                    .find(|b| b.slug == t.id)
-                    .map(|b| format!("reported by {}; trunk still records {}", b.branch, t.status))
-            } else {
-                None
-            };
+            // The row is already the claiming branch's copy of the ticket, so
+            // the status is the branch's too. A branch value carries no mark of
+            // its own: trunk disagreeing with a branch is rare and matters
+            // while debugging, which is a hover's job -- a glyph on the row
+            // puts it in every reader's way instead.
+            let trunk = snap.trunk_status_of(t);
+            let note = snap
+                .branches
+                .iter()
+                .find(|b| b.slug == t.id && b.ticket.is_some() && trunk != t.status)
+                .map(|b| format!("reported by {}; trunk still records {trunk}", b.branch));
             body.push_str("<tr>");
             body.push_str(&format!("<td>{}</td>", slug_link(&t.id, index)));
             body.push_str(&format!(
                 "<td>{}</td>",
-                status_badge_noted(status.trim_end_matches(" *"), note.as_deref())
+                status_badge_noted(&t.status, note.as_deref())
             ));
             body.push_str(&format!(
                 "<td>{}</td>",
@@ -358,29 +416,23 @@ fn page_ticket(t: &ParsedTicket, snap: &Snapshot, index: &Index) -> String {
 
     body.push_str("<dl class=\"meta\">");
     body.push_str(&format!("<dt>kind</dt><dd>{}</dd>", kind_name(&t.kind)));
-    // One badge in the field, and it is the claiming branch's value when there
-    // is one. Trunk keeps the pre-claim status until the branch merges, so it
-    // never reports in_progress or review -- reading trunk here would answer
-    // what was true before anyone started. Through `task_status_display` so
-    // this badge cannot drift from the one the board shows for the same task.
-    let in_flight: HashMap<&str, &str> = snap
-        .branches
-        .iter()
-        .filter_map(|b| b.status.status().map(|s| (b.slug.as_str(), s)))
-        .collect();
-    let (shown, _) = board::task_status_display(t, &in_flight);
+    // One badge in the field, and `t` is already the claiming branch's copy of
+    // the ticket, so it is the branch's status. Trunk keeps the pre-claim one
+    // until the branch merges, so it never reports in_progress or review.
+    //
     // At most one branch can be the other source: a branch's slug is its name
     // with `plan/` stripped, and git will not hand out the same branch name
     // twice. Sources that agree need no hover-over -- there is nothing to
     // resolve, and an unreadable branch is worth reporting even so.
+    let trunk = snap.trunk_status_of(t);
     let claimed = snap
         .branches
         .iter()
-        .find(|b| b.slug == t.id && b.status.status() != Some(t.status.as_str()));
+        .find(|b| b.slug == t.id && b.status.status() != Some(trunk));
     body.push_str(&format!(
         "<dt>status</dt><dd>{}{}</dd>",
-        status_badge(shown.trim_end_matches(" *")),
-        status_reports(claimed, &t.status)
+        status_badge(&t.status),
+        status_reports(claimed, trunk)
     ));
     body.push_str(&format!(
         "<dt>parent</dt><dd>{}</dd>",
@@ -394,8 +446,17 @@ fn page_ticket(t: &ParsedTicket, snap: &Snapshot, index: &Index) -> String {
         list_or_dash(t.depends_on.iter().map(|s| s.as_str()), index)
     ));
     if let Some(file) = &t.source_file {
+        // Which copy of the file this page shows. Every field above it comes
+        // from that copy, and a branch's can differ from trunk's in any of
+        // them -- the status hover-over only reports the one field it is about.
+        let branch = snap
+            .branches
+            .iter()
+            .find(|b| b.slug == t.id && b.ticket.is_some())
+            .map(|b| format!(" on <code>{}</code>", escape(&b.branch)))
+            .unwrap_or_default();
         body.push_str(&format!(
-            "<dt>file</dt><dd><code>{}</code></dd>",
+            "<dt>file</dt><dd><code>{}</code>{branch}</dd>",
             escape(file)
         ));
     }
