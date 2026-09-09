@@ -290,10 +290,11 @@ Named so that breaking one is a decision rather than an accident.
 
    What remains is real but rare: one ref's history is still a DAG, so a merge
    can put two declarations under a single tip with no ancestry between them.
-   There `--date-order` decides, and `planr next check` reports it -- the
-   winning declaration must descend from every other one, which is exactly the
-   condition for the answer to be graph-determined. Every place the clock still
-   decides is therefore visible rather than assumed.
+   There `--date-order` decides, and `planr next check` reports it. The test is
+   *disagreement*, not concurrency -- unordered declarations of the same state
+   fold identically either way, so what must agree is the maximal set under
+   ancestry, which is the set a backwards walk can land on. Every place the
+   clock still decides the answer is therefore visible rather than assumed.
 
    Two smaller things this rests on:
 

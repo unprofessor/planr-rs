@@ -39,7 +39,7 @@ impl Ctx {
     /// Use [`Ctx::own_ref_short`] for anything a human reads, and for
     /// `git worktree add`, which wants a branch name rather than a ref path.
     pub fn own_ref(&self, kind: &str, slug: &str) -> String {
-        events::own_ref(kind, slug)
+        format!("refs/heads/plan/{kind}/{slug}")
     }
 
     /// The same ref as a branch name, for display and for `worktree add`.
@@ -158,7 +158,7 @@ pub fn state_of(ctx: &Ctx, slug: &str, bounded: bool) -> Result<(String, events:
 /// The pathspec is safe here in a way it is NOT for enumeration: an archived
 /// ticket's file was demonstrably created and deleted, so it touches the path.
 /// The lookup only runs on the miss, so a live ticket pays nothing.
-fn read_ticket_or_archived(ctx: &Ctx, slug: &str) -> Result<Ticket, String> {
+pub fn read_ticket_or_archived(ctx: &Ctx, slug: &str) -> Result<Ticket, String> {
     let path = ctx.ticket_path(slug);
     // Present-but-invalid is NOT a miss: a ticket carrying a stored `status`
     // must report that, not be silently searched for in history and then

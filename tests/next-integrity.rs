@@ -330,7 +330,39 @@ fn events_with_no_reachable_creation_are_reported() {
     assert!(report.contains("severed foo"), "{report}");
 }
 
-/// Two state-changing declarations the commit graph declines to order.
+/// Concurrency is not the fault; DISAGREEMENT is.
+///
+/// Two clones that both abandoned the same ticket produce two `abandon`
+/// declarations the commit graph cannot order -- and it does not matter, because
+/// the fold is pure last-`to`-wins, so either order yields `abandoned`. A check
+/// that reported on ancestry alone faulted this repository and told it the state
+/// was decided by a clock, which the second assertion here shows is false.
+#[test]
+fn concurrent_declarations_that_agree_are_not_a_fault() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    ok(dir, &["next", "new", "task", "foo", "Work"]);
+
+    git(dir, &["branch", "lane-a"]);
+    git(dir, &["branch", "lane-b"]);
+    declare(dir, "lane-a", "abandon", "foo", "2020-01-01T00:00:00Z");
+    declare(dir, "lane-b", "abandon", "foo", "2021-01-01T00:00:00Z");
+    git(dir, &["merge", "--no-ff", "-m", "take a", "lane-a"]);
+    git(dir, &["merge", "--no-ff", "-m", "take b", "lane-b"]);
+
+    assert_eq!(state(dir, "foo"), "abandoned");
+    let (success, report) = check(dir);
+    assert!(
+        success,
+        "two declarations of the SAME state fold identically in either order, so no clock \
+         decides anything and there is nothing to report:\n{report}"
+    );
+    assert!(!report.contains("divergent"), "{report}");
+}
+
+/// Two state-changing declarations the commit graph declines to order, which
+/// declare DIFFERENT states.
 ///
 /// This is the residue the authority rule cannot remove: both lanes reached
 /// trunk, neither descends from the other, and the fold picks by committer
@@ -393,6 +425,57 @@ fn a_declaration_a_live_branch_shadows_is_reported_without_failing() {
     assert!(
         report.contains("0 of them faults"),
         "the report has to separate 'needs a human' from 'is broken':\n{report}"
+    );
+}
+
+/// The check has to resolve authority the way the READER resolves it, including
+/// for a ticket whose file archival deleted.
+///
+/// `read_ticket_or_archived` recovers an archived ticket's kind from the last
+/// commit that had the file, precisely so the ticket still folds -- and the kind
+/// is what names its branch. A check that took kinds from trunk alone had no
+/// entry for an archived slug, resolved it to trunk, and certified a repository
+/// whose state the fold was reading off a branch the check never looked at.
+///
+/// Reachable in the workflow the check exists to police: verbs delete the ref on
+/// integration, so a surviving branch means one restored from a reflog or
+/// re-fetched from a clone that still had it.
+#[test]
+fn an_archived_ticket_whose_branch_survives_is_not_certified_clean() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    ok(dir, &["next", "new", "task", "foo", "Work"]);
+    let genesis = git_out(dir, &["rev-parse", "HEAD"]);
+
+    ok(dir, &["next", "do", "abandon", "foo", "no"]);
+    ok(dir, &["next", "do", "archive", "foo", ""]);
+
+    // The branch comes back AFTER the retirement -- `abandon` releases the ref,
+    // so a surviving one means a reflog restore or a re-fetch from a clone that
+    // still had it. Cut where it was, before the retirement, so trunk's
+    // declarations are not reachable from it.
+    git(dir, &["branch", "plan/task/foo", &genesis]);
+    declare(
+        dir,
+        "plan/task/foo",
+        "submit",
+        "foo",
+        "2026-01-01T00:00:00Z",
+    );
+
+    // The reader recovers the kind from history, finds the branch, and folds
+    // from it -- trunk says `abandoned`.
+    assert_eq!(state(dir, "foo"), "review");
+
+    // Naming the ref is the assertion: the check has to have resolved the same
+    // one the fold did. Reported against `main` it would be describing a
+    // repository where trunk answers -- which is the wrong repository.
+    let (_, report) = check(dir);
+    assert!(
+        report.contains("refs/heads/plan/task/foo answers for this ticket"),
+        "the check must resolve the same ref the fold does, or it reports on a state nobody \
+         is reading:\n{report}"
     );
 }
 

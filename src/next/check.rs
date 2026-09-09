@@ -75,15 +75,6 @@ pub struct Finding {
     pub detail: String,
 }
 
-/// Everything one walk of the whole ref set yields.
-struct Union {
-    /// Every slug's events, oldest-first.
-    buckets: BTreeMap<String, Vec<Event>>,
-    /// The `plan/` refs that exist, fully qualified. Membership answers "does
-    /// this ticket have a branch" without a process per ticket.
-    live: BTreeSet<String>,
-}
-
 /// Every slug's events, WITHOUT the authority narrowing.
 ///
 /// The check needs the union that `all_by_ticket` narrows away: a shadowed
@@ -91,21 +82,35 @@ struct Union {
 /// cannot see is the entire job. Walking here rather than adding a flag to
 /// `all_by_ticket` keeps the reader's ref set a single expression -- the reader
 /// must never gain a mode in which it sees more.
-fn union_by_ticket(trunk: &str) -> Result<Union, String> {
-    let live: BTreeSet<String> = git::for_each_ref("refs/heads/plan/")?.into_iter().collect();
+///
+/// Trunk plus the UNINTEGRATED branches is the same commit set as trunk plus
+/// every `plan/` ref, since an integrated branch's commits are trunk's.
+fn union_by_ticket(
+    trunk: &str,
+    unintegrated: &BTreeSet<String>,
+) -> Result<BTreeMap<String, Vec<Event>>, String> {
     let mut refs: Vec<String> = vec![trunk.to_string()];
-    refs.extend(live.iter().cloned());
-    Ok(Union {
-        buckets: events::bucket_over(&refs)?,
-        live,
-    })
+    refs.extend(unintegrated.iter().cloned());
+    events::bucket_over(&refs)
 }
 
-/// A slug's kind, for every ticket that still has a file on trunk.
+/// Each slug's kind, determined the way the READER determines it.
 ///
-/// An archived ticket has none, and gets no entry: its branch is gone, so trunk
-/// answers for it, which is what a missing entry means downstream.
-fn kinds_on_trunk(ctx: &Ctx) -> Result<BTreeMap<String, String>, String> {
+/// A ticket on trunk supplies its own; a ticket archival removed from trunk
+/// still folds, because `read_ticket_or_archived` recovers the kind from the
+/// last commit that had the file -- so a check that stopped at trunk was asking
+/// a narrower question than the fold, and certified a repository whose state
+/// was being read off a branch it never looked at.
+///
+/// The recovery runs only where the answer can differ: a slug with no branch
+/// standing resolves to trunk whatever its kind is. That keeps the cost at two
+/// processes per archived-ticket-with-a-live-branch, which is the anomaly
+/// itself and normally none.
+fn kinds(
+    ctx: &Ctx,
+    slugs: impl Iterator<Item = String>,
+    unintegrated: &BTreeSet<String>,
+) -> Result<BTreeMap<String, String>, String> {
     let dir = format!("{}/tickets", ctx.plan_dir);
     let files = crate::git::ls_tree_md(&ctx.trunk, &dir)?;
     let specs: Vec<String> = files.iter().map(|f| format!("{}:{f}", ctx.trunk)).collect();
@@ -127,29 +132,41 @@ fn kinds_on_trunk(ctx: &Ctx) -> Result<BTreeMap<String, String>, String> {
             kinds.insert(slug.to_string(), t.kind);
         }
     }
+
+    for slug in slugs {
+        if kinds.contains_key(&slug) {
+            continue;
+        }
+        let suffix = format!("/{slug}");
+        if !unintegrated.iter().any(|r| r.ends_with(&suffix)) {
+            continue;
+        }
+        if let Ok(t) = super::verb::read_ticket_or_archived(ctx, &slug) {
+            kinds.insert(slug, t.kind);
+        }
+    }
     Ok(kinds)
 }
 
-/// Does this event change state under its ticket's kind?
+/// The state this event declares, or `None` if it declares none.
 ///
 /// Exactly the fold's question, asked through the schema, so a verb the kind's
 /// machine does not resolve is the identity here as well. Ordering only matters
 /// among events that can decide the answer; an `annotate` that two lanes both
 /// wrote is not a disagreement about state.
-fn declares_state(schema: &Schema, kind: Option<&String>, event: &Event) -> bool {
+fn declares(schema: &Schema, kind: Option<&String>, event: &Event) -> Option<String> {
     let Some(kind) = kind else {
-        // No kind means no sub-machine to resolve against. Fall back to "any
-        // verb that carries a `to` under some kind", which over-reports rather
-        // than under-reports -- the failure this check exists to catch must not
-        // be silenced by an unreadable ticket.
+        // No kind means no sub-machine to resolve against. Fall back to any
+        // verb of that name carrying a `to`, which over-reports rather than
+        // under-reports -- the failure this check exists to catch must not be
+        // silenced by a ticket nothing can type.
         return schema
             .verbs
             .iter()
-            .any(|v| v.name == event.verb && v.to.is_some());
+            .find(|v| v.name == event.verb && v.to.is_some())
+            .and_then(|v| v.to.clone());
     };
-    schema
-        .verb(&event.verb, kind)
-        .is_some_and(|v| v.to.is_some())
+    schema.verb(&event.verb, kind).and_then(|v| v.to.clone())
 }
 
 /// Run every check over the whole backlog.
@@ -167,8 +184,9 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
         );
     }
 
-    let kinds = kinds_on_trunk(ctx)?;
-    let Union { buckets, live } = union_by_ticket(&ctx.trunk)?;
+    let unintegrated = events::unintegrated(&ctx.trunk)?;
+    let buckets = union_by_ticket(&ctx.trunk, &unintegrated)?;
+    let kinds = kinds(ctx, buckets.keys().cloned(), &unintegrated)?;
     let mut findings = Vec::new();
 
     // Which of these commits trunk cannot reach, for the whole backlog in one
@@ -225,46 +243,43 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
             }),
         }
 
-        // ---- ordering: is the fold's winner the graph's winner? ----
+        // ---- ordering: is the fold's answer the graph's answer? ----
         //
-        // The same authority rule the reader applies, resolved from the ref
-        // list rather than by asking whether each ticket's branch exists.
-        // `integrated` is still the one definition of the predicate.
-        let own = kind.map(|kind| events::own_ref(kind, slug));
-        let branch = match own {
-            Some(own) if live.contains(&own) && !events::integrated(&ctx.trunk, &own)? => Some(own),
-            _ => None,
-        };
+        // The reader's own authority rule, through the reader's own function.
+        let ref_ =
+            events::authoritative_ref(&ctx.trunk, &unintegrated, kind.map(String::as_str), slug);
 
         // What the fold can actually see, in the same one-ref terms it reads.
-        let unreachable: BTreeSet<String> = match &branch {
-            Some(branch) => {
-                let commits: Vec<String> = all.iter().map(|e| e.commit.clone()).collect();
-                git::rev_list(&commits, std::slice::from_ref(branch))?
-                    .into_iter()
-                    .collect()
-            }
-            None => all
-                .iter()
+        let unreachable: BTreeSet<String> = if ref_ == ctx.trunk {
+            all.iter()
                 .map(|e| e.commit.clone())
                 .filter(|c| off_trunk.contains(c))
-                .collect(),
+                .collect()
+        } else {
+            let commits: Vec<String> = all.iter().map(|e| e.commit.clone()).collect();
+            git::rev_list(&commits, std::slice::from_ref(&ref_))?
+                .into_iter()
+                .collect()
         };
 
+        // Declarations the fold cannot reach. Reported for a trunk-authoritative
+        // ticket too: a declaration sitting on some other ticket's branch is
+        // just as invisible, and the guard that once limited this to claimed
+        // tickets is what let an archived ticket's surviving branch go
+        // unmentioned.
         let hidden: Vec<&Event> = all
             .iter()
-            .filter(|e| unreachable.contains(&e.commit) && declares_state(&ctx.schema, kind, e))
+            .filter(|e| unreachable.contains(&e.commit) && declares(&ctx.schema, kind, e).is_some())
             .collect();
-        if let (false, Some(branch)) = (hidden.is_empty(), &branch) {
+        if !hidden.is_empty() {
             findings.push(Finding {
                 slug: slug.clone(),
                 kind: Kind::Shadowed,
                 detail: format!(
-                    "{} is authoritative and cannot reach {} state-changing declaration(s) on \
-                     another lane: {}. The branch wins by the authority rule, and the trunk lane \
-                     is applied when the branch integrates -- unless the two disagree, which is \
-                     a decision for the people who made them",
-                    branch,
+                    "{ref_} answers for this ticket and cannot reach {} state-changing \
+                     declaration(s) on another lane: {}. That is the authority rule working -- \
+                     the other lane is applied when the two are integrated -- unless they \
+                     disagree, which is a decision for the people who made them",
                     hidden.len(),
                     hidden
                         .iter()
@@ -275,38 +290,55 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
             });
         }
 
-        let visible: Vec<&Event> = all
+        // The visible declarations, each with the state it declares.
+        //
+        // **Concurrency is not the fault; DISAGREEMENT is.** The fold is pure
+        // last-`to`-wins, so two incomparable events declaring the same state
+        // fold identically in either order -- two clones that both abandoned a
+        // ticket are a merge, not an ambiguity. Reporting on ancestry alone
+        // faulted those repositories and told them their state was
+        // clock-dependent when it demonstrably was not.
+        //
+        // The set that has to agree is the MAXIMAL one: `--date-order` emits a
+        // commit before all of its ancestors, so the first state-changing
+        // record a backwards walk meets is always maximal, and which maximal
+        // one it meets is the clock's choice. If they all declare the same
+        // state the answer is the same whatever the clock says; if two declare
+        // different states, a topological order can end on either.
+        let declared: Vec<(&Event, String)> = all
             .iter()
-            .filter(|e| !unreachable.contains(&e.commit) && declares_state(&ctx.schema, kind, e))
+            .filter(|e| !unreachable.contains(&e.commit))
+            .filter_map(|e| declares(&ctx.schema, kind, e).map(|to| (e, to)))
             .collect();
-        // The fold's winner is the last state-changing event in the stream, and
-        // the stream is date-ordered. If it descends from every other one, the
-        // graph agrees and the clock was never consulted.
-        if let Some((winner, rest)) = visible.split_last() {
-            if !rest.is_empty() {
-                let others: Vec<String> = rest.iter().map(|e| e.commit.clone()).collect();
-                let concurrent = git::rev_list(&others, std::slice::from_ref(&winner.commit))?;
-                if !concurrent.is_empty() {
-                    let named: Vec<String> = rest
+        let maximal: BTreeSet<String> = git::merge_base_independent(
+            &declared
+                .iter()
+                .map(|(e, _)| e.commit.clone())
+                .collect::<Vec<_>>(),
+        )?
+        .into_iter()
+        .collect();
+        let contenders: Vec<&(&Event, String)> = declared
+            .iter()
+            .filter(|(e, _)| maximal.contains(&e.commit))
+            .collect();
+        let outcomes: BTreeSet<&str> = contenders.iter().map(|(_, to)| to.as_str()).collect();
+        if outcomes.len() > 1 {
+            findings.push(Finding {
+                slug: slug.clone(),
+                kind: Kind::Divergent,
+                detail: format!(
+                    "{} declarations the commit graph does not order, and they disagree: {}. \
+                     The state is whichever committer clock ran later, so reading the same \
+                     repository on another machine can give the other answer",
+                    contenders.len(),
+                    contenders
                         .iter()
-                        .filter(|e| concurrent.contains(&e.commit))
-                        .map(|e| format!("{} at {}", e.verb, short(&e.commit)))
-                        .collect();
-                    findings.push(Finding {
-                        slug: slug.clone(),
-                        kind: Kind::Divergent,
-                        detail: format!(
-                            "'{}' at {} is folded last, but does not descend from {}. The commit \
-                             graph does not order these, so the state is whichever committer \
-                             clock ran later -- and reading the same repository on another \
-                             machine can give the other answer",
-                            winner.verb,
-                            short(&winner.commit),
-                            named.join(", "),
-                        ),
-                    });
-                }
-            }
+                        .map(|(e, to)| format!("{} at {} -> {to}", e.verb, short(&e.commit)))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+            });
         }
     }
 

@@ -474,19 +474,14 @@ fn main() {
             };
             // `check` reports a verdict rather than a value, so it exits
             // non-zero on a fault the way a linter does -- the report still
-            // goes to stdout, because a CI job that fails must still be able
-            // to show what it found.
-            if let NextCommand::Check = command {
-                match next::cmd_check(&ctx) {
-                    Ok((report, faulted)) => {
-                        println!("{report}");
-                        std::process::exit(if faulted { 1 } else { 0 });
-                    }
-                    Err(e) => fail(&e),
-                }
-            }
+            // goes to stdout, because a CI job that fails must still be able to
+            // show what it found.
+            let mut faulted = false;
             let out = match command {
-                NextCommand::Check => unreachable!("handled above"),
+                NextCommand::Check => next::cmd_check(&ctx).map(|(report, f)| {
+                    faulted = f;
+                    report
+                }),
                 NextCommand::New {
                     kind,
                     slug,
@@ -503,7 +498,12 @@ fn main() {
                 } => next::verb::run(&ctx, &verb, &slug, &message),
             };
             match out {
-                Ok(s) => println!("{s}"),
+                Ok(s) => {
+                    println!("{s}");
+                    if faulted {
+                        std::process::exit(1);
+                    }
+                }
                 Err(e) => fail(&e),
             }
         }

@@ -15,9 +15,9 @@
   carries commits trunk cannot reach, trunk otherwise. A trunk-lane declaration
   a live branch shadows is deferred rather than lost, because every integration
   effect builds a merge commit descending from both lanes. `next board` applies
-  the same rule, at one `rev-list` per claimed ticket, so it folds exactly the
-  events `next state` does -- otherwise the board reports states a `from` gate
-  would refuse.
+  the same rule -- six git processes for the whole board plus one `rev-list` per
+  *claimed* ticket -- so it folds exactly the events `next state` does;
+  otherwise the board reports states a `from` gate would refuse.
 
 - **`planr next check`** reports the histories the fold cannot answer for, and
   exits non-zero. `new` refuses a slug that any reachable commit has created,
@@ -32,16 +32,19 @@
     The fold still answers for them, so the slug is neither free nor explicable.
     Stated as *exactly* one genesis rather than *at most* one, because a `>= 2`
     rule walks straight past this half.
-  - `divergent` -- the declaration the fold takes as the winner does not descend
-    from every other one, so committer date decides the ticket's state and
-    another machine can read it differently. This is the ordering oracle a
-    differential test could never be: a bounded and an unbounded walk read the
+  - `divergent` -- declarations the commit graph cannot order that declare
+    *different* states, so committer date decides the ticket's state and another
+    machine can read it differently. Concurrency alone is not the fault: the
+    fold is last-`to`-wins, so two clones that both abandoned a ticket agree
+    whatever the order. What must agree is the maximal set under ancestry, which
+    is the set a backwards walk can land on. This is the ordering oracle a
+    differential test could never be -- a bounded and an unbounded walk read the
     same stream in the same order and agree on the same wrong answer, so the
     check asks git for reachability instead.
-  - `shadowed` -- a live branch is authoritative over a trunk-lane declaration.
-    Reported because a leader abandoning while a worker submits is two people
-    disagreeing about a ticket's fate, and exits zero because it is the rule
-    working rather than a broken repository.
+  - `shadowed` -- the ref that answers for a ticket cannot reach a declaration
+    on another lane. Reported because a leader abandoning while a worker submits
+    is two people disagreeing about a ticket's fate, and exits zero because it
+    is the rule working rather than a broken repository.
 
   It reports and never repairs: every finding is a history that already exists,
   and the remedies are history surgery, a schema decision, or a conversation.

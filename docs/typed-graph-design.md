@@ -1687,18 +1687,21 @@ Two conclusions from the middle column, both still standing:
 
 **The process-spawn bottleneck this exposed is closed.** With the T multiplier
 gone, the cost moved from history walking to process spawning -- one `git show`
-per ticket to read its kind. `board` now runs a fixed number of git processes
-for the whole board regardless of ticket count: one history walk, one
-`cat-file --batch`, one `for-each-ref`, and one `rev-list` that settles ref
-reachability for every unclaimed ticket at once. Per-ticket cost fell from
-~2.6 ms to ~0.5 ms and now *falls* with backlog size as the fixed cost
-amortizes, which is the signature of O(1) processes.
+per ticket to read its kind. `board` now runs six git processes for the whole
+board regardless of ticket count, counted with a shim rather than reasoned
+about: `ls-tree` and `cat-file --batch` for the ticket files, `for-each-ref`
+and one `rev-list` resolving the authority rule for every ticket at once, one
+history walk, and one `rev-list` settling ref reachability for the whole
+unclaimed population. Per-ticket cost fell from ~2.6 ms to ~0.5 ms and now
+*falls* with backlog size as the fixed cost amortizes, which is the signature
+of O(1) processes.
 
-The authority rule adds one `rev-list` per **claimed** ticket, which is
-O(claimed) rather than O(tickets) and is bounded by the number of workers, not
-by the backlog. It is not optional: `state` reads exactly one ref, so a board
-that folded the union would report states no `from` gate would accept. Each of
-those calls is over a handful of commit ids rather than a history.
+The authority rule adds one further `rev-list` per **claimed** ticket, to narrow
+that ticket's events to its branch. That is O(claimed) rather than O(tickets) --
+bounded by the number of workers, not by the backlog -- and each call is over a
+handful of commit ids rather than a history. It is not optional: `state` reads
+exactly one ref, so a board that folded the union would report states no `from`
+gate would accept.
 
 The batch protocol frames records by declared byte length, so the parser must
 count bytes rather than scan for something header-shaped -- a ticket body
@@ -2021,10 +2024,19 @@ needs.
 
 `divergent` is the ordering oracle the differential test could never be: it
 asks git for reachability rather than re-reading the same date-ordered stream
-through a second parser. The condition is exact -- the fold's answer is
-determined by the commit graph exactly when the last state-changing event
-descends from all the others -- and it costs one `rev-list` per ticket that has
-more than one such event.
+through a second parser.
+
+The condition is about **disagreement, not concurrency**. Two declarations the
+graph cannot order are harmless when they declare the same state -- the fold is
+last-`to`-wins, so either order gives the same answer, and two clones that both
+abandoned a ticket are a merge rather than an ambiguity. What has to agree is
+the *maximal* set: `--date-order` emits a commit before all of its ancestors,
+so the declaration a backwards walk meets first is always maximal, and which
+maximal one it meets is the clock's choice. The check is therefore exact in both
+directions -- all maximal declarations agreeing means every topological order
+ends on the same state; two disagreeing means an order exists for each. It costs
+one `merge-base --independent` per ticket that has more than one visible
+declaration.
 
 The check **reports and never repairs**. Every finding is a history that
 already exists, and the remedies are history surgery, a schema decision, or two

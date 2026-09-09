@@ -7,12 +7,10 @@
 //! `git log -- <ticket path>` silently SKIPS exactly those declarations.
 //! Enumeration must therefore go through trailers, never paths.
 //!
-//! ONE ref answers for a ticket, chosen by the authority rule -- its own
-//! branch while that branch is live and unintegrated, and trunk otherwise. See
-//! [`authority`] for why that is a correctness property and not a shortcut.
-//! Trailers are the only thing that still works once a ticket has been archived
-//! and its file no longer exists in any tree, which is why enumeration never
-//! gets to use a pathspec.
+//! ONE ref answers for a ticket -- see [`authoritative_ref`]. Trailers are the
+//! only thing that still works once a ticket has been archived and its file no
+//! longer exists in any tree, which is why enumeration never gets to use a
+//! pathspec.
 //!
 //! The walk is BOUNDED: it stops at the newest event that decides the answer
 //! instead of reading history back to the ticket's birth. See [`for_ticket`]
@@ -112,91 +110,68 @@ pub struct Walk {
     pub scanned: usize,
 }
 
-/// Which single ref answers for a ticket.
+/// The ticket branches trunk has not yet taken, fully qualified.
+///
+/// **The one definition of "unintegrated", and the one enumeration of the ref
+/// set.** Both are computed here, in two processes, for the whole repository at
+/// once -- a ref is unintegrated exactly when its tip is a commit trunk cannot
+/// reach, which is one `rev-list` rather than one per branch.
+///
+/// Fully qualified, deliberately. `git rev-parse <name>` searches `refs/<name>`,
+/// then `refs/tags/<name>`, then `refs/heads/<name>`, so an unqualified
+/// `plan/<kind>/<slug>` resolves a *tag* of that name in preference to the
+/// branch -- and a tag named after a claimed ticket then shadowed its real
+/// branch, freezing the ticket in a state no verb could advance. `for-each-ref`
+/// hands back full names, so no caller manufactures one.
+pub fn unintegrated(trunk: &str) -> Result<BTreeSet<String>, String> {
+    let refs = git::for_each_ref("refs/heads/plan/")?;
+    let tips: Vec<String> = refs.iter().map(|r| r.tip.clone()).collect();
+    let off_trunk: BTreeSet<String> =
+        git::rev_list(&tips, std::slice::from_ref(&trunk.to_string()))?
+            .into_iter()
+            .collect();
+    Ok(refs
+        .into_iter()
+        .filter(|r| off_trunk.contains(&r.tip))
+        .map(|r| r.name)
+        .collect())
+}
+
+/// The authority rule: which single ref answers for a ticket.
 ///
 /// A ticket's own branch while that branch is live and carries commits trunk
-/// cannot reach; trunk once it does not.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Authority {
-    /// `refs/heads/plan/<kind>/<slug>`, live and not yet integrated.
-    Branch { ref_: String },
-    /// No branch of that name, or one trunk has already integrated.
-    Trunk { ref_: String },
-}
-
-impl Authority {
-    pub fn ref_(&self) -> &str {
-        match self {
-            Authority::Branch { ref_ } | Authority::Trunk { ref_ } => ref_,
-        }
-    }
-}
-
-/// The ref name the authority rule looks for. One spelling, so nothing can
-/// look for a ticket's branch under a name nothing else uses.
-pub fn own_ref(kind: &str, slug: &str) -> String {
-    format!("refs/heads/plan/{kind}/{slug}")
-}
-
-/// Has trunk already taken everything this ref carries?
-///
-/// The single definition of "integrated", used by every caller of the authority
-/// rule. `git for-each-ref --merged` answers the same question in bulk and was
-/// the obvious way to make board cheaper; it is deliberately not used, because
-/// two implementations of one predicate is how the last several defects in this
-/// module were built -- they agree until the day they do not.
-pub fn integrated(trunk: &str, ref_: &str) -> Result<bool, String> {
-    Ok(git::rev_list(&[ref_.to_string()], &[trunk.to_string()])?.is_empty())
-}
-
-/// The authority rule: a claimed unit's branch is authoritative for its
-/// lifecycle state until it is integrated.
+/// cannot reach; trunk once it does not. `None` for the kind means the caller
+/// could not determine one, which is the same answer as having no branch.
 ///
 /// **This is what makes a read's answer come from the commit graph rather than
-/// from committer clocks.** The previous ref set was the union of trunk and the
-/// branch, date-ordered, and a union has no total order to offer: the two lanes
-/// are concurrent by construction -- that is the entire point of cutting a
-/// branch -- so `--date-order` was arbitrating between a worker's `submit` and
-/// a leader's trunk-lane declaration, and skew between two machines' clocks
-/// flipped the ticket's state. Under a terminating backwards scan that is not
-/// one wrong event among many; it is the whole answer.
+/// from committer clocks.** The ref set was the union of trunk and the branch,
+/// date-ordered, and a union has no total order to offer: the two lanes are
+/// concurrent by construction -- that is the entire point of cutting a branch --
+/// so `--date-order` was arbitrating between a worker's `submit` and a leader's
+/// trunk-lane declaration. Under a terminating backwards scan that is not one
+/// wrong event among many; it is the whole answer.
 ///
-/// Reading ONE ref does not make the history a chain -- a merge commit puts two
-/// incomparable declarations under a single tip -- but it removes the source of
-/// incomparability this model manufactures on every claim. What remains is
-/// genuinely anomalous, and `planr next check` reports it rather than letting
-/// the fold quietly pick a winner.
+/// *Unintegrated*, not merely present: a branch left standing after its work
+/// landed carries nothing trunk does not already have, so letting it stay
+/// authoritative would hide trunk-lane declarations forever rather than until
+/// integration. What it shadows is deferred rather than lost -- every
+/// integration effect builds a merge commit descending from both lanes.
 ///
-/// The trunk-lane declarations a live branch shadows are not lost, only
-/// deferred: every integration verb builds a merge commit that descends from
-/// both lanes, so once the branch is integrated the graph orders them and the
-/// fold sees all of them. A clash that genuinely disagrees -- a leader
-/// abandoning while a worker submits -- is meant to reach a human, and the
-/// check is where it does.
-///
-/// **Fully qualified, deliberately.** `git rev-parse <name>` searches
-/// `refs/<name>`, then `refs/tags/<name>`, then `refs/heads/<name>`, so an
-/// unqualified `plan/<kind>/<slug>` resolves a *tag* of that name in
-/// preference to the branch. That made the reader's ref set larger than the
-/// reservation's, which enumerates `refs/heads/plan/` -- so a tag named after
-/// a ticket was invisible to the check and live to the read, and once the
-/// ticket was claimed the tag permanently shadowed its real branch, freezing
-/// the ticket in a state no verb could advance. Naming `refs/heads/` here
-/// makes every ref-set computation the same set by construction rather than by
-/// agreement, and takes git's resolution order -- which the ref backend may
-/// change -- out of the answer entirely.
-pub fn authority(kind: &str, slug: &str, trunk: &str) -> Result<Authority, String> {
-    let own = own_ref(kind, slug);
-    // Unintegrated, not merely present: a branch left standing after its work
-    // landed carries nothing trunk does not already have, so letting it stay
-    // authoritative would hide trunk-lane declarations forever rather than
-    // until integration.
-    if git::ref_exists(&own) && !integrated(trunk, &own)? {
-        return Ok(Authority::Branch { ref_: own });
+/// **Every caller goes through here.** The reader, the board and the integrity
+/// check each need this answer, and writing the rule out once per caller is how
+/// the last several defects in this module were built: three spellings of one
+/// predicate that agree until the day they do not.
+pub fn authoritative_ref(
+    trunk: &str,
+    unintegrated: &BTreeSet<String>,
+    kind: Option<&str>,
+    slug: &str,
+) -> String {
+    let own = kind.map(|kind| format!("refs/heads/plan/{kind}/{slug}"));
+    match own {
+        Some(own) if unintegrated.contains(&own) => own,
+        _ => trunk.to_string(),
     }
-    Ok(Authority::Trunk {
-        ref_: trunk.to_string(),
-    })
 }
 
 /// Every event that can still affect one ticket's folded state, oldest-first.
@@ -224,19 +199,18 @@ pub fn authority(kind: &str, slug: &str, trunk: &str) -> Result<Authority, Strin
 ///
 /// Termination also concentrates the ordering assumption (`docs/semantics.md`
 /// section 6, assumption 2): a misordering under an unbounded fold was one
-/// wrong event among many, and here it is the whole answer. [`authority`] is
-/// what keeps that assumption from being load-bearing in the ordinary case --
-/// the walk reads one ref, so the two lanes a claim creates are no longer
-/// asked to be ordered by committer date.
+/// wrong event among many, and here it is the whole answer.
+/// [`authoritative_ref`] is what keeps that assumption off the ordinary path.
 pub fn for_ticket(
     slug: &str,
     kind: &str,
     trunk: &str,
     terminates: impl Fn(&str) -> bool,
 ) -> Result<Walk, String> {
-    let authority = authority(kind, slug, trunk)?;
+    let ref_ = authoritative_ref(trunk, &unintegrated(trunk)?, Some(kind), slug);
+    let on_branch = ref_ != trunk;
     let format = format!("--format={}", log_format());
-    let args: Vec<&str> = vec![&format, DATE_ORDER, authority.ref_()];
+    let args: Vec<&str> = vec![&format, DATE_ORDER, &ref_];
 
     let mut events = Vec::new();
     let scanned = git::log_streaming(&args, RS as u8, |record| {
@@ -254,7 +228,7 @@ pub fn for_ticket(
 
     Ok(Walk {
         events,
-        how: label(&authority, true),
+        how: label(on_branch, true),
         scanned,
     })
 }
@@ -266,30 +240,26 @@ pub fn for_ticket(
 /// `git log` read to completion and parsed in one go, rather than
 /// [`for_ticket`] with a rule that never fires -- so it catches bugs in the
 /// streaming reader's framing and in the stop rule. That is all it catches.
-/// Both walks call [`walk_refs`], use the same format string, and consume the
+/// Both walks resolve the same ref, use the same format string, and consume the
 /// same `git log` stream in the same order, so a wrong ref set, a wrong
 /// ordering flag, a wrong format or separator, and any [`parse_record`] bug
 /// are invisible to it BY CONSTRUCTION: the two would agree on the same wrong
-/// answer.
-///
-/// The sharp case is the ordering assumption, and it stays out of reach here:
-/// both walks read the same ref through the same date order, so a history whose
-/// declarations the commit graph declines to order makes them agree on the same
-/// arbitrary winner. That question belongs to a different mechanism -- see
+/// answer. The ordering question in particular belongs to
 /// [`crate::next::check`], which asks the graph directly.
 ///
 /// Reached by tests through `PLANR_NEXT_ORACLE`; it is not a CLI mode.
 pub fn for_ticket_unbounded(slug: &str, kind: &str, trunk: &str) -> Result<Walk, String> {
-    let authority = authority(kind, slug, trunk)?;
+    let ref_ = authoritative_ref(trunk, &unintegrated(trunk)?, Some(kind), slug);
+    let on_branch = ref_ != trunk;
     let format = format!("--format={}", log_format());
-    let args: Vec<&str> = vec![&format, DATE_ORDER, authority.ref_()];
+    let args: Vec<&str> = vec![&format, DATE_ORDER, &ref_];
 
     let out = git::log_raw(&args)?;
     let mut events = parse_log(&out);
     events.retain(|e| e.ticket == slug);
     Ok(Walk {
         events,
-        how: label(&authority, false),
+        how: label(on_branch, false),
         scanned: count_records(&out),
     })
 }
@@ -339,8 +309,8 @@ pub enum Lineage {
 /// later trailers reachable and the `new` record not -- and the walk was
 /// already holding the evidence when it threw it away.
 ///
-/// **The ref set has to be the fold's, not just the caller's tip.** Reads walk
-/// trunk unioned with the ticket's own ref, and `all_by_ticket` walks trunk
+/// **The ref set has to be the fold's, not just the caller's tip.** Reads
+/// resolve to trunk or to the ticket's own ref, and `all_by_ticket` walks trunk
 /// plus every `plan/*`; a reservation that walked one rev was asking about a
 /// strict subset, so a slug could be unused to the check and live to the
 /// reader. It needs no rewrite to hit: cut a release branch, create and claim a
@@ -363,7 +333,12 @@ pub fn lineage(slug: &str, rev: &str) -> Result<Lineage, String> {
         .map_err(|e| format!("cannot list 'plan/' refs, so a slug cannot be shown unused: {e}"))?;
     // `for_each_ref` already returns full ref names, so the suffix filter runs
     // against `refs/heads/plan/<kind>/<slug>` and needs no reconstruction.
-    refs.extend(listed.into_iter().filter(|r| r.ends_with(&suffix)));
+    refs.extend(
+        listed
+            .into_iter()
+            .map(|r| r.name)
+            .filter(|r| r.ends_with(&suffix)),
+    );
     let mut args: Vec<&str> = vec![&format, DATE_ORDER];
     args.extend(refs.iter().map(String::as_str));
 
@@ -393,12 +368,12 @@ pub fn lineage(slug: &str, rev: &str) -> Result<Lineage, String> {
     })
 }
 
-fn label(authority: &Authority, bounded: bool) -> &'static str {
-    match (authority, bounded) {
-        (Authority::Branch { .. }, true) => "branch trailer scan (authoritative)",
-        (Authority::Branch { .. }, false) => "branch trailer scan (authoritative), UNBOUNDED",
-        (Authority::Trunk { .. }, true) => "trunk trailer scan",
-        (Authority::Trunk { .. }, false) => "trunk trailer scan, UNBOUNDED",
+fn label(on_branch: bool, bounded: bool) -> &'static str {
+    match (on_branch, bounded) {
+        (true, true) => "branch trailer scan (authoritative)",
+        (true, false) => "branch trailer scan (authoritative), UNBOUNDED",
+        (false, true) => "trunk trailer scan",
+        (false, false) => "trunk trailer scan, UNBOUNDED",
     }
 }
 
@@ -439,41 +414,29 @@ pub fn bucket_over(refs: &[String]) -> Result<BTreeMap<String, Vec<Event>>, Stri
 /// commit graph rather than from which ref reached a commit first.
 ///
 /// **The narrowing is not an optimization; it is what makes board agree with
-/// `state`.** [`for_ticket`] reads exactly one ref, chosen by [`authority`],
-/// and a union walk reads more than that -- so without this pass a claimed
-/// ticket whose trunk lane also declared would fold a different set of events
-/// in the two commands, and the board would report a state no `from` gate
-/// would accept. `kinds` supplies each slug's kind because that is what names
-/// its branch; a slug the caller cannot type is answered by trunk, which is
-/// what [`for_ticket`] does when no branch of that name exists.
+/// `state`.** [`for_ticket`] reads exactly one ref, chosen by
+/// [`authoritative_ref`], and a union walk reads more than that -- so without
+/// this pass a claimed ticket whose trunk lane also declared would fold a
+/// different set of events in the two commands, and the board would report a
+/// state no `from` gate would accept. `kinds` supplies each slug's kind because
+/// that is what names its branch, and it must be the kind the reader would
+/// find, including for a ticket whose file archival deleted.
 ///
-/// Cost is one extra `rev-list` for the whole trunk-authoritative population
-/// and one per live branch -- O(claimed), not O(tickets), and each over a
-/// handful of commit ids rather than a history.
+/// Cost is one `rev-list` for the whole trunk-authoritative population and one
+/// per live branch -- O(claimed), not O(tickets), and each over a handful of
+/// commit ids rather than a history.
 pub fn all_by_ticket(
     trunk: &str,
     kinds: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, Vec<Event>>, String> {
-    // `for-each-ref`, not `git branch --list`: branch porcelain prefixes a
-    // ref checked out in ANOTHER worktree with "+ ", which is every claimed
-    // ticket, and the marker travelled into the revision list as part of the
-    // name. Board then failed outright whenever any ticket was claimed.
-    // Fully qualified, so this is the same ref set the reservation and the
-    // single-ticket walk compute rather than merely a set that agrees with
-    // them today. The names come from `for_each_ref` already qualified --
-    // reconstructing them from a short name is what broke when a tag shadowed
-    // a branch and git lengthened the short form to disambiguate it.
+    // Trunk plus the UNINTEGRATED branches is the same commit set as trunk plus
+    // every `plan/` ref -- an integrated branch's commits are trunk's -- so one
+    // enumeration serves both the walk and the authority rule.
+    let unintegrated = unintegrated(trunk)?;
     let mut refs: Vec<String> = vec![trunk.to_string()];
-    if let Ok(listed) = git::for_each_ref("refs/heads/plan/") {
-        refs.extend(listed);
-    }
+    refs.extend(unintegrated.iter().cloned());
 
     let mut buckets = bucket_over(&refs)?;
-
-    // The refs that exist, so membership answers "is there a branch" without a
-    // process per slug. Everything else about authority goes through
-    // `integrated`, which is the one definition of the predicate.
-    let live: BTreeSet<String> = refs.iter().skip(1).cloned().collect();
 
     // Everything the union saw that trunk cannot reach. ONE process settles
     // every trunk-authoritative ticket at once -- including a ticket whose
@@ -483,25 +446,27 @@ pub fn all_by_ticket(
         .values()
         .flat_map(|evs| evs.iter().map(|e| e.commit.clone()))
         .collect();
-    let off_trunk: BTreeSet<String> = git::rev_list(&all, &[trunk.to_string()])?
-        .into_iter()
-        .collect();
+    let off_trunk: BTreeSet<String> =
+        git::rev_list(&all, std::slice::from_ref(&trunk.to_string()))?
+            .into_iter()
+            .collect();
 
     for (slug, events) in buckets.iter_mut() {
-        let own = kinds.get(slug).map(|kind| own_ref(kind, slug));
-        let branch = match own {
-            Some(own) if live.contains(&own) && !integrated(trunk, &own)? => Some(own),
-            _ => None,
-        };
-        match branch {
-            Some(branch) => {
-                let commits: Vec<String> = events.iter().map(|e| e.commit.clone()).collect();
-                let drop: BTreeSet<String> =
-                    git::rev_list(&commits, &[branch])?.into_iter().collect();
-                events.retain(|e| !drop.contains(&e.commit));
-            }
-            None => events.retain(|e| !off_trunk.contains(&e.commit)),
+        let ref_ = authoritative_ref(
+            trunk,
+            &unintegrated,
+            kinds.get(slug).map(String::as_str),
+            slug,
+        );
+        if ref_ == trunk {
+            events.retain(|e| !off_trunk.contains(&e.commit));
+            continue;
         }
+        let commits: Vec<String> = events.iter().map(|e| e.commit.clone()).collect();
+        let drop: BTreeSet<String> = git::rev_list(&commits, std::slice::from_ref(&ref_))?
+            .into_iter()
+            .collect();
+        events.retain(|e| !drop.contains(&e.commit));
     }
     Ok(buckets)
 }

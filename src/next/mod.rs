@@ -328,12 +328,13 @@ pub fn cmd_lifecycle(ctx: &Ctx, kind: Option<&str>) -> Result<String, String> {
 
 /// A minimal board: every live ticket with its folded state.
 ///
-/// Three git processes plus one per claimed ticket: one history walk
-/// ([`events::all_by_ticket`]), one `cat-file --batch` for the ticket blobs,
-/// one `rev-list` that settles every unclaimed ticket's ref reachability at
-/// once, and one more for each live branch. Folding per ticket cost a walk
-/// each; reading per ticket cost a spawn each, and once the walk was shared the
-/// spawns were what remained.
+/// Six git processes plus one per CLAIMED ticket, counted rather than
+/// reasoned: `ls-tree` and `cat-file --batch` for the ticket files,
+/// `for-each-ref` and one `rev-list` resolving the authority rule for every
+/// ticket at once, one history walk, one `rev-list` settling ref reachability
+/// for the whole unclaimed population, and one `rev-list` per live branch to
+/// narrow it. Folding per ticket cost a walk each; reading per ticket cost a
+/// spawn each, and once the walk was shared the spawns were what remained.
 ///
 /// The blobs are read BEFORE the walk, because each ticket's kind names the
 /// branch the authority rule asks about. Reading them afterward would leave the

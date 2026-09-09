@@ -174,9 +174,42 @@ pub fn cat_file_batch(specs: &[String]) -> Result<Vec<Option<String>>, String> {
 /// Returning full names removes the last place in the engine where a short ref
 /// name is manufactured, which is what makes the claim that every ref-set
 /// computation agrees BY CONSTRUCTION true rather than aspirational.
-pub fn for_each_ref(prefix: &str) -> Result<Vec<String>, String> {
-    let out = run(&["for-each-ref", "--format=%(refname)", prefix])?;
+///
+/// The tip comes back with the name because every caller that asks "is this
+/// branch integrated" needs it, and asking git a second time per ref is the
+/// difference between one process and one per claimed ticket.
+pub struct Ref {
+    pub name: String,
+    pub tip: String,
+}
+
+pub fn for_each_ref(prefix: &str) -> Result<Vec<Ref>, String> {
+    let out = run(&["for-each-ref", "--format=%(refname) %(objectname)", prefix])?;
     Ok(out
+        .lines()
+        .filter_map(|l| l.trim().split_once(' '))
+        .map(|(name, tip)| Ref {
+            name: name.to_string(),
+            tip: tip.to_string(),
+        })
+        .collect())
+}
+
+/// The commits in `commits` that no other commit in `commits` can reach --
+/// `git merge-base --independent`, in one process.
+///
+/// The maximal elements under ancestry. A fold's answer is decided by one of
+/// these and never by anything below them: `--date-order` emits a commit before
+/// all of its ancestors, so the newest state-changing declaration a walk meets
+/// is always maximal. Which of them it meets is a committer clock's choice, so
+/// they are exactly the set that has to agree for a state to be well defined.
+pub fn merge_base_independent(commits: &[String]) -> Result<Vec<String>, String> {
+    if commits.len() < 2 {
+        return Ok(commits.to_vec());
+    }
+    let mut args: Vec<&str> = vec!["merge-base", "--independent"];
+    args.extend(commits.iter().map(String::as_str));
+    Ok(run(&args)?
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
