@@ -100,7 +100,7 @@ fn answer(request: Request, ctx: &Context) {
 
     let (code, body) = match path.as_str() {
         "/" => (200, page_board(ctx, &snapshot, &index)),
-        "/lint" => (200, page_lint(ctx)),
+        "/lint" => (200, page_lint(ctx, &index)),
         p if p.starts_with("/t/") => match index.by_slug.get(&p["/t/".len()..]) {
             Some(t) => (200, page_ticket(t, &snapshot, &index)),
             None => (404, page_missing(&p["/t/".len()..], &index)),
@@ -288,17 +288,22 @@ fn page_board(ctx: &Context, snap: &Snapshot, index: &Index) -> String {
             } else {
                 (t.status.clone(), false)
             };
+            // A branch value carries no mark of its own. Trunk disagreeing with
+            // a branch is rare and matters while debugging, which is a hover's
+            // job -- a glyph on the row puts it in every reader's way instead.
+            let note = if from_branch {
+                snap.branches
+                    .iter()
+                    .find(|b| b.slug == t.id)
+                    .map(|b| format!("reported by {}; trunk still records {}", b.branch, t.status))
+            } else {
+                None
+            };
             body.push_str("<tr>");
             body.push_str(&format!("<td>{}</td>", slug_link(&t.id, index)));
             body.push_str(&format!(
-                "<td>{}{}</td>",
-                status_badge(status.trim_end_matches(" *")),
-                if from_branch {
-                    " <abbr title=\"from an in-flight branch; trunk still records \
-                     the pre-claim value\">*</abbr>"
-                } else {
-                    ""
-                }
+                "<td>{}</td>",
+                status_badge_noted(status.trim_end_matches(" *"), note.as_deref())
             ));
             body.push_str(&format!(
                 "<td>{}</td>",
@@ -353,23 +358,29 @@ fn page_ticket(t: &ParsedTicket, snap: &Snapshot, index: &Index) -> String {
 
     body.push_str("<dl class=\"meta\">");
     body.push_str(&format!("<dt>kind</dt><dd>{}</dd>", kind_name(&t.kind)));
-    // One badge, always. The ticket file is what this page is about, and a
-    // second pill beside it reads as the same field rendered twice rather
-    // than as two sources disagreeing. The branch's value is a footnote to
-    // the badge, in prose, naming the branch that carries it.
-    let branch = snap.branches.iter().find(|b| b.slug == t.id);
+    // One badge in the field, and it is the claiming branch's value when there
+    // is one. Trunk keeps the pre-claim status until the branch merges, so it
+    // never reports in_progress or review -- reading trunk here would answer
+    // what was true before anyone started. Through `task_status_display` so
+    // this badge cannot drift from the one the board shows for the same task.
+    let in_flight: HashMap<&str, &str> = snap
+        .branches
+        .iter()
+        .filter_map(|b| b.status.status().map(|s| (b.slug.as_str(), s)))
+        .collect();
+    let (shown, _) = board::task_status_display(t, &in_flight);
+    // At most one branch can be the other source: a branch's slug is its name
+    // with `plan/` stripped, and git will not hand out the same branch name
+    // twice. Sources that agree need no hover-over -- there is nothing to
+    // resolve, and an unreadable branch is worth reporting even so.
+    let claimed = snap
+        .branches
+        .iter()
+        .find(|b| b.slug == t.id && b.status.status() != Some(t.status.as_str()));
     body.push_str(&format!(
         "<dt>status</dt><dd>{}{}</dd>",
-        status_badge(&t.status),
-        match branch {
-            Some(b) if b.status.status() != Some(t.status.as_str()) => format!(
-                " <span class=\"note\"><code>{}</code> reports \
-                 <span class=\"branch-st\">{}</span></span>",
-                escape(&b.branch),
-                escape(b.status.display())
-            ),
-            _ => String::new(),
-        }
+        status_badge(shown.trim_end_matches(" *")),
+        status_reports(claimed, &t.status)
     ));
     body.push_str(&format!(
         "<dt>parent</dt><dd>{}</dd>",
@@ -493,15 +504,32 @@ fn page_missing(slug: &str, index: &Index) -> String {
     layout(slug, Some("no such ticket"), &body)
 }
 
-fn page_lint(ctx: &Context) -> String {
+fn page_lint(ctx: &Context, index: &Index) -> String {
     let report = match &ctx.ref_ {
         Some(r) => lint::lint_ref(r, &ctx.plan_dir),
         None => lint::lint_working_tree(&ctx.plan_dir),
     };
 
+    // A zero count is the good news and stays in the dim summary line; a
+    // non-zero one is the reason the page was opened, and takes the color the
+    // rows of that level carry.
+    let count = |n: usize, level: &str| {
+        let s = if n == 1 { "" } else { "s" };
+        if n == 0 {
+            format!("0 {level}{s}")
+        } else {
+            // Color only, no `lv`: the uppercase label belongs in the table's
+            // level column, not mid-sentence in a summary line.
+            format!("<span class=\"lv-{level}\">{n} {level}{s}</span>")
+        }
+    };
     let mut body = format!(
-        "<p class=\"source\">{} error(s), {} warning(s) over {} of {} ticket file(s)</p>",
-        report.error_count, report.warning_count, report.tickets_read, report.ticket_files
+        "<p class=\"source\">{}, {} over {} of {} ticket file{}</p>",
+        count(report.error_count, "error"),
+        count(report.warning_count, "warning"),
+        report.tickets_read,
+        report.ticket_files,
+        if report.ticket_files == 1 { "" } else { "s" }
     );
     if report.issues.is_empty() {
         body.push_str("<p>Nothing to report.</p>");
@@ -513,13 +541,17 @@ fn page_lint(ctx: &Context) -> String {
                    </tr></thead><tbody>",
     );
     for issue in &report.issues {
+        // `slug_link`, not a bare anchor: the slug column is the same monospace
+        // link the board and the ticket pages use, and it routes a filename no
+        // ticket answers for to /dangling/ rather than to a dead /t/ URL.
         let slug = crate::ticket::slug_from_filename(&issue.file);
         body.push_str(&format!(
-            "<tr class=\"{}\"><td>{}</td><td><a href=\"/t/{}\">{}</a></td><td>{}</td></tr>",
+            "<tr class=\"{}\"><td><span class=\"lv lv-{}\">{}</span></td>\
+             <td>{}</td><td>{}</td></tr>",
             issue.level,
             issue.level,
-            percent_encode(&slug),
-            escape(&slug),
+            issue.level,
+            slug_link(&slug, index),
             escape(&issue.message)
         ));
     }
@@ -643,11 +675,59 @@ fn list_or_dash<'s>(slugs: impl Iterator<Item = &'s str>, index: &Index) -> Stri
 }
 
 fn status_badge(status: &str) -> String {
+    status_badge_noted(status, None)
+}
+
+/// A status pill, optionally carrying `note` as its hover text.
+///
+/// Anything not one of the six statuses is `st-unknown` and renders in the
+/// error color, which is what `BranchRead::display`'s stand-ins want: a branch
+/// with no readable task file is a finding, not a status.
+fn status_badge_noted(status: &str, note: Option<&str>) -> String {
     let class = match status {
         "todo" | "in_progress" | "review" | "done" | "blocked" | "abandoned" => status,
         _ => "unknown",
     };
-    format!("<span class=\"st st-{class}\">{}</span>", escape(status))
+    format!(
+        "<span class=\"st st-{class}\"{}>{}</span>",
+        match note {
+            Some(n) => format!(" title=\"{}\"", escape(n)),
+            None => String::new(),
+        },
+        escape(status)
+    )
+}
+
+/// Every status reported for this ticket, behind a hover-over.
+///
+/// The badge beside it shows one of these; this is where a reader sees who
+/// said what. The claiming branch leads and trunk follows, which is the order
+/// they resolve in: the branch is the live answer, and trunk is the value it
+/// overwrites when it merges.
+///
+/// Branch and status are the columns because they are the pair a reader acts
+/// on: which branch to go check out, and what its task file claims there. The
+/// statuses are real badges -- the same pill the field uses, so a reviewing
+/// branch reads as reviewing rather than as anonymous text.
+///
+/// `tabindex` is not decoration: hover is the only other way in, and a hover
+/// nobody can reach on a phone or by keyboard hides the table from half the
+/// readers. Keep it, and keep the `:focus` rules that go with it.
+fn status_reports(claimed: Option<&BranchStatus>, trunk: &str) -> String {
+    let b = match claimed {
+        Some(b) => b,
+        None => return String::new(),
+    };
+    format!(
+        " <div class=\"reports\" tabindex=\"0\">2 reports\
+         <div class=\"pop\"><table><thead><tr><th>branch</th><th>status</th></tr>\
+         </thead><tbody><tr><td><code>{}</code></td><td>{}</td></tr>\
+         <tr><td><code>trunk</code></td><td>{}</td></tr>\
+         </tbody></table></div></div>",
+        escape(&b.branch),
+        status_badge(b.status.display()),
+        status_badge(trunk)
+    )
 }
 
 fn kind_name(kind: &Option<Kind>) -> &'static str {
@@ -734,6 +814,13 @@ fn percent_decode(s: &str) -> String {
 /// among the link rules, or a broken wiki-link in a body renders in the live
 /// link's color and stops reading as broken.
 ///
+/// `color-scheme` on `:root` and `scrollbar-color` on `table` are load-bearing
+/// and not decoration. The checkboxes in an Acceptance list and the scrollbar a
+/// wide table grows are painted by the browser, and no variable in this sheet
+/// reaches them: without these two the scrollbar is a white bar under every
+/// table on a phone in dark mode. Firefox needs the explicit `scrollbar-color`;
+/// `color-scheme` alone does not reach it.
+///
 /// Every color is a variable with a value in both `:root` and the dark block.
 /// A literal hex in a rule is a color that only suits one theme -- the status
 /// badges were three such literals, and `in_progress` sat at 2.77:1 on the
@@ -741,12 +828,15 @@ fn percent_decode(s: &str) -> String {
 /// declarations and fails below 4.5:1, so add a badge color as a pair or the
 /// test will not find it.
 const STYLE: &str = "\
-:root{--bg:#ffffff;--fg:#1a1a1a;--dim:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;\
+:root{color-scheme:light dark;\
+--bg:#ffffff;--fg:#1a1a1a;--dim:#6b7280;--line:#e5e7eb;--accent:#1d4ed8;\
 --warn:#b45309;--warnbg:#fffbeb;--err:#b91c1c;--code:#f6f7f9;\
---st-done:#15803d;--st-progress:#1d4ed8;--st-review:#7c3aed}\
+--st-done:#15803d;--st-progress:#1d4ed8;--st-review:#7c3aed;\
+--shadow:rgba(17,19,23,.18)}\
 @media(prefers-color-scheme:dark){:root{--bg:#111317;--fg:#e6e7e9;--dim:#9aa1ac;\
 --line:#272b32;--accent:#7aa2f7;--warn:#e0a33a;--warnbg:#2a2416;--err:#f07178;\
---code:#191c22;--st-done:#22c55e;--st-progress:#7aa2f7;--st-review:#a78bfa}}\
+--code:#191c22;--st-done:#22c55e;--st-progress:#7aa2f7;--st-review:#a78bfa;\
+--shadow:rgba(0,0,0,.6)}}\
 *{box-sizing:border-box}\
 body{margin:0;background:var(--bg);color:var(--fg);\
 font:14px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}\
@@ -763,14 +853,22 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)
 margin:26px 0 8px;font-weight:600}\
 h2 .n{color:var(--fg);opacity:.6}\
 h2 .hint{text-transform:none;letter-spacing:0;font-weight:400;opacity:.75}\
-table{border-collapse:collapse;width:100%;display:block;overflow-x:auto}\
+table{border-collapse:collapse;width:100%;display:block;overflow-x:auto;\
+scrollbar-width:thin;\
+scrollbar-color:color-mix(in srgb,var(--dim) 45%,transparent) transparent}\
 th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;\
 color:var(--dim);font-weight:600;padding:5px 10px 5px 0;border-bottom:1px solid var(--line)}\
 td{padding:5px 10px 5px 0;border-bottom:1px solid var(--line);vertical-align:top}\
 tr.error td{background:color-mix(in srgb,var(--err) 8%,transparent)}\
+tr.warning td{background:color-mix(in srgb,var(--warn) 7%,transparent)}\
+.lv{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;\
+white-space:nowrap}\
+.lv-error{color:var(--err)}\
+.lv-warning{color:var(--warn)}\
 a.slug{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;\
 color:var(--accent);text-decoration:none}\
 a.slug:hover{text-decoration:underline}\
+td a.slug{white-space:nowrap}\
 .md a{color:var(--accent);text-decoration:underline;text-underline-offset:2px;\
 text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent)}\
 .md a:hover{text-decoration-color:currentColor}\
@@ -789,12 +887,21 @@ border-color:color-mix(in srgb,currentColor 45%,transparent)}\
 .source{color:var(--dim);font-family:ui-monospace,monospace;font-size:12px;margin:0}\
 .warn{background:var(--warnbg);border-left:3px solid var(--warn);padding:8px 12px;\
 margin:12px 0}\
-.note,.hint{color:var(--dim);font-size:12px}\
-.branch-st{font-family:ui-monospace,monospace;color:var(--fg)}\
+.hint{color:var(--dim);font-size:12px}\
+.reports{display:inline-block;color:var(--dim);font-size:12px;\
+border-bottom:1px dotted var(--dim);cursor:help}\
+.reports .pop{display:none;position:absolute;left:0;top:calc(100% + 7px);z-index:2;\
+width:max-content;max-width:min(340px,100%);overflow-x:auto;\
+padding:8px 11px;background:var(--bg);border:1px solid var(--line);border-radius:6px;\
+box-shadow:0 4px 14px var(--shadow)}\
+.reports:hover .pop,.reports:focus .pop,.reports:focus-within .pop{display:block}\
+.reports .pop table{display:table;width:auto}\
+.reports .pop th,.reports .pop td{padding:3px 14px 3px 0;white-space:nowrap}\
+.reports .pop tr:last-child td{border-bottom:none}\
 dl.meta{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:14px 0}\
 dl.meta dt{color:var(--dim);font-size:12px;text-transform:uppercase;\
 letter-spacing:.05em}\
-dl.meta dd{margin:0}\
+dl.meta dd{margin:0;position:relative}\
 ul.rel{list-style:none;padding:0;margin:0}\
 ul.rel li{padding:3px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;\
 align-items:baseline}\
@@ -882,7 +989,15 @@ mod tests {
     #[test]
     fn test_status_badge_colors_meet_wcag_aa() {
         let (light_bg, dark_bg) = theme_pair("bg");
-        for name in ["st-done", "st-progress", "st-review", "err", "dim", "fg"] {
+        for name in [
+            "st-done",
+            "st-progress",
+            "st-review",
+            "err",
+            "warn",
+            "dim",
+            "fg",
+        ] {
             let (light, dark) = theme_pair(name);
             for (theme, fg, bg) in [("light", &light, &light_bg), ("dark", &dark, &dark_bg)] {
                 let ratio = contrast(fg, bg);
