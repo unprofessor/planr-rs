@@ -360,9 +360,9 @@ fn page_ticket(t: &ParsedTicket, snap: &Snapshot, index: &Index) -> String {
     body.push_str(&format!("<dt>kind</dt><dd>{}</dd>", kind_name(&t.kind)));
     // One badge in the field, always. The ticket file is what this page is
     // about, and a second pill beside it reads as the same field rendered
-    // twice rather than as two sources disagreeing.
-    // One branch at most: a branch's slug is its name with `plan/` stripped,
-    // and git will not hand out the same branch name twice.
+    // twice rather than as two sources disagreeing. One branch at most can be
+    // the other source: a branch's slug is its name with `plan/` stripped, and
+    // git will not hand out the same branch name twice.
     let ignored = snap
         .branches
         .iter()
