@@ -2059,8 +2059,15 @@ ends on the same state; two disagreeing means an order exists for each.
 and it denotes `const initial` -- so a lane cut *before* the creation commit
 puts a declaration beside the genesis rather than below it, and the two compete
 for the floor. Omitting it left a history that `next state` read as `todo`,
-`next board` as `abandoned`, and this check as sound. That is the *descent* half
-of assumption 3, which counting genesis records does not reach.
+`next board` as `abandoned`, and this check as sound.
+
+That reaches the *descent* half of assumption 3 for declarations the answering
+ref can see, and only those. The genesis count runs over the union, so a branch
+that cannot reach its own ticket's creation still counts one and still reports
+clean. The claim is deliberately narrow: no verb produces that history -- it
+takes hand-written commits, because `submit` reads its `from` gate through the
+same branch -- and closing it means moving the count below the reachability
+pass and widening `severed`. Recorded rather than fixed.
 
 It costs one `merge-base --independent` per ticket with more than one visible
 declaration.

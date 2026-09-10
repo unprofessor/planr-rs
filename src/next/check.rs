@@ -335,8 +335,14 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
         // declaration for the floor, and which one the walk lands on is the
         // clock's choice. Leaving it out let a lane cut BEFORE the creation
         // commit read `todo` from `state`, `abandoned` from `board`, and clean
-        // from here. That is the descent half of assumption 3, which this
-        // module otherwise only enforces as a count.
+        // from here.
+        //
+        // This reaches the descent half of assumption 3 only for declarations
+        // the answering ref CAN see. The genesis count above runs over the
+        // union, so a branch that cannot reach its own ticket's creation still
+        // counts one and still reports clean -- narrow claim, deliberately:
+        // closing that needs the count moved below `unreachable` and `severed`
+        // widened, and no verb can produce the history.
         let declared: Vec<(&Event, String)> = all
             .iter()
             .filter(|e| !unreachable.contains(&e.commit))
