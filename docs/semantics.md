@@ -374,6 +374,21 @@ Named so that breaking one is a decision rather than an accident.
    the same ticket.
 4. **The schema in force is the one in the same history.** There is no schema
    trailer, deliberately: the schema is tracked in the repository it governs.
+
+   This says which schema interprets an *event*, and nothing about what happens
+   when the schema changes. A ticket is not anchored to a schema version at
+   creation or at any other point, so its state is a string drawn from the
+   vocabulary in force at its last transition while every gate speaks today's --
+   and a renamed state strands the tickets that still carry the old name. The
+   implementation is currently immune by being wrong in the other direction: it
+   folds every event through one working-tree schema, so renames cost nothing
+   and a change of *meaning* is silently retroactive. Closing the gap needs
+   migration, which is
+   [not yet designed](typed-graph-design.md#schema-evolution-is-not-yet-designed).
+
+   "Schema" also names two documents here -- this project's `.plan/schema.yml`
+   and planr's own published validator. They version independently; see
+   [the note](typed-graph-design.md#schema-names-two-documents).
 5. **Trailers survive.** Events are attributable because commit messages are
    immutable; a history rewrite that drops trailers drops events.
 

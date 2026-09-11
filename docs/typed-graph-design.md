@@ -1296,6 +1296,125 @@ known boundary.
 12. **Migration seed events** — the exact trailer shape `planr migrate` writes to
     seed a 0.3 ticket's event chain (§7), and whether a seed is one commit per
     ticket or one commit for the whole backlog.
+13. **Schema evolution and ticket migration** -- see
+    [the note below](#schema-evolution-is-not-yet-designed).
+14. **"Schema" names two different documents** -- see
+    [the note below](#schema-names-two-documents).
+
+### Schema evolution is not yet designed
+
+[§3.5](#35-primitives--content-transforms-and-ref-effects) settles where the
+schema *lives* and how an event finds it: there is no schema trailer, because
+`.plan/schema.yml` is tracked in the same history, so every event commit's tree
+already carries the schema in force when that event was declared. Per-event
+granularity, zero bytes, cannot drift.
+
+That is a complete answer to *which schema interprets an event* and no answer at
+all to *what happens when the schema changes*. *Tickets are not anchored to a
+schema version -- not at creation, not at all.* Each of a ticket's events is
+resolved independently, which makes the **history** faithful and leaves the
+**present** undefined: a ticket's state is a string drawn from the vocabulary of
+whichever schema was in force at its last transition, while every present-tense
+operation -- `from` gates, `terminal`, `board` -- speaks today's vocabulary.
+Nothing bridges them.
+
+The failure is concrete. Rename a task's `done` state to `complete`:
+
+- a ticket closed before the rename folds to `done`, faithfully;
+- `terminal(task)` under the new schema is `{complete, abandoned}`, which does
+  not contain `done`;
+- `archive` requires `self: {status: terminal}`, so that ticket can never be
+  archived;
+- worse, a `from`-less verb is refused only when the current state *is*
+  terminal -- so `abandon` now fires on a closed ticket. A terminal ticket
+  becomes re-enterable, which is the failure class
+  [the slug reservation exists to prevent](#follow-on-probes-topology-bounds-and-gits-index).
+
+**The implementation is accidentally immune, which is why this has stayed
+hidden.** `Schema::load` reads one schema from the working tree and folds every
+event through it, so an old `close` event is looked up in *today's* schema and
+yields `complete`. Renames cost nothing and everything stays self-consistent.
+The price is the mirror image: a change of *meaning* rather than of name is
+silently retroactive, rewriting what every historical ticket did, with no record
+that it happened. The working tree is also the wrong source -- an uncommitted
+schema edit already governs the fold, so a dirty checkout and a clean one
+disagree about the board.
+
+Three policies, none of which is sufficient alone:
+
+| policy | history | present |
+| --- | --- | --- |
+| one current schema (what the code does) | silently rewritten | coherent |
+| per event (what §3.5 specifies) | faithful | vocabulary fractures; gates strand tickets |
+| per ticket, fixed at creation | faithful | frozen -- a verb added later never reaches an old ticket |
+
+**Migration is the missing third piece, not a convenience.** It is what allows
+per-event faithfulness *and* a coherent present: old events keep their old
+meaning, and an explicit event moves the ticket into the new vocabulary at a
+named point in history. Item 12 above contemplates migration only for the
+0.3 -> 0.4 data shape; schema-version to schema-version is unspecified.
+
+**A migration event should be a trailer, not frontmatter.** Frontmatter is
+disqualified by the model's own rule -- it carries only what git cannot derive,
+and a stored `status` is actively rejected -- so a migration record there would
+be derived state stored outside the fold, reintroducing what the fold exists to
+remove. A trailer earns three things instead:
+
+- **Absorption already handles it.** A `migrate` event carrying a `to:`
+  annihilates everything before it by the lemma in
+  [the semantics](semantics.md#4-denotational-semantics-of-the-fold). The fold
+  needs no new concept; a migration is an ordinary event.
+- **It terminates the bounded walk by the existing rule**, so unlike `new` it
+  needs no reserved name and no special case.
+- **It self-dates.** The migrate commit's own tree carries the new schema, so
+  the event resolves under it by the same rule as every other event.
+
+What remains genuinely open:
+
+- **One commit per ticket, or one commit naming many?** A rename touches the
+  whole backlog. Note that `events::log_format` already reads both trailers with
+  `separator=%x00`, which anticipates multi-value -- but `parse_record` takes the
+  whole field as a single slug, so two `Planr-Ticket` trailers today would
+  produce a slug containing a NUL. Unreachable now; decide the commit shape
+  before it is not.
+- **Does the schema need a content version?** There is none today: `$schema` is
+  the published validator's URL, not a version of this project's rules. A
+  migration has nothing to compare against, and no way to say which migration it
+  is.
+- **What declares the mapping?** `done -> complete` has to be written somewhere
+  a tool can read, which is a new schema key and therefore a change to the
+  published document.
+- **Is migration ever automatic?** A rename could in principle be inferred; a
+  change of meaning cannot. Inferring the first and not the second is a sharper
+  distinction than it looks.
+
+### "Schema" names two documents
+
+The word is used for two different artifacts with different owners, different
+lifecycles, and different migration stories. They are currently distinguished
+only by adjective ("the published schema" versus "the schema"), and the code
+does not distinguish them at all -- `src/next/schema.rs` is the loader for one
+and the test-time validator against the other.
+
+| | **planr schema** | **ticket schema** |
+| --- | --- | --- |
+| what | a JSON Schema 2020-12 document defining what a valid ticket schema looks like | `kinds`, `verbs`, `templates` -- the lifecycle this backlog runs |
+| file | `planr.schema.json`, shipped in-tree | `.plan/schema.yml` |
+| owner | the planr project | the project using planr |
+| versioned by | planr releases, via the `$schema` URL (`.../planr/v1/planr.schema.json`) | the project's own git history |
+| changes when | the verb language gains or loses a feature | a team changes its own workflow |
+| migration means | every backlog's `.plan/schema.yml` may need rewriting | one backlog's tickets may need remapping |
+
+Both senses are live in this document and in
+[the semantics](semantics.md#0-notation). Everything under "Schema evolution"
+above concerns the **ticket schema** only; a change to the **planr schema** is a
+tool-upgrade problem, and the two can move independently -- a project can sit on
+an old verb language indefinitely, and a planr release must not silently
+reinterpret a backlog that has not opted in.
+
+Naming them is cheap and should happen before either migration story is built,
+because the two stories will otherwise be written in the same words. The terms
+used in this section are one candidate; `language` and `lifecycle` are another.
 
 ## 9. Fresh-eyes review findings (round 1, 2026-08-21)
 
