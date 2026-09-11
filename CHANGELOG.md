@@ -34,7 +34,8 @@
   It takes the same optional ref as `board`, so `planr serve HEAD~5` browses
   an older backlog. `--port` defaults to one the OS picks, and the socket
   binds to `127.0.0.1` only. Nothing writes; the backlog is re-read on every
-  request, so a page reloads into whatever the agents have since committed.
+  request, and an open page reloads itself every ten seconds, so it follows
+  whatever the agents commit. The reload waits while text is selected.
 
   The command lives behind a `serve` cargo feature that is **on by default**.
   `cargo install planr --no-default-features` builds the CLI without it, and

@@ -692,11 +692,19 @@ fn link_wiki_links(body: &str, index: &Index) -> String {
 // HTML helpers
 // ---------------------------------------------------------------------------
 
+/// Reload the page every ten seconds, so an open tab follows the backlog.
+///
+/// Every request rereads the backlog, so a reload is the whole mechanism.
+/// It skips a beat while the reader has text selected, because a reload
+/// drops the selection mid-copy.
+const RELOAD: &str = "setInterval(()=>{if(!getSelection().toString())location.reload()},10000)";
+
 fn layout(title: &str, subtitle: Option<&str>, body: &str) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-         <title>{} -- planr</title><style>{STYLE}</style></head><body>\
+         <title>{} -- planr</title><style>{STYLE}</style>\
+         <script>{RELOAD}</script></head><body>\
          <header><a class=\"home\" href=\"/\">planr</a>\
          <h1>{}{}</h1><nav><a href=\"/\">board</a><a href=\"/lint\">lint</a></nav>\
          </header><main>{body}</main></body></html>",
