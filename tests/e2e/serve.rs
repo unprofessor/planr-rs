@@ -154,6 +154,11 @@ fn test_e2e_serve_board_links_every_ticket() {
             "board does not link {slug}: {body}"
         );
     }
+    // An open tab follows the backlog without the reader pressing reload.
+    assert!(
+        body.contains("location.reload()"),
+        "the board does not reload itself: {body}"
+    );
 }
 
 #[test]
@@ -243,8 +248,10 @@ fn test_e2e_serve_drops_raw_html_from_bodies() {
     let (_, body) = get(s.port, "/t/t1");
     // `serve <ref>` is a reasonable way to read a branch someone else wrote.
     // A ticket body must never be able to run code in the reader's browser.
-    assert!(
-        !body.contains("<script>"),
+    // The page's own reload timer is the one script it carries.
+    assert_eq!(
+        body.matches("<script>").count(),
+        1,
         "a script tag in a ticket body reached the page: {body}"
     );
     assert!(
