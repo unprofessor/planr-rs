@@ -1,4 +1,4 @@
-# planr 0.4 workflow -- EXPERIMENTAL; no language version is pinned yet.
+# planr workflow -- EXPERIMENTAL; no language version is pinned yet.
 #
 # No `$schema:` URL yet: the language is still being experimented with, and
 # pinning it to the registry is what freezes it. Add the declaration once the
