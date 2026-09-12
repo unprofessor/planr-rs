@@ -817,3 +817,36 @@ fn a_verb_run_from_inside_the_worktree_reconciles_it() {
         "the verb left its own ticket file dirty in the worktree: {status:?}"
     );
 }
+
+/// A commit naming several tickets declares for each of them.
+///
+/// Git reads a repeated trailer as a list. Joined into one string, the list is
+/// a slug no ticket has, so the declaration applies to none of them -- and
+/// silently, because a slug that matches nothing looks exactly like a commit
+/// about some other ticket.
+#[test]
+fn a_commit_naming_several_tickets_declares_for_each() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    setup(dir);
+    ok(dir, &["next", "new", "task", "a", "A"]);
+    ok(dir, &["next", "new", "task", "b", "B"]);
+
+    let tip = git_out(dir, &["rev-parse", "HEAD"]).trim().to_string();
+    let tree = git_out(dir, &["rev-parse", "HEAD^{tree}"])
+        .trim()
+        .to_string();
+    let msg = "plan: abandon a and b\n\nPlanr-Verb: abandon\nPlanr-Ticket: a\nPlanr-Ticket: b\n";
+    let sha = git_out(dir, &["commit-tree", &tree, "-p", &tip, "-m", msg])
+        .trim()
+        .to_string();
+    git(dir, &["update-ref", "refs/heads/main", &sha]);
+
+    for slug in ["a", "b"] {
+        let out = ok(dir, &["next", "state", slug]);
+        assert!(
+            out.starts_with(&format!("{slug}: abandoned")),
+            "one commit declared `abandon` for both tickets:\n{out}"
+        );
+    }
+}

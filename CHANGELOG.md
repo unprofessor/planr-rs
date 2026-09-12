@@ -261,6 +261,13 @@
 
 ### Fixed
 
+- **A commit naming several tickets declares for each of them.** Git reads a
+  repeated `Planr-Ticket` trailer as a list, and planr joined the list into one
+  slug containing a NUL, which matched no ticket -- so the declaration applied to
+  none of them, silently. A commit with several `Planr-Verb` trailers declares
+  nothing, because it does not say which verb applies. planr itself writes one
+  of each; this concerns commits written by hand or by other tools.
+
 - **A ticket whose history was imported or grafted could report its initial
   state forever.** The trailer walk passed `--date-order` only when it had two
   refs to merge; the single-ref walk took git's default, which orders a queue by

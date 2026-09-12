@@ -65,31 +65,40 @@ fn log_format() -> String {
 /// this same bounded walk.
 pub const GENESIS: &str = "new";
 
-fn parse_record(record: &str) -> Option<Event> {
-    let record = record.trim_matches(['\n', '\r']);
-    if record.is_empty() {
-        return None;
-    }
-    let mut fields = record.split(FS);
-    let (Some(commit), Some(verb), Some(ticket)) = (fields.next(), fields.next(), fields.next())
+/// The events one log record declares: one per ticket it names.
+///
+/// Git reads a repeated trailer as a list, and [`log_format`] joins its values
+/// with NUL. A commit may therefore name several tickets, and it declares the
+/// same verb for each. It may not name several verbs: two `Planr-Verb` values do
+/// not say which one applies, so that record declares nothing. Do not join
+/// either list into one string -- a NUL-bearing slug matches no ticket, and the
+/// declaration silently vanishes.
+fn parse_record(record: &str) -> Vec<Event> {
+    let mut fields = record.trim_matches(['\n', '\r']).split(FS);
+    let (Some(commit), Some(verb), Some(tickets)) = (fields.next(), fields.next(), fields.next())
     else {
-        return None;
+        return Vec::new();
     };
     let verb = verb.trim();
     // A commit with no Planr-Verb trailer is not an event -- ordinary code
     // commits share these branches and must be ignored, not guessed at.
-    if verb.is_empty() {
-        return None;
+    if verb.is_empty() || verb.contains('\0') {
+        return Vec::new();
     }
-    Some(Event {
-        commit: commit.trim().to_string(),
-        verb: verb.to_string(),
-        ticket: ticket.trim().to_string(),
-    })
+    tickets
+        .split('\0')
+        .map(str::trim)
+        .filter(|ticket| !ticket.is_empty())
+        .map(|ticket| Event {
+            commit: commit.trim().to_string(),
+            verb: verb.to_string(),
+            ticket: ticket.to_string(),
+        })
+        .collect()
 }
 
 fn parse_log(out: &str) -> Vec<Event> {
-    let mut events: Vec<Event> = out.split(RS).filter_map(parse_record).collect();
+    let mut events: Vec<Event> = out.split(RS).flat_map(parse_record).collect();
     // git log is newest-first; a fold wants oldest-first.
     events.reverse();
     events
@@ -221,12 +230,9 @@ pub fn for_ticket(
 
     let mut events = Vec::new();
     let scanned = git::log_streaming(&args, RS as u8, |record| {
-        let Some(event) = parse_record(record) else {
+        let Some(event) = parse_record(record).into_iter().find(|e| e.ticket == slug) else {
             return true;
         };
-        if event.ticket != slug {
-            return true;
-        }
         let stop = event.verb == GENESIS || terminates(&event.verb);
         events.push(event);
         !stop
@@ -350,12 +356,9 @@ pub fn lineage(slug: &str, rev: &str) -> Result<Lineage, String> {
     args.extend(refs.iter().map(String::as_str));
 
     git::log_streaming(&args, RS as u8, |record| {
-        let Some(event) = parse_record(record) else {
+        let Some(event) = parse_record(record).into_iter().find(|e| e.ticket == slug) else {
             return true;
         };
-        if event.ticket != slug {
-            return true;
-        }
         if latest.is_none() {
             latest = Some(event.clone());
         }

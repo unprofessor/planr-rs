@@ -1379,11 +1379,10 @@ remove. A trailer earns three things instead:
 What remains genuinely open:
 
 - **One commit per ticket, or one commit naming many?** A rename touches the
-  whole backlog. Note that `events::log_format` already reads both trailers with
-  `separator=%x00`, which anticipates multi-value -- but `parse_record` takes the
-  whole field as a single slug, so two `Planr-Ticket` trailers today would
-  produce a slug containing a NUL. Unreachable now; decide the commit shape
-  before it is not.
+  whole backlog. The reader accepts both: a commit with several `Planr-Ticket`
+  trailers declares its verb for each ticket it names (and one with several
+  `Planr-Verb` trailers declares nothing, since it does not say which applies).
+  What stays open is which shape `migrate` writes.
 - **Does the workflow need a content version?** There is none today: `$schema` is
   the published validator's URL, not a version of this project's rules. A
   migration has nothing to compare against, and no way to say which migration it
