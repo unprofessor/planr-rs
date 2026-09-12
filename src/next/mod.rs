@@ -4,6 +4,7 @@
 //! additive, so the two can coexist until a migration path exists. The model
 //! is experimental, and the workflow does not yet pin a language version.
 
+pub mod check;
 pub mod events;
 pub mod fold;
 pub mod plumbing;
@@ -404,4 +405,15 @@ pub fn cmd_board(ctx: &Ctx) -> Result<String, String> {
         return Ok("no tickets".to_string());
     }
     Ok(format!("{} ticket(s)\n{}", rows.len(), rows.join("\n")))
+}
+
+/// The integration half of the identity invariant -- see [`check`].
+///
+/// Returns the report and whether it contains a fault, so the caller can exit
+/// non-zero. The distinction matters: a shadowed declaration is the authority
+/// rule working, and a check that failed on it would fail on every claimed
+/// ticket whose leader touched trunk.
+pub fn cmd_check(ctx: &Ctx) -> Result<(String, bool), String> {
+    let findings = check::run(ctx)?;
+    Ok(check::report(&findings))
 }

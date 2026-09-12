@@ -11,6 +11,12 @@
   `state`, `board`, `lifecycle`, and `do <verb>`. Every classic command is
   unchanged.
 
+- **`planr next check`** reports ticket histories `planr next` cannot read
+  reliably -- a slug created twice by two clones, events whose creation is
+  missing, and declarations whose order depends on which machine's clock ran
+  later -- and exits non-zero when it finds one. It reports and never
+  repairs.
+
 - **The planr schema, v1.** `schemas/planr/v1/1.0.0/planr.schema.json` is a
   JSON Schema document describing the workflow file
   (`.plan/workflow.yml`), ticket frontmatter, and planr's commit trailers.
