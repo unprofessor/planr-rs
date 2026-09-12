@@ -1,0 +1,7 @@
+# Edge semantics come from a closed set.
+kinds: [task]
+edges:
+  blocks: { cardinality: many, semantics: blocking }
+verbs:
+  - name: claim
+    applies-to: [task]

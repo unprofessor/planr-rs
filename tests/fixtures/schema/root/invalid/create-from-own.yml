@@ -1,0 +1,7 @@
+# A ref can only be cut from the integration ref the ticket already lives on.
+kinds: [task]
+verbs:
+  - name: claim
+    applies-to: [task]
+    base: own
+    effect: create

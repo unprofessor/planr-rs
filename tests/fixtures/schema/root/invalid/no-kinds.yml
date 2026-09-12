@@ -1,0 +1,4 @@
+# A schema with no containment spine.
+verbs:
+  - name: claim
+    applies-to: [task]

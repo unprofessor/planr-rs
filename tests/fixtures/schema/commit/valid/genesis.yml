@@ -1,0 +1,6 @@
+# `new` is rejected as a VERB name and must stay legal as a Planr-Verb: this
+# trailer is exactly what creation writes, and it is the record a bounded state
+# read stops its backwards walk at. The two rules pull in opposite directions
+# on the same token, so both are pinned.
+Planr-Verb: new
+Planr-Ticket: verb-runner

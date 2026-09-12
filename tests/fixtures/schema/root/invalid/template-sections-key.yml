@@ -1,0 +1,15 @@
+# `templates.<kind>.sections` was removed. It scaffolded section headings,
+# which is exactly how a template ends up satisfying a gate its own verbs
+# depend on -- see the note on `templates.<kind>.body`.
+kinds: [task]
+templates:
+  task:
+    sections: [Validation]
+verbs:
+  - name: claim
+    applies-to: [task]
+    from: todo
+    to: in_progress
+    base: home
+    effect: create
+    worktree: create
