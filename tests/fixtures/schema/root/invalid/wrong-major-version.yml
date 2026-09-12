@@ -1,0 +1,7 @@
+# Declares a schema language this binary does not speak. Should be a clear
+# version error rather than a parse failure.
+$schema: https://schemas.columnzero.com/planr/v2/planr.schema.json
+kinds: [task]
+verbs:
+  - name: claim
+    applies-to: [task]

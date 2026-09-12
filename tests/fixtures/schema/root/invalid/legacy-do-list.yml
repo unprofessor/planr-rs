@@ -1,0 +1,7 @@
+# The pre-pivot model: an ordered `do` list mixing tree edits with ref moves.
+# Ordering no longer exists as a concept, so this must not silently pass.
+kinds: [task]
+verbs:
+  - name: claim
+    applies-to: [task]
+    do: [new-worktree, branch, transition: { from: todo, to: in_progress }]

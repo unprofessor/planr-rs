@@ -1,0 +1,9 @@
+# `delete` was removed from the effect vocabulary: releasing a ref and
+# destroying work are separable, and only the first belongs to planr. A schema
+# still asking for it must fail rather than silently mean something else.
+kinds: [task]
+verbs:
+  - name: abandon
+    applies-to: [task]
+    to: abandoned
+    effect: delete

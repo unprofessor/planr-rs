@@ -1,0 +1,13 @@
+# A project may pin the canonical versioned URL instead of citing the alias.
+# Both forms are accepted; the alias is the recommended default because it does
+# not churn every repo on a compatible release.
+$schema: https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json
+kinds: [task]
+verbs:
+  - name: claim
+    applies-to: [task]
+    from: todo
+    to: in_progress
+    base: home
+    effect: create
+    worktree: create
