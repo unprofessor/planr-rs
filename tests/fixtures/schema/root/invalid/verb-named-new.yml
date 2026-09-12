@@ -1,0 +1,18 @@
+# `new` is reserved. Creation is fixed tooling rather than a verb, and it
+# writes `Planr-Verb: new` -- the record a bounded state read stops its
+# backwards walk at, and the only floor a ticket that has never transitioned
+# has. A verb of that name ends every walk at itself.
+#
+# It fails silently rather than loudly, which is why it is rejected at load:
+# the runner reads a verb's before and after states through the same bounded
+# walk, so even a stateless verb of this name would report itself as a
+# transition to the initial state.
+#
+# The `#commit` anchor still accepts `new` as a Planr-Verb -- that trailer is
+# what creation writes.
+kinds: [task]
+verbs:
+  - name: new
+    applies-to: [task]
+    to: todo
+    base: home

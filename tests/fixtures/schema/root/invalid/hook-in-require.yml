@@ -1,0 +1,6 @@
+# Gating stays pure and derivable: there is no hook escape hatch in `require`.
+kinds: [task]
+verbs:
+  - name: gate
+    applies-to: [task]
+    require: { hook: ./check.sh }

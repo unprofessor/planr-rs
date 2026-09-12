@@ -4,6 +4,209 @@
 
 ### Added
 
+- **A claimed ticket's branch answers for it, so its state no longer depends on
+  a clock.** Reading a ticket walked trunk and the ticket's branch as one
+  date-ordered union, and a union of two refs has no order to offer: cutting a
+  branch is what makes two lanes concurrent, so committer dates were arbitrating
+  between a worker's `submit` and a leader's trunk-lane declaration. Skew
+  between two machines flipped the answer, and under a bounded walk that is not
+  one wrong event among many -- it is the whole answer. The reader now picks one
+  ref by the authority rule: `plan/<kind>/<slug>` while that branch exists and
+  carries commits trunk cannot reach, trunk otherwise. A trunk-lane declaration
+  a live branch shadows is deferred rather than lost, because every integration
+  effect builds a merge commit descending from both lanes. `next board` applies
+  the same rule -- a fixed number of git processes whatever the backlog holds,
+  plus one `rev-list` per *claimed* ticket -- so it folds exactly the events
+  `next state` does; otherwise the board reports states a `from` gate would
+  refuse.
+
+- **`planr next check`** reports the histories the fold cannot answer for, and
+  exits non-zero. `new` refuses a slug that any reachable commit has created,
+  but that is all a creation-time check can do: two clones each creating the
+  same slug both pass legitimately, and their merge is *clean*, because archival
+  deleted the file on one side and a deletion and an addition do not conflict.
+  Five findings, over trunk and every `plan/` ref:
+
+  - `duplicate-genesis` -- two `new` records for one slug. A bounded walk floors
+    at whichever it meets first, so the ticket's state is clock-chosen.
+  - `severed` -- events with no reachable creation, from a graft or a rewrite.
+    The fold still answers for them, so the slug is neither free nor explicable.
+    Stated as *exactly* one genesis rather than *at most* one, because a `>= 2`
+    rule walks straight past this half.
+  - `divergent` -- declarations the commit graph cannot order that declare
+    *different* states, so committer date decides the ticket's state and another
+    machine can read it differently. Concurrency alone is not the fault: the
+    fold is last-`to`-wins, so two clones that both abandoned a ticket agree
+    whatever the order. What must agree is the maximal set under ancestry, which
+    is the set a backwards walk can land on. This is the ordering oracle a
+    differential test could never be -- a bounded and an unbounded walk read the
+    same stream in the same order and agree on the same wrong answer, so the
+    check asks git for reachability instead.
+    The ticket's `new` record is one of the contenders, because the walk stops
+    on it too: a lane cut *before* the creation commit puts a declaration beside
+    the genesis rather than below it, and the two then compete for the floor.
+    Left out, that history read `todo` from `next state`, `abandoned` from
+    `next board`, and sound from the check.
+  - `shadowed` -- the ref that answers for a ticket cannot reach a declaration
+    on another lane. Reported because a leader abandoning while a worker submits
+    is two people disagreeing about a ticket's fate, and exits zero because it
+    is the rule working rather than a broken repository.
+  - `unresolvable` -- a branch stands for the slug and its ticket will not
+    parse, so its kind is unknown and the kind is what names the branch. The
+    check says which ref answers or says it cannot tell; it never guesses trunk.
+
+  It reports and never repairs: every finding is a history that already exists,
+  and the remedies are history surgery, a workflow decision, or a conversation.
+  Like `new`, it refuses outright in a shallow clone rather than certify a
+  history it cannot see -- most of the findings are absence claims.
+
+- **`planr next state` is bounded, and says what it cost.** Reading a ticket's
+  state walked its whole reachable history and then discarded all but the last
+  state-changing event. The backwards scan now stops at that event: an event
+  denotes `const s` when its verb declares `to: s` and the identity otherwise,
+  so `const s . f = const s` annihilates everything earlier -- the absorption
+  lemma of `docs/semantics.md` section 4, not a heuristic. A state read costs
+  commits since the ticket last moved rather than commits since it existed, and
+  a ticket that has never moved stops at its own `new` commit, which is already
+  a record in the same stream. `new` is therefore a reserved verb name. The
+  output reports commits scanned alongside the state, because the whole point
+  of the change is a number that should be observable rather than asserted: on
+  a 2000-commit history whose ticket last moved at the tip, it reads 1 commit
+  instead of 2003.
+
+- **`planr next new` refuses a slug that has ever been used**, not merely one
+  that exists now. A ticket's file path is its primary key and the slug maps to
+  it one-to-one and permanently: archival deletes the file but does not release
+  the name. Reusing one made a single identifier name two tickets, so the new
+  ticket folded the archived one's events -- `next board` reported a ticket
+  created seconds earlier as `abandoned` while `next state` reported it as
+  `todo`, and every verb's `from` gate reads the second answer, so a terminal
+  ticket could be re-entered. The refusal names the commit that created the
+  slug and the verb that last declared anything about it.
+
+  The check asks the question the fold asks -- has any reachable commit written
+  `Planr-Verb: new` for this `Planr-Ticket` -- rather than the path-shaped
+  question of whether the ticket's file was ever added. Those look identical
+  and are not: renaming the plan directory (or exporting `PLANR_DIR`), purging
+  a path with `filter-branch` while every commit survives, or creating from a
+  shallow clone each moved the path without touching the trailers, and each
+  made a used slug look free. The cost is a full trailer walk -- linear in
+  history at roughly 2.4 microseconds per commit on a packed repository, and
+  unlike the path-limited check it cannot be accelerated by an index, because
+  changed-path filters answer questions about paths and this is a question about
+  commit messages. At 2000 commits that is about 2.7x the check it replaced. It
+  lands on `new`, once per ticket, and never on a read. `new` refuses outright
+  in a shallow clone rather than issue a reservation it cannot back.
+
+  A slug whose events are reachable while its creation is not -- a `git replace
+  --graft` over the creation commit, or a rewrite that drops it -- is refused
+  too, with a different message: the fold still answers for those events, so
+  reporting the slug free would hand them to the new ticket. That refusal says
+  the repository's history is broken rather than that the name is taken.
+
+  One case no check at creation time can cover: two lineages that each create
+  the same slug, whose merge is clean because archival deleted the file on one
+  side. That needs a check at integration, which is `planr next check`.
+
+- **`planr next new` validates the slug**, which it did not do at all. A slug
+  is both the ticket's filename and its identity in the event log, and
+  `Planr-Ticket` is read back trimmed -- so `new task "foo "` wrote
+  `.plan/tickets/foo .md` while declaring `Planr-Ticket: foo`, and two files
+  shared one identity. Acting on one then moved the other: `abandon "foo "`
+  reported `todo -> todo` because it could not see its own effect, the ticket
+  that actually went terminal was the one nobody had touched, and `board`
+  printed two rows with the same name. A trailing space from a shell paste is
+  enough, so this needed no adversary. Slugs must now match the published
+  schema's `^[a-z0-9][a-z0-9_-]*$`, and the refusal names the rule; the
+  pattern is pinned against the published document by a test, since it is now
+  written down in two places.
+
+- **`planr next new` refuses a slug that is alive on a branch the current
+  trunk cannot see.** The reservation walked one revision while every read
+  walks trunk unioned with the ticket's own `plan/<kind>/<slug>` ref, and
+  `board` walks trunk plus every `plan/*` -- so the check was asking about a
+  strict subset of what the reader answers for, and a slug could be unused to
+  one and live to the other. Reaching it took no rewrite and no second clone:
+  cut a release branch, create and claim a ticket on the mainline, then plan
+  against the release branch. The reservation now walks the same refs the fold
+  does, including every `plan/*` ref ending in the slug, so a stale branch
+  under a different kind counts too.
+
+- **`planr next new` bounds the slug's length.** The pattern says what survives
+  a commit trailer; it said nothing about what survives a filesystem. A slug of
+  253 characters or more passed validation, committed its genesis to trunk, and
+  only then failed writing `<slug>.md` -- leaving the identity in history, the
+  slug permanently taken, the working tree impossible to clean, and every later
+  `git clone` unable to check out at all. Slugs are now capped at 96 characters,
+  in the engine and in the published schema together, and the cap is checked
+  before anything is committed.
+
+- **A tag named after a ticket can no longer shadow its branch.**
+  `git rev-parse <name>` searches `refs/<name>`, then `refs/tags/<name>`, then
+  `refs/heads/<name>`, so the unqualified `plan/<kind>/<slug>` resolved a tag of
+  that name in preference to the ticket's branch. The verb runner then built on
+  the tag's tree -- `submit` could not find a `## Validation` section the branch
+  demonstrably had -- and reads followed the tag too, so the ticket froze in a
+  state no verb could advance. Ticket refs are now resolved fully qualified
+  everywhere, which also makes the reservation and the two readers compute the
+  same ref set by construction rather than by agreement.
+
+- **No verb reports failure for work it already did.** Reconciling the working
+  tree happens after the ref has moved, and under `merge` it sat between the
+  merge and the release of the ticket's branch -- so a read-only checkout left
+  trunk moved and the ticket `done` while the branch and its worktree leaked,
+  with no way to finish, because the only verb that releases the ref then
+  refused on its own `from` gate. A half-applied verb with no completion path
+  is worse than a dirty worktree. Every verb now reports the workspace failure
+  as a warning naming the `git restore` that fixes it, and completes. The
+  workspace is never history.
+
+- **A `planr next new` that cannot update the working tree no longer reports
+  failure for a ticket it created.** Reconciling this worktree happens after
+  the commit and the ref move, so any failure there -- a read-only checkout, a
+  permissions problem, a name the filesystem rejects -- announced an error for
+  an operation that had already succeeded, and invited a retry that was then
+  correctly refused by name. The ticket is reported as created, with a warning
+  naming the `git restore` that fixes the worktree. The workspace is never
+  history.
+
+- **Two concurrent `planr next new` calls can no longer both succeed.** The
+  slug reservation read trunk, then the tip was read again separately, and the
+  final compare-and-swap asserted the *second* read -- so a racer whose
+  reservation ran before the winner's ref move but whose tip read ran after it
+  landed on top and its swap succeeded. Both processes reported success, one
+  ticket file survived, and two genesis records existed for one slug. A
+  synchronised race never showed it, because four racers starting together all
+  read the same tip; staggering them across the window produced duplicates in
+  three of 276 pairs. The reservation is now evaluated against the same commit
+  the swap asserts, making creation a single atomic step, and the loser is told
+  the slug was taken concurrently instead of receiving a raw ref-lock error.
+
+- **A workflow may not declare a verb named `new`.** Creation is fixed tooling
+  rather than a verb, and it writes `Planr-Verb: new` -- the record a bounded
+  state read stops at, and the only floor a ticket that has never transitioned
+  has. A verb of that name ended every walk at itself, silently: the runner
+  reads a verb's before and after states through that same walk, so even a
+  stateless verb reported itself as a transition to the initial state. Rejected
+  at load by `planr` and by the published JSON Schema alike.
+
+- **Published schema for the typed-graph model**, identified by its canonical URL
+  `https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json` and kept
+  in-tree at the matching path so validation never needs the network.
+  Projects cite the alias `.../planr/v1/planr.schema.json`, which moves
+  forward with each compatible release; the canonical URL never moves, which
+  is why it is the document's `$id`. One JSON Schema 2020-12 document covers
+  all three artifacts: the root schema validates `.plan/workflow.yml`, the
+  `#ticket` anchor validates ticket frontmatter, and the `#commit` anchor
+  validates a commit's `Planr-*` trailer block. The `v1` in the URL is the
+  schema language's own version and is independent of planr's release
+  number -- planr is at 0.3.x and the language is at its first version.
+- **Schema validation in CI.** `cargo test` now meta-validates the schema
+  document against draft 2020-12, checks that its `$id` still agrees with the
+  path it is published at, confirms both anchors resolve, and runs a corpus of
+  29 accept/reject fixtures under `tests/fixtures/schema/`. No new CI job --
+  the existing `test` job covers it.
+
 - **`planr serve`** renders the backlog as linked HTML on a loopback web
   server: the board, a page per ticket, and the lint report. Wiki-links in a
   ticket body become navigation, and each ticket page carries the three
@@ -67,6 +270,61 @@
   checked out.
 
 ### Fixed
+
+- **A commit naming several tickets declares for each of them.** Git reads a
+  repeated `Planr-Ticket` trailer as a list, and planr joined the list into one
+  slug containing a NUL, which matched no ticket -- so the declaration applied to
+  none of them, silently. A commit with several `Planr-Verb` trailers declares
+  nothing, because it does not say which verb applies. planr itself writes one
+  of each; this concerns commits written by hand or by other tools.
+
+- **A ticket whose history was imported or grafted could report its initial
+  state forever.** The trailer walk passed `--date-order` only when it had two
+  refs to merge; the single-ref walk took git's default, which orders a queue by
+  committer date alone. A merge is where that parts company with ancestry --
+  both parents enter the frontier at once, so a back-dated declaration is
+  emitted *after* the commit it descends from. The backwards scan then met the
+  ticket's `new` record before the declarations that descend from it and floored
+  there, reporting `todo` for a ticket that had been abandoned. The bound is a
+  theorem about a sequence that respects the graph, so every walk now passes
+  `--date-order`, whose one added constraint is exactly the missing one: no
+  parent before all of its children.
+
+- **`PLANR_NEXT_ORACLE` parses its value instead of its presence.** The
+  unbounded state read is a diagnostic reached by tests; setting the variable
+  to `0`, `false`, or `off` used to turn it *on*, so anyone exporting it to
+  disable the oracle enabled it -- and being an environment variable it is
+  inherited by every child process and every CI shell, where it would silently
+  degrade `planr next state` to a full history walk. An unrecognized value is
+  now an error rather than a guess, and enabling it says so on stderr.
+
+- **A panicking `log_streaming` callback no longer leaks a `git` child.**
+  `std::process::Child` has no reaping `Drop`, so every early return reaped by
+  hand and a panic reaped not at all; forty panicking callbacks left forty
+  zombies. The child is now owned by a guard that kills and waits on unwind.
+  Harmless in a short-lived CLI, but the primitive's whole justification is
+  that the next caller will not check.
+
+- **A verb declaring `worktree: create` alongside `effect: merge` is now
+  rejected.** `base: own` proves the ticket's ref exists when the verb is
+  checked, but `merge` releases that ref as part of the effect -- so the
+  worktree attached to a branch that no longer existed, and the run reported
+  success. The rule is now stated over the post-state ("a ref that outlives the
+  effect") rather than as a prohibition on `base`, in both `src/next/workflow.rs`
+  and the published JSON Schema. Found by enumerating the
+  `base × effect × worktree` space while writing `docs/semantics.md`, not by
+  testing.
+- **`planr next do archive` could never run.** The verb is from-less and
+  declares `require: { self: { status: terminal } }`, but the absorbing rule
+  that stops a from-less verb firing on a finished ticket refused it on
+  exactly the tickets it exists for. A verb that states its own status
+  precondition now overrides the implicit rule.
+- **`planr next state` reads an archived ticket.** Folding needs the ticket's
+  kind to pick its sub-machine, and the kind lives in the file `archive`
+  deletes -- so enumeration survived archival but interpretation did not.
+  State now falls back to the last commit that still carried the file, and
+  only when the file is genuinely absent: a ticket that is present but
+  invalid still reports its own parse error.
 
 - **Links in a ticket body are styled like the rest of the page.** `planr
   serve` styled the slug links in a ticket's metadata and relations but left

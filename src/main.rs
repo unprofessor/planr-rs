@@ -17,6 +17,8 @@ mod git;
 mod lint;
 mod lock;
 mod new_cmd;
+#[cfg(feature = "next")]
+mod next;
 mod parse;
 mod review;
 #[cfg(feature = "serve")]
@@ -169,6 +171,46 @@ enum Command {
         kind: String,
         /// ticket slug
         slug: String,
+    },
+
+    /// The 0.4 typed-graph model: workflow-driven verbs, state derived from
+    /// commit events. Experimental -- the planr schema language is not yet pinned.
+    #[cfg(feature = "next")]
+    Next {
+        #[command(subcommand)]
+        command: NextCommand,
+    },
+}
+
+#[cfg(feature = "next")]
+#[derive(Subcommand)]
+enum NextCommand {
+    /// Create a ticket
+    //  (fixed tooling -- genesis is not a verb)
+    New {
+        kind: String,
+        slug: String,
+        title: String,
+        /// slug of the containing ticket
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    /// Fold a ticket's state from its commit events
+    State { slug: String },
+    /// Render each kind's derived lifecycle
+    Lifecycle { kind: Option<String> },
+    /// List every live ticket with its folded state
+    Board,
+    /// Check that every ticket's history still supports the fold: exactly one
+    /// reachable creation per slug, and a state the commit graph orders
+    Check,
+    /// Run a workflow-declared verb
+    Do {
+        verb: String,
+        slug: String,
+        /// message for $message in annotate bodies, or an edge $target
+        #[arg(default_value = "")]
+        message: String,
     },
 }
 
@@ -420,6 +462,51 @@ fn main() {
     let cwd = work_dir();
 
     match command {
+        // 0.4 runs from the repository root for the same reason 0.3 does: its
+        // plumbing resolves `.plan` and the trunk ref relative to the root, so
+        // a verb invoked from a subdirectory must not read a different backlog
+        // than the same verb invoked from the top.
+        #[cfg(feature = "next")]
+        Command::Next { command } => {
+            let ctx = match next::load_ctx(&cli.plan_dir, &cli.trunk) {
+                Ok(c) => c,
+                Err(e) => fail(&e),
+            };
+            // `check` reports a verdict rather than a value, so it exits
+            // non-zero on a fault the way a linter does -- the report still
+            // goes to stdout, because a CI job that fails must still be able to
+            // show what it found.
+            let mut faulted = false;
+            let out = match command {
+                NextCommand::Check => next::cmd_check(&ctx).map(|(report, f)| {
+                    faulted = f;
+                    report
+                }),
+                NextCommand::New {
+                    kind,
+                    slug,
+                    title,
+                    parent,
+                } => next::new_ticket(&ctx, &kind, &slug, &title, parent.as_deref()),
+                NextCommand::State { slug } => next::cmd_state(&ctx, &slug),
+                NextCommand::Lifecycle { kind } => next::cmd_lifecycle(&ctx, kind.as_deref()),
+                NextCommand::Board => next::cmd_board(&ctx),
+                NextCommand::Do {
+                    verb,
+                    slug,
+                    message,
+                } => next::verb::run(&ctx, &verb, &slug, &message),
+            };
+            match out {
+                Ok(s) => {
+                    println!("{s}");
+                    if faulted {
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => fail(&e),
+            }
+        }
         Command::Board { r#ref } => {
             let source = board::source_status_line(r#ref.as_deref());
             let read = match r#ref {

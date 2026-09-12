@@ -1,0 +1,14 @@
+# Object form: explicit adjacency, including a kind with two legal parents.
+kinds:
+  epic: { parents: [] }
+  story: { parents: [epic] }
+  task: { parents: [story] }
+  maintenance: { parents: [epic, story] }
+verbs:
+  - name: claim
+    applies-to: [task, maintenance]
+    from: todo
+    to: in_progress
+    base: home
+    effect: create
+    worktree: create

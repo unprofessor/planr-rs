@@ -1,0 +1,7 @@
+# Only a ticket's own ref can be integrated into its home.
+kinds: [task]
+verbs:
+  - name: close
+    applies-to: [task]
+    base: home
+    effect: merge

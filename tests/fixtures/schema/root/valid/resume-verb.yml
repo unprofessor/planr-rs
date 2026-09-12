@@ -1,0 +1,26 @@
+# Re-dispatching a yielded ticket: the verb wants a worktree but must NOT cut a
+# ref, because the ref already exists. `base: own` is what requires it, and on
+# a ticket in its initial state that combination is the definition of
+# "yielded" -- a fresh ticket has no ref, and a claimed one is not `todo`.
+kinds: [task]
+templates:
+  task: { initial: todo }
+verbs:
+  - name: claim
+    applies-to: [task]
+    from: todo
+    to: in_progress
+    base: home
+    effect: create
+    worktree: create
+  - name: yield
+    applies-to: [task]
+    from: in_progress
+    to: todo
+    base: own
+  - name: resume
+    applies-to: [task]
+    from: todo
+    to: in_progress
+    base: own
+    worktree: create

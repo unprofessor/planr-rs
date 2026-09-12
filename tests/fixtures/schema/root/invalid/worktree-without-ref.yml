@@ -1,0 +1,7 @@
+# A worktree belongs to a ticket's own ref, so creating one without cutting
+# that ref is incoherent.
+kinds: [task]
+verbs:
+  - name: claim
+    applies-to: [task]
+    worktree: create

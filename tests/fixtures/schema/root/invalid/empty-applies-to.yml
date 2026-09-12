@@ -1,0 +1,5 @@
+# A verb that applies to nothing is dead configuration.
+kinds: [task]
+verbs:
+  - name: claim
+    applies-to: []
