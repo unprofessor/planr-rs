@@ -1,0 +1,415 @@
+# planr next -- semantics of the verb language
+
+A companion to [the design](typed-graph-design.md), which says what the model
+is *for*. This says what it *means*.
+
+The point is the forcing function. Writing the rules down makes the case
+analysis exhaustive and the assumptions nameable, and that is where the value
+is -- not in mechanization.
+
+**The tables in sections 2 and 2.1 are the checked part.** The unit tests in
+`src/next/workflow.rs` do not restate them; they *parse them out of this file*
+and drive `Workflow::parse` against every cell. Editing a verdict here without
+changing the implementation fails the build, and vice versa -- verified by
+mutating each table and watching the suite go red. A test carrying its own copy
+of a table would agree with this document because the same hand wrote both,
+which is the self-consistency trap
+[round 4 recorded](typed-graph-design.md#method-findings).
+
+Everything outside those tables -- the transition relation, the algebra, the
+assumptions -- is prose, and prose is not checked. Treat section 3 onward as
+claims about the implementation that a reader must verify, not as guarantees.
+
+There is deliberately **no grammar** in the BNF sense. Serialization is
+delegated, not defined here: the syntax of whatever format carries a workflow
+belongs to that format, and an EBNF would describe the format rather than the
+language. What is underspecified is meaning.
+
+## 0. Notation
+
+A workflow declares a set of kinds `K` and a set of verbs `V`. For a verb `v`:
+
+| | |
+| --- | --- |
+| `base(v)` | `home` or `own` -- which ref the new tree is built from |
+| `effect(v)` | `advance`, `create`, `merge`, or `ticket-only` -- the one ref movement |
+| `wt(v)` | `create`, `remove`, or absent -- the workspace action |
+| `from(v)`, `to(v)` | optional state names |
+| `req(v)` | the guard: `self`, `sections`, `neighbors` |
+| `content(v)` | a list of tree transforms |
+
+For a ticket `t`: `own(t)` is the ref `plan/<kind>/<slug>`; `home` is trunk.
+
+## 1. Abstract syntax
+
+```
+  verb    ::= require x content x base x effect x worktree x (from?, to?)
+  base    ::= home | own
+  effect  ::= advance | create | merge | ticket-only
+  wt      ::= create | remove | (absent)
+```
+
+## 2. Well-formedness
+
+The judgment is `|- v wf`. The rules are stated **positively**: a verb is
+well-formed exactly when it matches one of five shapes.
+
+That framing is the substance of this section, not a presentational choice.
+The implementation originally stated the same constraints as four
+*prohibitions*, and prohibitions leave gaps by construction -- you cannot tell
+by looking whether the list is complete. Five positive rules close the world:
+anything not matching is ill-formed, and the partition below is then evident
+rather than hoped for.
+
+```
+   base(v) = home    effect(v) = advance
+   ------------------------------------- [W-Declare-Home]
+                |- v wf
+
+   base(v) = home    effect(v) = create
+   ------------------------------------- [W-Cut]
+                |- v wf
+
+   base(v) = home    effect(v) = ticket-only
+   ----------------------------------------- [W-Retire]
+                |- v wf
+
+   base(v) = own     effect(v) = advance
+   ------------------------------------- [W-Declare-Own]
+                |- v wf
+
+   base(v) = own     effect(v) = merge
+   ------------------------------------- [W-Integrate]
+                |- v wf
+```
+
+The `base x effect` space is 2 x 4 = 8, partitioned 5 / 3:
+
+| | `advance` | `create` | `merge` | `ticket-only` |
+| --- | --- | --- | --- | --- |
+| **`home`** | W-Declare-Home | W-Cut | *ill-formed* | W-Retire |
+| **`own`** | W-Declare-Own | *ill-formed* | W-Integrate | *ill-formed* |
+
+Every legal cell is inhabited in the reference workflow: `close(epic)`, `claim`,
+`abandon`, `submit`, `close(task)`. The language has no dead corners.
+
+### 2.1 The workspace side condition
+
+`wt(v) = create` attaches a worktree to `own(t)`, so `own(t)` must exist
+**after the step**, not merely before it:
+
+```
+   wt(v) = create    |- v wf by W-Cut or W-Declare-Own
+   ------------------------------------------------- [W-Worktree]
+                       |- v wf
+```
+
+W-Cut establishes `own(t)`; W-Declare-Own requires it and leaves it in place.
+The other three shapes each fail for a different reason, and the last is the
+one an enumeration finds and prose does not:
+
+| base | effect | `worktree: create` |
+| --- | --- | --- |
+| `home` | `create` | permitted -- W-Cut establishes the ref |
+| `own` | `advance` | permitted -- W-Declare-Own leaves it in place |
+| `home` | `advance` | rejected -- nothing to attach to |
+| `home` | `ticket-only` | rejected -- releases the ref |
+| `own` | `merge` | rejected -- validates the ref, then releases it |
+
+That last case is a precondition that is true when checked and false when used.
+Stated as a prohibition on `base` it is invisible, because `base(v) = own` is
+satisfied; stated as a requirement on the post-state it is immediate. Left
+unfixed it does not error -- it produces a worktree pointing at a deleted
+branch and reports success.
+
+`wt(v) = remove` carries no side condition. Note the redundancy it creates:
+`merge` and `ticket-only` already remove the worktree as part of the effect, so
+under W-Integrate and W-Retire the declaration says nothing. Two mechanisms for
+one concern; see [open questions](#8-open-questions-this-raises).
+
+### 2.2 The reserved name
+
+`new` is not available as a verb name:
+
+```
+             name(v) != new
+   ---------------------------------- [W-Reserved]
+                |- v wf
+```
+
+Creation is fixed tooling rather than a verb -- there is no prior node and no
+from-transition -- but it writes `Planr-Verb: new`, so the creation commit is a
+record in the same event stream every declaration lands in. Section 4's
+backwards bound stops at that record when a ticket has never transitioned, and
+it is the only floor such a ticket has.
+
+A verb of that name would end every walk at itself, and it would do so
+silently: the runner reads a verb's before and after states through the same
+bounded walk, so even a `to`-less verb would report itself as a transition to
+the initial state. The rule is enforced at load, in the implementation and in
+the published schema alike.
+
+### 2.3 Derived properties of a kind
+
+Three properties are computed from the verb set rather than declared:
+
+```
+  initial(k)  = the s with s in from(V_k) and s not in to(V_k)
+                -- or templates.k.initial when that set is empty
+  terminal(k) = { s : s in to(V_k) and s not in from(V_k) }
+  unit        = the k whose verbs include some v with wt(v) = create
+```
+
+`initial(k)` is a *derive-or-declare*: a rework cycle (`yield` returning a task
+to `todo`) makes `todo` both a `from` and a `to`, so nothing is derivable and
+the template supplies it.
+
+`unit` is currently under-specified in the implementation: it takes the first
+kind in the first matching verb's `applies-to`, so a `claim` applying to two
+kinds silently picks one. Under this presentation that is an **ambiguity to
+reject**, not a value to compute.
+
+## 3. Operational semantics of `do`
+
+A configuration is `(R, G, W)`: refs (name -> sha), the commit graph, and
+worktrees. The judgment is
+
+```
+   (R, G, W)  --v(t)-->  (R', G', W')
+```
+
+for verb `v` applied to ticket `t`, defined when every premise holds:
+
+1. **Resolve the base.** `b = home` if `base(v) = home`, else `own(t)`, which
+   must exist in `R`.
+2. **Guard, structural.** If `from(v)` is defined, `state(t) = from(v)`.
+   Otherwise `state(t)` is not in `terminal(kind(t))` -- unless `req(v)` names
+   `self.status`, in which case the explicit precondition governs and the
+   absorbing rule is not applied.
+3. **Guard, declared.** `req(v)` holds: `self` attributes, `sections`
+   existence, and `neighbors` universally over one direct edge.
+4. **Build.** `T' = content(v)` applied to the tree of `b`.
+5. **Commit.** `c = commit(T', parents = [b], msg)` where `msg` carries
+   `Planr-Verb: v` and `Planr-Ticket: t`. This extends `G` only; `c` is
+   unreferenced.
+6. **Move exactly one ref**, per `effect(v)`, as a compare-and-swap.
+7. **Act on the workspace**, per `wt(v)`. Touches `W` only.
+
+### 3.1 Properties
+
+**One ref moves.** Step 6 is the only mutation of `R`. `create` is a CAS
+against absence; `advance` a CAS against the observed base; `merge` and
+`ticket-only` move `home` and then release `own(t)`.
+
+**Atomicity is per-step, not per-command.** If the CAS in step 6 fails, `R` is
+unchanged and the step fails as a whole. `G` is append-only and may retain the
+commit from step 5 as garbage. This is the intended trade: an unreferenced
+commit is inert, and the alternative -- a lock -- does not survive concurrent
+agents in separate worktrees.
+
+**The workspace is never history.** Step 7 cannot fail the step, and nothing in
+`R` or `G` depends on it. A missing worktree is a workspace problem.
+
+## 4. Denotational semantics of the fold
+
+State is not stored. It is the meaning of a ticket's event sequence.
+
+Each event `e` denotes an endofunction on state:
+
+```
+   [[e]] = const s   when to(verb(e)) = s
+         = id        otherwise
+```
+
+and the fold is composition, applied to the initial state:
+
+```
+   fold(e_1 ... e_n) = ([[e_n]] o ... o [[e_1]]) (initial(kind))
+```
+
+**Lemma (absorption).** `const s o f = const s` for every `f`.
+
+**Corollary (last-write-wins).** `fold(e_1 ... e_n) = to(verb(e_k))` where `k`
+is the largest index with `to(verb(e_k))` defined, and `initial(kind)` if no
+such index exists.
+
+**Corollary (the backwards bound).** A right-to-left scan of the event sequence
+may stop at the first event with a defined `to`. Every earlier event is
+annihilated by absorption, so the prefix cannot affect the result.
+
+That last corollary is why a state read costs "commits since the ticket last
+moved" rather than "commits since the ticket existed" -- see
+[the follow-on probes](typed-graph-design.md#follow-on-probes-topology-bounds-and-gits-index).
+It is a consequence of the denotation, not a heuristic that happens to work.
+`new` carries no `to`, so it does not terminate the scan; a ticket that has
+never transitioned needs its creation commit as the floor.
+
+## 5. Where the read and write semantics diverge
+
+`from(v)` is enforced in step 2 of the transition relation and **ignored by the
+fold**. The fold reads only `to`.
+
+This is deliberate and worth stating rather than discovering. The consequence
+is that the language assigns a meaning to event sequences the runtime would
+never produce -- a rewritten history, a merge of two branches that both
+declared, or a synthesized migration chain. The fold reports a state for all of
+them instead of failing.
+
+The cost lands on migration: a `planr migrate` that seeds a classic ticket's event
+chain can emit a sequence no verb sequence could have produced, and nothing
+will object. If that is unacceptable, the check belongs in the migrator, not in
+the fold -- making the fold total is what makes it robust.
+
+## 6. Assumptions this rests on
+
+Named so that breaking one is a decision rather than an accident.
+
+1. **Transitions are state-independent.** Every verb's effect on state is a
+   constant or the identity. A verb whose `to` depended on the current state --
+   a retry counter, a conditional transition -- breaks absorption, and the
+   backwards bound of section 4 becomes *wrong*, not merely slower. This is the
+   most expensive assumption in the document and the least visible in the workflow file.
+2. **Event order comes from the commit graph, with committer date only as a
+   tiebreak -- and every use of the tiebreak is reported.**
+
+   The original form of this assumption was that order came from `--date-order`
+   over trunk and the `plan/` refs *together*, and that was the most expensive
+   sentence in the document. A union of two refs has no order to offer: cutting
+   a branch is what makes two lanes concurrent, so the walk was asking committer
+   clocks to arbitrate between a worker's `submit` and a leader's trunk-lane
+   declaration on every claimed ticket. Under a terminating backwards scan that
+   is not one wrong event among many; it is the whole answer.
+
+   **The authority rule** (design,
+   [§4.1](typed-graph-design.md#41-refs-actors-and-the-two-lanes-r7))
+   removes it. One ref answers for a ticket -- `own(t)` while that ref exists
+   and carries commits `home` cannot reach, `home` otherwise -- so the lanes
+   this model manufactures are no longer asked to be ordered by clock. A
+   trunk-lane declaration a live branch shadows is deferred, not lost: every
+   integration effect builds a merge commit descending from both lanes, so the
+   graph orders them as soon as the branch lands.
+
+   What remains is real but rare: one ref's history is still a DAG, so a merge
+   can put two declarations under a single tip with no ancestry between them.
+   There `--date-order` decides, and `planr next check` reports it. The test is
+   *disagreement*, not concurrency -- unordered declarations of the same state
+   fold identically either way, so what must agree is the maximal set under
+   ancestry, which is the set a backwards walk can land on. Every place the
+   clock still decides the answer is therefore visible rather than assumed.
+
+   Two smaller things this rests on:
+
+   * **`--date-order`, never git's default.** The default walks a queue ordered
+     by committer date alone, and a merge is where that parts company with
+     ancestry: both parents enter the frontier at once, so a back-dated
+     declaration is emitted *after* the commit it descends from. The backwards
+     scan then floors on a `new` record that is not the newest thing it should
+     have seen. `--date-order` adds the one constraint that fixes it -- no
+     parent before all of its children.
+   * **No differential test can catch a misordering.** A bounded and an
+     unbounded walk read the same stream in the same order, so they agree on the
+     same wrong answer. That is why the check asks git for reachability instead.
+3. **A ticket's events all descend from its creation commit**, which is what
+   makes that commit a valid floor. It rests on a slug never being reused: the
+   mapping from slug to file path is one-to-one and permanent, and `new`
+   refuses a slug that any reachable commit has ever declared a genesis for --
+   asked over the trailer stream, which is the same question the fold asks, so
+   the check cannot drift from the thing it protects. Archival deletes the file
+   and does not release the name.
+
+   **Identity is the trailer, so a slug has to survive it.** `Planr-Ticket` is
+   read back trimmed, so `foo`, `foo ` and ` foo` are one identity and three
+   filenames -- and a verb run against one of them silently moves another.
+   `new` therefore accepts only a slug matching the published `$defs/slug`
+   pattern, which is the enforceable form of the real rule: a slug must equal
+   what its own trailer reads back.
+
+   **Absence is proof only in a complete history.** A walk that runs out of
+   history reports "no such record" in exactly the way one that reached the
+   root does, so `new` refuses rather than guesses wherever it cannot tell the
+   two apart: in a shallow clone, and for a slug whose events are reachable
+   while its genesis is not -- a graft, or a rewrite that dropped the creation
+   commit. The second case is the sharper one, because the events are still
+   there for the fold to answer from: reporting that slug free would hand them
+   to a new ticket.
+
+   **The invariant, stated once.** Three consecutive review rounds each found a
+   different way for the reservation to ask a narrower question than the fold --
+   the *kind* of event it reacted to, the *ref set* it walked, and the lineages
+   it could reach. Each fix closed one dimension and the next round found
+   another, which is the signature of patching a check rather than stating a
+   rule. The rule is:
+
+   > every event for a slug descends from **exactly one** genesis reachable
+   > from the ref set the fold reads
+
+   Both guards are corollaries. `new` enforces it at creation against the refs
+   it can see; `planr next check` enforces it over the whole ref set once the
+   histories are in one repository. Anything that makes the fold read a wider
+   set makes both read that set too, rather than opening a fourth gap.
+
+   Note **exactly** one, not at most one. The two failures are mirror images: two
+   reachable geneses make the floor clock-determined, and zero with events
+   present make a used slug read as free. A `> 1` rule walks straight past the
+   second.
+
+   **Enforced at creation against one lineage, checked afterward across
+   several.** `new` can only consult a history it can reach, so two clones that
+   each create the same slug both pass legitimately, and their merge is *clean*
+   -- archival deleted the file on one side, so a deletion and an addition do
+   not conflict. Two genesis records then coexist, permanently and mutually
+   non-ancestral, and a bounded walk terminates at whichever one it meets first:
+   the floor becomes clock-determined, by assumption 2.
+
+   No creation-time check can cover that, because the second lineage does not
+   exist yet when the first one asks. `planr next check` covers it afterward,
+   which is the earliest point at which it is answerable -- and it is the same
+   mechanism assumption 2 needs, for the same reason: the fold being asked to
+   arbitrate between events git declines to order. It **reports and never
+   repairs**; the remedies are history surgery or a conversation between two
+   people, and neither is a tool's call.
+
+   Without any of this the assumption is simply false: a re-created slug folds
+   its dead predecessor's events, and a bounded read stopping at the newer
+   creation commit and an unbounded read reaching the older one disagree about
+   the same ticket.
+4. **The workflow in force is the one in the same history.** There is no
+   workflow trailer, deliberately: `.plan/workflow.yml` is tracked in the
+   repository it governs.
+
+   This says which workflow interprets an *event*, and nothing about what
+   happens when the workflow changes. A ticket is not anchored to a workflow
+   version at creation or at any other point, so its state is a string drawn
+   from the vocabulary in force at its last transition while every gate speaks
+   today's -- and a renamed state strands the tickets that still carry the old
+   name. The implementation is currently immune by being wrong in the other
+   direction: it folds every event through one working-tree workflow, so
+   renames cost nothing and a change of *meaning* is silently retroactive.
+   Closing the gap needs migration, which is
+   [not yet designed](typed-graph-design.md#workflow-evolution-is-not-yet-designed).
+
+   *Workflow* means this project's `.plan/workflow.yml`; *planr schema* means
+   only planr's published validator, `planr.schema.json`. They version
+   independently; see
+   [the note](typed-graph-design.md#the-planr-schema-and-the-workflow).
+5. **Trailers survive.** Events are attributable because commit messages are
+   immutable; a history rewrite that drops trailers drops events.
+
+## 7. What this does not cover
+
+The textual semantics of the content transforms (`annotate`, `edge`, `remove`);
+merge conflict resolution; concurrency beyond the single-ref CAS; and the
+filesystem state of worktrees. These are mechanism, and the design document
+describes them.
+
+## 8. Open questions this raises
+
+- **The `worktree` axis is not really an axis.** `merge` and `ticket-only`
+  remove worktrees inside the effect, while `wt(v) = remove` does it
+  explicitly. One concern, two mechanisms. Either the effect should not touch
+  the workspace, or `remove` should not be declarable.
+- **`unit` should reject ambiguity** rather than resolve it by position.
+- **Is `advance` on `home` with no content meaningful?** It is well-formed by
+  W-Declare-Home and produces an empty commit whose entire payload is its
+  trailers. That is the intended design, but it is also what forfeits git's
+  changed-path filters for enumeration.

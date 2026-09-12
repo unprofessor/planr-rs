@@ -20,11 +20,18 @@ strip = true
 # builds the CLI alone, without tiny_http or pulldown-cmark -- keep the cfgs
 # tight enough that it still compiles, which the CI `check-no-default` job is
 # there to prove.
+#
+# `next` is the typed-graph model behind `planr next`, on by default while it is being
+# experimented with so it stays compiled and tested. It is reached only
+# through `planr next`, so the classic commands are unchanged either way; drop it from
+# `default` to build a release without the experiment.
 [features]
-default = ["serve"]
+default = ["serve", "next"]
 serve = ["dep:tiny_http", "dep:pulldown-cmark"]
+next = []
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde_yaml = "0.9"
 regex = "1"
@@ -43,6 +50,14 @@ pulldown-cmark = { version = "0.13", optional = true, default-features = false, 
 [build-dependencies]
 # semvertag-shell -- derive a SemVer version from git describe at build time
 semvertag-shell = "0.2"
+
+[[bench]]
+# harness = false rather than criterion: the setup builds a git repo with
+# hundreds of commits, so the workload is expensive-setup / few-iterations,
+# which criterion's sampling model is the wrong shape for. This also keeps
+# the dev-dependency tree unchanged.
+name = "board_scaling"
+harness = false
 
 [dev-dependencies]
 # assert_cmd & tempfile -- end-to-end CLI tests in throwaway git repos
