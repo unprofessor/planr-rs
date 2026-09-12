@@ -5,7 +5,7 @@
 ### Added
 
 - **The planr schema, v1.** `schemas/planr/v1/1.0.0/planr.schema.json` is a
-  JSON Schema document describing the 0.4 workflow file
+  JSON Schema document describing the workflow file
   (`.plan/workflow.yml`), ticket frontmatter, and planr's commit trailers.
   `cargo test` validates it, a reference workflow, and a fixture corpus. It
   changes nothing about how planr runs today.
