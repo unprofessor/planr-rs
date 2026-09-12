@@ -1,4 +1,4 @@
-//! End-to-end suite for `planr next` -- the 0.4 typed-graph spike.
+//! End-to-end suite for `planr next` -- the typed-graph model.
 //!
 //! The whole point is that no ticket file ever carries a `status`. Every
 //! assertion about state here is an assertion about a fold over commit

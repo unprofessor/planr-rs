@@ -4,11 +4,11 @@
 
 ### Added
 
-- **`planr next`, an experimental 0.4 model**, on by default behind the `next`
+- **`planr next`, an experimental typed-graph model**, on by default behind the `next`
   cargo feature. Tickets live in `.plan/tickets/<slug>.md`, their kinds and
   verbs come from `.plan/workflow.yml`, and a ticket's state is read from the
   commits that declare it rather than stored in the file. Commands: `new`,
-  `state`, `board`, `lifecycle`, and `do <verb>`. Every 0.3 command is
+  `state`, `board`, `lifecycle`, and `do <verb>`. Every classic command is
   unchanged.
 
 - **`planr next check`** reports ticket histories the 0.4 model cannot read
@@ -18,7 +18,7 @@
   repairs.
 
 - **The planr schema, v1.** `schemas/planr/v1/1.0.0/planr.schema.json` is a
-  JSON Schema document describing the 0.4 workflow file
+  JSON Schema document describing the workflow file
   (`.plan/workflow.yml`), ticket frontmatter, and planr's commit trailers.
   `cargo test` validates it, a reference workflow, and a fixture corpus. It
   changes nothing about how planr runs today.

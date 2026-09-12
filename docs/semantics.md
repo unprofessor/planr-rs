@@ -1,4 +1,4 @@
-# planr 0.4 -- semantics of the verb language
+# planr next -- semantics of the verb language
 
 A companion to [the design](typed-graph-design.md), which says what the model
 is *for*. This says what it *means*.
@@ -255,7 +255,7 @@ never produce -- a rewritten history, a merge of two branches that both
 declared, or a synthesized migration chain. The fold reports a state for all of
 them instead of failing.
 
-The cost lands on migration: a `planr migrate` that seeds a 0.3 ticket's event
+The cost lands on migration: a `planr migrate` that seeds a classic ticket's event
 chain can emit a sequence no verb sequence could have produced, and nothing
 will object. If that is unacceptable, the check belongs in the migrator, not in
 the fold -- making the fold total is what makes it robust.

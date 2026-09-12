@@ -173,7 +173,7 @@ enum Command {
         slug: String,
     },
 
-    /// The 0.4 typed-graph model: workflow-driven verbs, state derived from
+    /// The typed-graph model: workflow-driven verbs, state derived from
     /// commit events. Experimental -- the planr schema language is not yet pinned.
     #[cfg(feature = "next")]
     Next {
@@ -462,7 +462,7 @@ fn main() {
     let cwd = work_dir();
 
     match command {
-        // 0.4 runs from the repository root for the same reason 0.3 does: its
+        // `next` runs from the repository root for the same reason the classic commands do: its
         // plumbing resolves `.plan` and the trunk ref relative to the root, so
         // a verb invoked from a subdirectory must not read a different backlog
         // than the same verb invoked from the top.

@@ -664,7 +664,7 @@ pub fn merge_ticket_only(
 ///
 /// Deliberately not `crate::git::worktree_add`: that helper omits the branch
 /// argument when the branch already exists, which makes git invent a new
-/// branch named after the path. 0.3 never hits that path because it creates
+/// branch named after the path. The classic commands never hit it because they create
 /// branch and worktree together; here the ref is created first, by design.
 pub fn worktree_add(path: &str, branch: &str) -> Result<(), String> {
     run(&["worktree", "add", path, branch]).map(|_| ())

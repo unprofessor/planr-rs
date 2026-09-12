@@ -598,7 +598,7 @@ fn an_overlong_slug_is_refused_before_anything_is_committed() {
 
 #[test]
 fn a_relative_plan_dir_names_the_same_backlog_from_any_directory() {
-    // 0.4's commands run behind `enter_repo_root()`, the same as 0.3's, so a
+    // `next`'s commands run behind `enter_repo_root()`, the same as the classic ones, so a
     // relative `--plan-dir` resolves from the repository root rather than the
     // caller's directory. Every other test passes an absolute path and so
     // could not tell the difference -- but the point of entering the root is

@@ -21,9 +21,9 @@ strip = true
 # tight enough that it still compiles, which the CI `check-no-default` job is
 # there to prove.
 #
-# `next` is the 0.4 typed-graph model, on by default while it is being
+# `next` is the typed-graph model behind `planr next`, on by default while it is being
 # experimented with so it stays compiled and tested. It is reached only
-# through `planr next`, so 0.3's surface is unchanged either way; drop it from
+# through `planr next`, so the classic commands are unchanged either way; drop it from
 # `default` to build a release without the experiment.
 [features]
 default = ["serve", "next"]
