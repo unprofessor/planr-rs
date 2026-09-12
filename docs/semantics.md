@@ -20,8 +20,9 @@ Everything outside those tables -- the transition relation, the algebra, the
 assumptions -- is prose, and prose is not checked. Treat section 3 onward as
 claims about the implementation that a reader must verify, not as guarantees.
 
-There is deliberately **no grammar** in the BNF sense. The surface syntax is
-YAML and is given; an EBNF would describe a serialization format, not the
+There is deliberately **no grammar** in the BNF sense. Serialization is
+delegated, not defined here: the syntax of whatever format carries a workflow
+belongs to that format, and an EBNF would describe the format rather than the
 language. What is underspecified is meaning.
 
 ## 0. Notation
@@ -267,7 +268,7 @@ Named so that breaking one is a decision rather than an accident.
    constant or the identity. A verb whose `to` depended on the current state --
    a retry counter, a conditional transition -- breaks absorption, and the
    backwards bound of section 4 becomes *wrong*, not merely slower. This is the
-   most expensive assumption in the document and the least visible in the YAML.
+   most expensive assumption in the document and the least visible in the workflow file.
 2. **Event order comes from the commit graph, with committer date only as a
    tiebreak -- and every use of the tiebreak is reported.**
 
