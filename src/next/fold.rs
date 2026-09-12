@@ -1,4 +1,4 @@
-//! Deriving state from the schema and a ticket's events.
+//! Deriving state from the workflow and a ticket's events.
 //!
 //! Nothing here reads a `status` field, because none exists. Three things are
 //! derived: the initial state, the terminal set, and a ticket's current state.
@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use super::events::Event;
-use super::schema::Schema;
+use super::workflow::Workflow;
 
 /// The initial state.
 ///
@@ -21,14 +21,18 @@ use super::schema::Schema;
 /// So: derive when unambiguous, and require `templates.<kind>.initial` when
 /// not. The common case stays declaration-free and the ambiguous case fails
 /// with the fix in the message.
-pub fn initial_state(schema: &Schema, kind: &str) -> Result<String, String> {
-    if let Some(declared) = schema.templates.get(kind).and_then(|t| t.initial.as_ref()) {
+pub fn initial_state(workflow: &Workflow, kind: &str) -> Result<String, String> {
+    if let Some(declared) = workflow
+        .templates
+        .get(kind)
+        .and_then(|t| t.initial.as_ref())
+    {
         return Ok(declared.clone());
     }
 
     let mut froms = BTreeSet::new();
     let mut tos = BTreeSet::new();
-    for verb in schema.verbs_for(kind) {
+    for verb in workflow.verbs_for(kind) {
         if let Some(f) = &verb.from {
             froms.insert(f.clone());
         }
@@ -53,10 +57,10 @@ pub fn initial_state(schema: &Schema, kind: &str) -> Result<String, String> {
 /// Terminal states, derived by stratification: pass one considers only
 /// explicit-`from` transitions, so a `from`-less verb (abandon) can never
 /// contribute to the terminal set -- it only consumes it.
-pub fn terminal_states(schema: &Schema, kind: &str) -> BTreeSet<String> {
+pub fn terminal_states(workflow: &Workflow, kind: &str) -> BTreeSet<String> {
     let mut all = BTreeSet::new();
     let mut has_exit = BTreeSet::new();
-    for verb in schema.verbs_for(kind) {
+    for verb in workflow.verbs_for(kind) {
         if let Some(f) = &verb.from {
             all.insert(f.clone());
             has_exit.insert(f.clone());
@@ -71,10 +75,10 @@ pub fn terminal_states(schema: &Schema, kind: &str) -> BTreeSet<String> {
 /// A ticket's state: the `to` of its most recent declaration, seeded by the
 /// derived initial state. Events that name no verb in this kind's machine are
 /// skipped rather than guessed at.
-pub fn fold_state(schema: &Schema, kind: &str, events: &[Event]) -> Result<String, String> {
-    let mut state = initial_state(schema, kind)?;
+pub fn fold_state(workflow: &Workflow, kind: &str, events: &[Event]) -> Result<String, String> {
+    let mut state = initial_state(workflow, kind)?;
     for event in events {
-        let Some(verb) = schema.verb(&event.verb, kind) else {
+        let Some(verb) = workflow.verb(&event.verb, kind) else {
             continue;
         };
         if let Some(to) = &verb.to {
@@ -86,9 +90,9 @@ pub fn fold_state(schema: &Schema, kind: &str, events: &[Event]) -> Result<Strin
 
 /// Render a kind's derived sub-machine as text, so it can be matched against
 /// intent by inspection rather than trusted.
-pub fn render_lifecycle(schema: &Schema, kind: &str) -> Result<String, String> {
-    let initial = initial_state(schema, kind)?;
-    let terminal = terminal_states(schema, kind);
+pub fn render_lifecycle(workflow: &Workflow, kind: &str) -> Result<String, String> {
+    let initial = initial_state(workflow, kind)?;
+    let terminal = terminal_states(workflow, kind);
     let mut out = String::new();
 
     out.push_str(&format!("lifecycle for kind '{kind}'\n"));
@@ -107,7 +111,7 @@ pub fn render_lifecycle(schema: &Schema, kind: &str) -> Result<String, String> {
 
     let non_terminal: BTreeSet<String> = {
         let mut all = BTreeSet::new();
-        for verb in schema.verbs_for(kind) {
+        for verb in workflow.verbs_for(kind) {
             if let Some(f) = &verb.from {
                 all.insert(f.clone());
             }
@@ -118,7 +122,7 @@ pub fn render_lifecycle(schema: &Schema, kind: &str) -> Result<String, String> {
         all.difference(&terminal).cloned().collect()
     };
 
-    for verb in schema.verbs_for(kind) {
+    for verb in workflow.verbs_for(kind) {
         let Some(to) = &verb.to else {
             continue;
         };
@@ -162,7 +166,7 @@ pub fn render_lifecycle(schema: &Schema, kind: &str) -> Result<String, String> {
 
     // Verbs that change no state still belong in the picture -- they are
     // capability, and a board lists available actions from exactly this set.
-    let stateless: Vec<&str> = schema
+    let stateless: Vec<&str> = workflow
         .verbs_for(kind)
         .filter(|v| v.to.is_none())
         .map(|v| v.name.as_str())

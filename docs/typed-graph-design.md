@@ -15,11 +15,18 @@
 > behind the `next` cargo feature (`src/next/**`); it is reference material for
 > what the model costs in practice, not a foundation.
 >
+> **Two documents, two names.** The *workflow* is a project's
+> `.plan/workflow.yml` -- its kinds, verbs, and templates. The *planr schema* is
+> planr's published validator for workflows, `planr.schema.json`. Sections
+> written before the names were separated say "schema" for both; read it as
+> *workflow* unless the text says *published* or cites the JSON document. See
+> [the note](#the-planr-schema-and-the-workflow).
+>
 > This document says what the model is **for**.
 > [`semantics.md`](semantics.md) says what it **means** -- the well-formedness
 > rules for a verb, the transition relation for `do`, and the algebra that
 > makes state a fold. Read it before changing `validate()` or the effect
-> vocabulary; the rules there are enforced in `src/next/schema.rs` and pinned
+> vocabulary; the rules there are enforced in `src/next/workflow.rs` and pinned
 > by a test that enumerates the whole `base × effect × worktree` space.
 >
 > This captures the reasoning and decisions from the 0.4 brainstorm so they
@@ -656,10 +663,10 @@ declared.
 
 **There is deliberately no schema trailer.** An earlier draft proposed recording
 a schema identifier per event so a later schema edit could not silently
-reinterpret history. It is unnecessary: `.plan/schema.yml` is tracked in the same
+reinterpret history. It is unnecessary: `.plan/workflow.yml` is tracked in the same
 history, so every event commit's tree already carries the schema in force when
-that event was declared — `git show <event>:.plan/schema.yml`, with
-`git log -- .plan/schema.yml` giving the timeline so the lookup only repeats when
+that event was declared — `git show <event>:.plan/workflow.yml`, with
+`git log -- .plan/workflow.yml` giving the timeline so the lookup only repeats when
 the schema actually changed. Per-event granularity, zero bytes, and it cannot
 drift from the thing it describes. It also gets the two-lane semantics right for
 free: a task branch's events are interpreted under the schema as of the branch
@@ -669,7 +676,7 @@ on trunk does not retroactively rewrite what the worker meant.
 **The schema language itself is versioned by URL**, not by hash:
 
 ```yaml
-# .plan/schema.yml
+# .plan/workflow.yml
 $schema: https://schemas.columnzero.com/planr/v1/planr.schema.json
 ```
 
@@ -687,7 +694,7 @@ different schema. The URL is a stable, dereferenceable identity with room for
 compatible evolution; the registry entry carries the sha256 separately, which is
 the right split, since identity wants stability across cosmetic edits and
 integrity wants byte-exactness. The document is a JSON Schema 2020-12 file whose
-root validates `.plan/schema.yml`, with `#ticket` and `#commit` anchors for
+root validates `.plan/workflow.yml`, with `#ticket` and `#commit` anchors for
 frontmatter and the trailer block, so it is a *validator* and not merely a label.
 It ships in-tree at `schemas/planr/v1/1.0.0/planr.schema.json`: **planr never
 dereferences it at runtime**, so the tool works offline, air-gapped, and in CI.
@@ -1164,7 +1171,7 @@ It remains disposable and rebuildable from history — §2's "never authoritativ
 survives intact — but rebuild cost stops being trivial, so it should be sized
 before the engine is committed to. Mitigating factor: the events for a live
 ticket are bounded by its own short history, and the schema timeline is one
-`git log -- .plan/schema.yml` walk shared across every ticket.
+`git log -- .plan/workflow.yml` walk shared across every ticket.
 
 **Round 4 sized it, and the live index does not need persisting.** The
 [event bound](#scaling-analysed-and-then-measured) makes a state read cost
@@ -1257,7 +1264,7 @@ known boundary.
    ownership; all edges are one mechanism differentiated by a semantics tag; a
    new axis is a name + tag. Hook contract nailed in §3.9.
 6. ~~Schema location & loading~~ — **resolved** (§3.5). The schema is
-   `.plan/schema.yml`, tracked in the same history as the events, declaring its
+   `.plan/workflow.yml`, tracked in the same history as the events, declaring its
    language by URL (`$schema: https://schemas.columnzero.com/planr/v1/planr.schema.json`).
    Every agent reads the same schema because they read the same *commit*; the
    published document is a JSON Schema 2020-12 validator shipped in-tree and
@@ -1296,32 +1303,32 @@ known boundary.
 12. **Migration seed events** — the exact trailer shape `planr migrate` writes to
     seed a 0.3 ticket's event chain (§7), and whether a seed is one commit per
     ticket or one commit for the whole backlog.
-13. **Schema evolution and ticket migration** -- see
-    [the note below](#schema-evolution-is-not-yet-designed).
-14. **"Schema" names two different documents** -- see
-    [the note below](#schema-names-two-documents).
+13. **Workflow evolution and ticket migration** -- see
+    [the note below](#workflow-evolution-is-not-yet-designed).
+14. ~~**"Schema" names two different documents**~~ -- **resolved** by naming
+    them apart; see [the note below](#the-planr-schema-and-the-workflow).
 
-### Schema evolution is not yet designed
+### Workflow evolution is not yet designed
 
 [§3.5](#35-primitives--content-transforms-and-ref-effects) settles where the
-schema *lives* and how an event finds it: there is no schema trailer, because
-`.plan/schema.yml` is tracked in the same history, so every event commit's tree
-already carries the schema in force when that event was declared. Per-event
+workflow *lives* and how an event finds it: there is no workflow trailer, because
+`.plan/workflow.yml` is tracked in the same history, so every event commit's tree
+already carries the workflow in force when that event was declared. Per-event
 granularity, zero bytes, cannot drift.
 
-That is a complete answer to *which schema interprets an event* and no answer at
-all to *what happens when the schema changes*. *Tickets are not anchored to a
-schema version -- not at creation, not at all.* Each of a ticket's events is
+That is a complete answer to *which workflow interprets an event* and no answer at
+all to *what happens when the workflow changes*. *Tickets are not anchored to a
+workflow version -- not at creation, not at all.* Each of a ticket's events is
 resolved independently, which makes the **history** faithful and leaves the
 **present** undefined: a ticket's state is a string drawn from the vocabulary of
-whichever schema was in force at its last transition, while every present-tense
+whichever workflow was in force at its last transition, while every present-tense
 operation -- `from` gates, `terminal`, `board` -- speaks today's vocabulary.
 Nothing bridges them.
 
 The failure is concrete. Rename a task's `done` state to `complete`:
 
 - a ticket closed before the rename folds to `done`, faithfully;
-- `terminal(task)` under the new schema is `{complete, abandoned}`, which does
+- `terminal(task)` under the new workflow is `{complete, abandoned}`, which does
   not contain `done`;
 - `archive` requires `self: {status: terminal}`, so that ticket can never be
   archived;
@@ -1331,20 +1338,20 @@ The failure is concrete. Rename a task's `done` state to `complete`:
   [the slug reservation exists to prevent](#follow-on-probes-topology-bounds-and-gits-index).
 
 **The implementation is accidentally immune, which is why this has stayed
-hidden.** `Schema::load` reads one schema from the working tree and folds every
-event through it, so an old `close` event is looked up in *today's* schema and
+hidden.** `Workflow::load` reads one workflow from the working tree and folds every
+event through it, so an old `close` event is looked up in *today's* workflow and
 yields `complete`. Renames cost nothing and everything stays self-consistent.
 The price is the mirror image: a change of *meaning* rather than of name is
 silently retroactive, rewriting what every historical ticket did, with no record
 that it happened. The working tree is also the wrong source -- an uncommitted
-schema edit already governs the fold, so a dirty checkout and a clean one
+workflow edit already governs the fold, so a dirty checkout and a clean one
 disagree about the board.
 
 Three policies, none of which is sufficient alone:
 
 | policy | history | present |
 | --- | --- | --- |
-| one current schema (what the code does) | silently rewritten | coherent |
+| one current workflow (what the code does) | silently rewritten | coherent |
 | per event (what §3.5 specifies) | faithful | vocabulary fractures; gates strand tickets |
 | per ticket, fixed at creation | faithful | frozen -- a verb added later never reaches an old ticket |
 
@@ -1352,7 +1359,7 @@ Three policies, none of which is sufficient alone:
 per-event faithfulness *and* a coherent present: old events keep their old
 meaning, and an explicit event moves the ticket into the new vocabulary at a
 named point in history. Item 12 above contemplates migration only for the
-0.3 -> 0.4 data shape; schema-version to schema-version is unspecified.
+0.3 -> 0.4 data shape; workflow version to workflow version is unspecified.
 
 **A migration event should be a trailer, not frontmatter.** Frontmatter is
 disqualified by the model's own rule -- it carries only what git cannot derive,
@@ -1366,7 +1373,7 @@ remove. A trailer earns three things instead:
   needs no new concept; a migration is an ordinary event.
 - **It terminates the bounded walk by the existing rule**, so unlike `new` it
   needs no reserved name and no special case.
-- **It self-dates.** The migrate commit's own tree carries the new schema, so
+- **It self-dates.** The migrate commit's own tree carries the new workflow, so
   the event resolves under it by the same rule as every other event.
 
 What remains genuinely open:
@@ -1377,44 +1384,44 @@ What remains genuinely open:
   whole field as a single slug, so two `Planr-Ticket` trailers today would
   produce a slug containing a NUL. Unreachable now; decide the commit shape
   before it is not.
-- **Does the schema need a content version?** There is none today: `$schema` is
+- **Does the workflow need a content version?** There is none today: `$schema` is
   the published validator's URL, not a version of this project's rules. A
   migration has nothing to compare against, and no way to say which migration it
   is.
 - **What declares the mapping?** `done -> complete` has to be written somewhere
-  a tool can read, which is a new schema key and therefore a change to the
-  published document.
+  a tool can read, which is a new workflow key and therefore a change to the
+  planr schema.
 - **Is migration ever automatic?** A rename could in principle be inferred; a
   change of meaning cannot. Inferring the first and not the second is a sharper
   distinction than it looks.
 
-### "Schema" names two documents
+### The planr schema and the workflow
 
-The word is used for two different artifacts with different owners, different
-lifecycles, and different migration stories. They are currently distinguished
-only by adjective ("the published schema" versus "the schema"), and the code
-does not distinguish them at all -- `src/next/schema.rs` is the loader for one
-and the test-time validator against the other.
+"Schema" named two artifacts with different owners, lifecycles, and migration
+stories. They have different names now:
 
-| | **planr schema** | **ticket schema** |
+| | **planr schema** | **workflow** |
 | --- | --- | --- |
-| what | a JSON Schema 2020-12 document defining what a valid ticket schema looks like | `kinds`, `verbs`, `templates` -- the lifecycle this backlog runs |
-| file | `planr.schema.json`, shipped in-tree | `.plan/schema.yml` |
+| what | a JSON Schema 2020-12 document defining what a valid workflow looks like | `kinds`, `verbs`, `templates` -- the lifecycle this backlog runs |
+| file | `planr.schema.json`, shipped in-tree | `.plan/workflow.yml` |
+| code | `tests/schema.rs` validates against it | `src/next/workflow.rs` loads it as `Workflow` |
 | owner | the planr project | the project using planr |
 | versioned by | planr releases, via the `$schema` URL (`.../planr/v1/planr.schema.json`) | the project's own git history |
-| changes when | the verb language gains or loses a feature | a team changes its own workflow |
-| migration means | every backlog's `.plan/schema.yml` may need rewriting | one backlog's tickets may need remapping |
+| changes when | the verb language gains or loses a feature | a team changes how it works |
+| migration means | every backlog's `.plan/workflow.yml` may need rewriting | one backlog's tickets may need remapping |
 
-Both senses are live in this document and in
-[the semantics](semantics.md#0-notation). Everything under "Schema evolution"
-above concerns the **ticket schema** only; a change to the **planr schema** is a
-tool-upgrade problem, and the two can move independently -- a project can sit on
-an old verb language indefinitely, and a planr release must not silently
-reinterpret a backlog that has not opted in.
+[Workflow evolution](#workflow-evolution-is-not-yet-designed) concerns the
+**workflow** only. A change to the **planr schema** is a tool-upgrade problem,
+and the two move independently: a project can sit on an old verb language
+indefinitely, and a planr release must not silently reinterpret a backlog that
+has not opted in.
 
-Naming them is cheap and should happen before either migration story is built,
-because the two stories will otherwise be written in the same words. The terms
-used in this section are one candidate; `language` and `lifecycle` are another.
+`config` was the other candidate for the file's name, and it loses on meaning: a
+config file invites edits made without regard for consequences, and editing
+this one changes what a backlog's history means.
+
+Older sections of this document say "schema" for both. Read it as *workflow*
+unless the text says *published* or cites `planr.schema.json`.
 
 ## 9. Fresh-eyes review findings (round 1, 2026-08-21)
 
@@ -1924,7 +1931,7 @@ present while a `resume` elsewhere has to make one.
 - **A contract suite that validates only its own fixtures is self-consistent,
   not correct.** `tests/schema.rs` validated fixtures, which are authored to
   match the published schema and so can never disagree with it. Nothing
-  validated `.plan/schema.yml`, the file the tool actually loads — and three
+  validated `.plan/workflow.yml`, the file the tool actually loads — and three
   keys drifted across two renames with every test green. Fixed by validating the
   reference schema itself; mutation-tested by restoring the old effect enum.
 - **A benchmark reporting only total time cannot detect the regression it

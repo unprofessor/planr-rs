@@ -173,8 +173,8 @@ enum Command {
         slug: String,
     },
 
-    /// The 0.4 typed-graph model: schema-driven verbs, state derived from
-    /// commit events. Experimental -- the schema is not yet pinned.
+    /// The 0.4 typed-graph model: workflow-driven verbs, state derived from
+    /// commit events. Experimental -- the planr schema language is not yet pinned.
     #[cfg(feature = "next")]
     Next {
         #[command(subcommand)]
@@ -204,7 +204,7 @@ enum NextCommand {
     /// Check that every ticket's history still supports the fold: exactly one
     /// reachable creation per slug, and a state the commit graph orders
     Check,
-    /// Run a schema-declared verb
+    /// Run a workflow-declared verb
     Do {
         verb: String,
         slug: String,

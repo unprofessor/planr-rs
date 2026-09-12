@@ -1,8 +1,8 @@
-//! Schema loading for the 0.4 typed-graph model.
+//! Workflow loading for the 0.4 typed-graph model.
 //!
-//! The schema is data: kinds are a containment spine, verbs are declarations
+//! The workflow is data: kinds are a containment spine, verbs are declarations
 //! with a base/content/effect shape. Nothing here is pinned to a published
-//! URL yet -- the in-tree schema is deliberately unadvertised while the model
+//! URL yet -- the in-tree workflow is deliberately unadvertised while the model
 //! is still being experimented with.
 
 use std::collections::BTreeMap;
@@ -161,7 +161,7 @@ struct KindEntry {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SchemaFile {
+struct WorkflowFile {
     kinds: KindsSpec,
     verbs: Vec<Verb>,
     #[serde(default = "default_worktrees")]
@@ -200,24 +200,24 @@ pub struct Kind {
 }
 
 #[derive(Debug, Clone)]
-pub struct Schema {
+pub struct Workflow {
     pub kinds: Vec<Kind>,
     pub verbs: Vec<Verb>,
     pub worktrees: String,
     pub templates: BTreeMap<String, Template>,
 }
 
-impl Schema {
-    pub fn load(plan_dir: &Path) -> Result<Schema, String> {
-        let path = plan_dir.join("schema.yml");
+impl Workflow {
+    pub fn load(plan_dir: &Path) -> Result<Workflow, String> {
+        let path = plan_dir.join("workflow.yml");
         let text = std::fs::read_to_string(&path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        Schema::parse(&text)
+        Workflow::parse(&text)
     }
 
-    pub fn parse(text: &str) -> Result<Schema, String> {
-        let file: SchemaFile =
-            serde_yaml::from_str(text).map_err(|e| format!("schema is not valid: {e}"))?;
+    pub fn parse(text: &str) -> Result<Workflow, String> {
+        let file: WorkflowFile =
+            serde_yaml::from_str(text).map_err(|e| format!("workflow is not valid: {e}"))?;
 
         // The list form desugars to adjacency, so the engine always speaks
         // adjacency: each element's parent is the one before it.
@@ -243,19 +243,19 @@ impl Schema {
                 .collect(),
         };
 
-        let schema = Schema {
+        let workflow = Workflow {
             kinds,
             verbs: file.verbs,
             worktrees: file.worktrees,
             templates: file.templates,
         };
-        schema.validate()?;
-        Ok(schema)
+        workflow.validate()?;
+        Ok(workflow)
     }
 
     fn validate(&self) -> Result<(), String> {
         if self.kinds.is_empty() {
-            return Err("schema declares no kinds".to_string());
+            return Err("workflow declares no kinds".to_string());
         }
         let known: Vec<&str> = self.kinds.iter().map(|k| k.name.as_str()).collect();
         for verb in &self.verbs {
@@ -485,10 +485,10 @@ mod wf {
         );
 
         for (base, effect, legal) in table {
-            let accepted = Schema::parse(&verb(&base, &effect, None)).is_ok();
+            let accepted = Workflow::parse(&verb(&base, &effect, None)).is_ok();
             assert_eq!(
                 accepted, legal,
-                "base '{base}' x effect '{effect}': schema.rs and \
+                "base '{base}' x effect '{effect}': workflow.rs and \
                  semantics.md section 2 disagree"
             );
         }
@@ -505,11 +505,11 @@ mod wf {
             "section 2.1 should cover every legal base/effect pair"
         );
         for (base, effect, permitted) in table {
-            let accepted = Schema::parse(&verb(&base, &effect, Some("create"))).is_ok();
+            let accepted = Workflow::parse(&verb(&base, &effect, Some("create"))).is_ok();
             assert_eq!(
                 accepted, permitted,
                 "base '{base}' x effect '{effect}' x worktree 'create': \
-                 schema.rs and semantics.md section 2.1 disagree"
+                 workflow.rs and semantics.md section 2.1 disagree"
             );
         }
     }
@@ -524,19 +524,19 @@ mod wf {
                 continue;
             }
             assert!(
-                Schema::parse(&verb(&base, &effect, Some("remove"))).is_ok(),
+                Workflow::parse(&verb(&base, &effect, Some("remove"))).is_ok(),
                 "base '{base}' x effect '{effect}' x worktree 'remove'"
             );
         }
     }
 
     /// Section 2: every legal cell is inhabited by a real verb, so the
-    /// language has no dead corners. Checked against the reference schema.
+    /// language has no dead corners. Checked against the reference workflow.
     #[test]
     fn every_legal_cell_is_inhabited_by_the_reference_schema() {
-        let schema = Schema::parse(include_str!("../../.plan/schema.yml")).unwrap();
+        let workflow = Workflow::parse(include_str!("../../.plan/workflow.yml")).unwrap();
         let mut found: Vec<(Base, Effect)> = Vec::new();
-        for v in &schema.verbs {
+        for v in &workflow.verbs {
             if !found.contains(&(v.base, v.effect)) {
                 found.push((v.base, v.effect));
             }
@@ -556,8 +556,8 @@ mod wf {
     }
 
     /// Section 2.2, W-Reserved. The published schema rejects this too, via
-    /// `tests/fixtures/schema/root/invalid/verb-named-new.yml` -- both sides
-    /// are pinned because three-way drift between the reference schema, this
+    /// `tests/fixtures/workflow/root/invalid/verb-named-new.yml` -- both sides
+    /// are pinned because three-way drift between the reference workflow, this
     /// file, and the published document is how the earlier renames got lost.
     #[test]
     fn the_genesis_name_is_not_available_to_a_verb() {
@@ -570,18 +570,18 @@ mod wf {
                  \x20   to: todo\n"
             )
         };
-        let err = Schema::parse(&with_name(crate::next::events::GENESIS))
+        let err = Workflow::parse(&with_name(crate::next::events::GENESIS))
             .expect_err("a verb named 'new' must not load");
         assert!(err.contains("reserved"), "unhelpful refusal: {err}");
         // Only the name is disqualifying -- the same verb otherwise loads.
-        assert!(Schema::parse(&with_name("spawn")).is_ok());
+        assert!(Workflow::parse(&with_name("spawn")).is_ok());
     }
 
     /// The slug rule is written down twice -- here and in the published
     /// document -- so it is read out of the document rather than restated.
-    /// `tests/schema.rs` validates fixtures against the document and would not
+    /// `tests/workflow.rs` validates fixtures against the document and would not
     /// notice the ENGINE drifting away from it, which is the direction that
-    /// lets planr accept a slug its own schema calls invalid.
+    /// lets planr accept a slug its own workflow calls invalid.
     #[test]
     fn the_slug_pattern_matches_the_published_schema() {
         const PUBLISHED: &str = include_str!("../../schemas/planr/v1/1.0.0/planr.schema.json");

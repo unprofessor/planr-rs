@@ -68,14 +68,14 @@ fn setup_with(dir: &Path, schema: &str) {
     git(dir, &["config", "user.name", "E2E Test"]);
 
     std::fs::create_dir_all(dir.join(".plan/tickets")).unwrap();
-    std::fs::write(dir.join(".plan/schema.yml"), schema).unwrap();
+    std::fs::write(dir.join(".plan/workflow.yml"), schema).unwrap();
     std::fs::write(dir.join(".plan/tickets/.gitkeep"), "").unwrap();
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-m", "seed"]);
 }
 
 fn setup(dir: &Path) {
-    setup_with(dir, include_str!("../.plan/schema.yml"));
+    setup_with(dir, include_str!("../.plan/workflow.yml"));
 }
 
 /// Drive a task to `done` under the reference schema, doing real work in its

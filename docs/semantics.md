@@ -8,8 +8,8 @@ analysis exhaustive and the assumptions nameable, and that is where the value
 is -- not in mechanization.
 
 **The tables in sections 2 and 2.1 are the checked part.** The unit tests in
-`src/next/schema.rs` do not restate them; they *parse them out of this file*
-and drive `Schema::parse` against every cell. Editing a verdict here without
+`src/next/workflow.rs` do not restate them; they *parse them out of this file*
+and drive `Workflow::parse` against every cell. Editing a verdict here without
 changing the implementation fails the build, and vice versa -- verified by
 mutating each table and watching the suite go red. A test carrying its own copy
 of a table would agree with this document because the same hand wrote both,
@@ -26,7 +26,7 @@ language. What is underspecified is meaning.
 
 ## 0. Notation
 
-A schema declares a set of kinds `K` and a set of verbs `V`. For a verb `v`:
+A workflow declares a set of kinds `K` and a set of verbs `V`. For a verb `v`:
 
 | | |
 | --- | --- |
@@ -89,7 +89,7 @@ The `base x effect` space is 2 x 4 = 8, partitioned 5 / 3:
 | **`home`** | W-Declare-Home | W-Cut | *ill-formed* | W-Retire |
 | **`own`** | W-Declare-Own | *ill-formed* | W-Integrate | *ill-formed* |
 
-Every legal cell is inhabited in the reference schema: `close(epic)`, `claim`,
+Every legal cell is inhabited in the reference workflow: `close(epic)`, `claim`,
 `abandon`, `submit`, `close(task)`. The language has no dead corners.
 
 ### 2.1 The workspace side condition
@@ -372,23 +372,25 @@ Named so that breaking one is a decision rather than an accident.
    its dead predecessor's events, and a bounded read stopping at the newer
    creation commit and an unbounded read reaching the older one disagree about
    the same ticket.
-4. **The schema in force is the one in the same history.** There is no schema
-   trailer, deliberately: the schema is tracked in the repository it governs.
+4. **The workflow in force is the one in the same history.** There is no
+   workflow trailer, deliberately: `.plan/workflow.yml` is tracked in the
+   repository it governs.
 
-   This says which schema interprets an *event*, and nothing about what happens
-   when the schema changes. A ticket is not anchored to a schema version at
-   creation or at any other point, so its state is a string drawn from the
-   vocabulary in force at its last transition while every gate speaks today's --
-   and a renamed state strands the tickets that still carry the old name. The
-   implementation is currently immune by being wrong in the other direction: it
-   folds every event through one working-tree schema, so renames cost nothing
-   and a change of *meaning* is silently retroactive. Closing the gap needs
-   migration, which is
-   [not yet designed](typed-graph-design.md#schema-evolution-is-not-yet-designed).
+   This says which workflow interprets an *event*, and nothing about what
+   happens when the workflow changes. A ticket is not anchored to a workflow
+   version at creation or at any other point, so its state is a string drawn
+   from the vocabulary in force at its last transition while every gate speaks
+   today's -- and a renamed state strands the tickets that still carry the old
+   name. The implementation is currently immune by being wrong in the other
+   direction: it folds every event through one working-tree workflow, so
+   renames cost nothing and a change of *meaning* is silently retroactive.
+   Closing the gap needs migration, which is
+   [not yet designed](typed-graph-design.md#workflow-evolution-is-not-yet-designed).
 
-   "Schema" also names two documents here -- this project's `.plan/schema.yml`
-   and planr's own published validator. They version independently; see
-   [the note](typed-graph-design.md#schema-names-two-documents).
+   *Workflow* means this project's `.plan/workflow.yml`; *planr schema* means
+   only planr's published validator, `planr.schema.json`. They version
+   independently; see
+   [the note](typed-graph-design.md#the-planr-schema-and-the-workflow).
 5. **Trailers survive.** Events are attributable because commit messages are
    immutable; a history rewrite that drops trailers drops events.
 

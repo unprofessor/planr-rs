@@ -53,12 +53,12 @@ fn log_format() -> String {
     )
 }
 
-/// `new` is genesis, not a schema verb -- but it writes `Planr-Verb: new`, so
+/// `new` is genesis, not a workflow verb -- but it writes `Planr-Verb: new`, so
 /// the creation commit is already a record in this stream. That makes it the
 /// floor for a ticket that has never transitioned, at no extra cost.
 ///
-/// The name is therefore RESERVED, and reserved in the schema rather than in
-/// prose: `Schema::validate` rejects a verb of this name, because a verb
+/// The name is therefore RESERVED, and reserved in the workflow rather than in
+/// prose: `Workflow::validate` rejects a verb of this name, because a verb
 /// called `new` would put a second, meaningless floor into every walk. Worse,
 /// it would do so silently -- a stateless verb would report itself as a
 /// transition, since `verb::run` reads the before and after states through
@@ -202,7 +202,7 @@ pub fn authoritative_ref(
 /// * **`terminates` must accept exactly the verbs the fold acts on.** A verb
 ///   the kind's machine does not resolve is `id` in the fold, so it must not
 ///   terminate here either, or bounded and unbounded disagree. The rule is
-///   passed in rather than derived here to keep this module schema-agnostic.
+///   passed in rather than derived here to keep this module workflow-agnostic.
 ///
 /// Termination also concentrates the ordering assumption (`docs/semantics.md`
 /// section 6, assumption 2): a misordering under an unbounded fold was one

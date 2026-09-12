@@ -83,8 +83,8 @@ fn setup(dir: &Path) {
 
     std::fs::create_dir_all(dir.join(".plan/tickets")).unwrap();
     std::fs::write(
-        dir.join(".plan/schema.yml"),
-        include_str!("../.plan/schema.yml"),
+        dir.join(".plan/workflow.yml"),
+        include_str!("../.plan/workflow.yml"),
     )
     .unwrap();
     std::fs::write(dir.join(".plan/tickets/.gitkeep"), "").unwrap();

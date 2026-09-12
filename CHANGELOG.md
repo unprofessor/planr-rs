@@ -56,7 +56,7 @@
     check says which ref answers or says it cannot tell; it never guesses trunk.
 
   It reports and never repairs: every finding is a history that already exists,
-  and the remedies are history surgery, a schema decision, or a conversation.
+  and the remedies are history surgery, a workflow decision, or a conversation.
   Like `new`, it refuses outright in a shallow clone rather than certify a
   history it cannot see -- most of the findings are absence claims.
 
@@ -182,7 +182,7 @@
   the swap asserts, making creation a single atomic step, and the loser is told
   the slug was taken concurrently instead of receiving a raw ref-lock error.
 
-- **A schema may not declare a verb named `new`.** Creation is fixed tooling
+- **A workflow may not declare a verb named `new`.** Creation is fixed tooling
   rather than a verb, and it writes `Planr-Verb: new` -- the record a bounded
   state read stops at, and the only floor a ticket that has never transitioned
   has. A verb of that name ended every walk at itself, silently: the runner
@@ -196,7 +196,7 @@
   Projects cite the alias `.../planr/v1/planr.schema.json`, which moves
   forward with each compatible release; the canonical URL never moves, which
   is why it is the document's `$id`. One JSON Schema 2020-12 document covers
-  all three artifacts: the root schema validates `.plan/schema.yml`, the
+  all three artifacts: the root schema validates `.plan/workflow.yml`, the
   `#ticket` anchor validates ticket frontmatter, and the `#commit` anchor
   validates a commit's `Planr-*` trailer block. The `v1` in the URL is the
   schema language's own version and is independent of planr's release
@@ -293,7 +293,7 @@
   checked, but `merge` releases that ref as part of the effect -- so the
   worktree attached to a branch that no longer existed, and the run reported
   success. The rule is now stated over the post-state ("a ref that outlives the
-  effect") rather than as a prohibition on `base`, in both `src/next/schema.rs`
+  effect") rather than as a prohibition on `base`, in both `src/next/workflow.rs`
   and the published JSON Schema. Found by enumerating the
   `base × effect × worktree` space while writing `docs/semantics.md`, not by
   testing.

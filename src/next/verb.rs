@@ -12,12 +12,12 @@ use crate::parse::{extract_section, parse_frontmatter, split_frontmatter};
 use super::events;
 use super::fold;
 use super::plumbing as git;
-use super::schema::{BareContent, Base, Content, Effect, Schema, Verb, WorktreeAction};
+use super::workflow::{BareContent, Base, Content, Effect, Verb, Workflow, WorktreeAction};
 
 pub struct Ctx {
     pub plan_dir: String,
     pub trunk: String,
-    pub schema: Schema,
+    pub workflow: Workflow,
 }
 
 impl Ctx {
@@ -113,15 +113,15 @@ pub fn parse_ticket(slug: &str, blob: &str) -> Result<Ticket, String> {
 }
 
 /// When the backwards scan may stop, expressed over verb NAMES because
-/// `events` is schema-agnostic and must stay that way.
+/// `events` is workflow-agnostic and must stay that way.
 ///
 /// The rule has to accept exactly the verbs [`fold::fold_state`] acts on: it
-/// skips any `(name, kind)` the schema does not resolve, so those denote `id`
+/// skips any `(name, kind)` the workflow does not resolve, so those denote `id`
 /// and cannot end the scan. A looser rule here stops on an event the fold then
 /// ignores, and the bounded walk answers with a state the unbounded one does
 /// not.
-fn terminator<'a>(schema: &'a Schema, kind: &'a str) -> impl Fn(&str) -> bool + 'a {
-    move |name| schema.verb(name, kind).is_some_and(|v| v.to.is_some())
+fn terminator<'a>(workflow: &'a Workflow, kind: &'a str) -> impl Fn(&str) -> bool + 'a {
+    move |name| workflow.verb(name, kind).is_some_and(|v| v.to.is_some())
 }
 
 /// Current state of a ticket, with the walk that produced it -- which ref set
@@ -138,12 +138,12 @@ pub fn state_of(ctx: &Ctx, slug: &str, bounded: bool) -> Result<(String, events:
             slug,
             &ticket.kind,
             &ctx.trunk,
-            terminator(&ctx.schema, &ticket.kind),
+            terminator(&ctx.workflow, &ticket.kind),
         )?
     } else {
         events::for_ticket_unbounded(slug, &ticket.kind, &ctx.trunk)?
     };
-    let state = fold::fold_state(&ctx.schema, &ticket.kind, &walk.events)?;
+    let state = fold::fold_state(&ctx.workflow, &ticket.kind, &walk.events)?;
     Ok((state, walk))
 }
 
@@ -186,8 +186,8 @@ pub fn read_ticket_or_archived(ctx: &Ctx, slug: &str) -> Result<Ticket, String> 
 /// fine with because it seeds from `initial_state` and the suffix begins with
 /// a `const`. Any caller that wanted the full event list would not be.
 fn state_at(ctx: &Ctx, slug: &str, kind: &str) -> Result<String, String> {
-    let walk = events::for_ticket(slug, kind, &ctx.trunk, terminator(&ctx.schema, kind))?;
-    fold::fold_state(&ctx.schema, kind, &walk.events)
+    let walk = events::for_ticket(slug, kind, &ctx.trunk, terminator(&ctx.workflow, kind))?;
+    fold::fold_state(&ctx.workflow, kind, &walk.events)
 }
 
 /// Evaluate a verb's precondition. Structural only -- never a judgement about
@@ -201,7 +201,7 @@ fn check_require(ctx: &Ctx, verb: &Verb, ticket: &Ticket, base_ref: &str) -> Res
             ticket.fm.get(field).cloned().unwrap_or_default()
         };
         let ok = if want == "terminal" {
-            fold::terminal_states(&ctx.schema, &ticket.kind).contains(&have)
+            fold::terminal_states(&ctx.workflow, &ticket.kind).contains(&have)
         } else {
             &have == want
         };
@@ -247,7 +247,7 @@ fn check_require(ctx: &Ctx, verb: &Verb, ticket: &Ticket, base_ref: &str) -> Res
                 ))
             }
         };
-        let terminal = fold::terminal_states(&ctx.schema, &ticket.kind);
+        let terminal = fold::terminal_states(&ctx.workflow, &ticket.kind);
         let mut blockers = Vec::new();
         for n in neighbours {
             let Ok(nt) = read_ticket(ctx, &ctx.trunk, &n) else {
@@ -402,7 +402,7 @@ fn apply_edge(blob: &str, op: &str, field: &str, target: &str) -> Result<String,
 
 fn worktree_path(ctx: &Ctx, kind: &str, slug: &str) -> PathBuf {
     PathBuf::from(
-        ctx.schema
+        ctx.workflow
             .worktrees
             .replace("$kind", kind)
             .replace("$slug", slug),
@@ -419,7 +419,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
     let own_short = ctx.own_ref_short(&kind, slug);
 
     let verb = ctx
-        .schema
+        .workflow
         .verb(verb_name, &kind)
         .ok_or_else(|| format!("no verb '{verb_name}' applies to kind '{kind}'"))?
         .clone();
@@ -461,7 +461,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
         // `require: { self: { status: terminal } }`. The implicit rule made it
         // contradict itself and it could never fire -- which is also why the
         // archived read path went unexercised for so long.
-        if fold::terminal_states(&ctx.schema, &kind).contains(&current) {
+        if fold::terminal_states(&ctx.workflow, &kind).contains(&current) {
             return Err(format!(
                 "refuse {verb_name}: '{slug}' is already '{current}' (terminal)"
             ));

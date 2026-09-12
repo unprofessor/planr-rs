@@ -57,7 +57,7 @@ use std::process::Command;
 use std::time::Instant;
 
 const PLANR: &str = env!("CARGO_BIN_EXE_planr");
-const SCHEMA: &str = include_str!("../.plan/schema.yml");
+const WORKFLOW: &str = include_str!("../.plan/workflow.yml");
 
 fn run(bin: &str, dir: &Path, args: &[&str]) {
     let out = Command::new(bin)
@@ -105,7 +105,7 @@ fn build_backlog(dir: &Path, n: usize) {
     git(dir, &["config", "user.email", "bench@test"]);
     git(dir, &["config", "user.name", "Bench"]);
     std::fs::create_dir_all(dir.join(".plan/tickets")).unwrap();
-    std::fs::write(dir.join(".plan/schema.yml"), SCHEMA).unwrap();
+    std::fs::write(dir.join(".plan/workflow.yml"), WORKFLOW).unwrap();
     std::fs::write(dir.join(".plan/tickets/.gitkeep"), "").unwrap();
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-qm", "seed"]);

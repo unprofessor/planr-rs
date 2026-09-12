@@ -14,7 +14,7 @@
 //!
 //! and this module is the half of that enforcement `new` cannot do. It reports;
 //! it never repairs. Every finding is a history that already exists, and the
-//! fixes are history surgery, a schema decision, or a conversation between two
+//! fixes are history surgery, a workflow decision, or a conversation between two
 //! people -- none of which a tool should pick on its own.
 //!
 //! **Nothing here trusts a committer clock.** The reservation asks about
@@ -26,8 +26,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::events::{self, Event};
 use super::plumbing as git;
-use super::schema::Schema;
 use super::verb::Ctx;
+use super::workflow::Workflow;
 
 /// What went wrong with one slug's history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -154,23 +154,23 @@ fn kinds(
 
 /// The state this event declares, or `None` if it declares none.
 ///
-/// Exactly the fold's question, asked through the schema, so a verb the kind's
+/// Exactly the fold's question, asked through the workflow, so a verb the kind's
 /// machine does not resolve is the identity here as well. Ordering only matters
 /// among events that can decide the answer; an `annotate` that two lanes both
 /// wrote is not a disagreement about state.
-fn declares(schema: &Schema, kind: Option<&String>, event: &Event) -> Option<String> {
+fn declares(workflow: &Workflow, kind: Option<&String>, event: &Event) -> Option<String> {
     let Some(kind) = kind else {
         // No kind means no sub-machine to resolve against. Fall back to any
         // verb of that name carrying a `to`, which over-reports rather than
         // under-reports -- the failure this check exists to catch must not be
         // silenced by a ticket nothing can type.
-        return schema
+        return workflow
             .verbs
             .iter()
             .find(|v| v.name == event.verb && v.to.is_some())
             .and_then(|v| v.to.clone());
     };
-    schema.verb(&event.verb, kind).and_then(|v| v.to.clone())
+    workflow.verb(&event.verb, kind).and_then(|v| v.to.clone())
 }
 
 /// Run every check over the whole backlog.
@@ -293,7 +293,9 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
         // unmentioned.
         let hidden: Vec<&Event> = all
             .iter()
-            .filter(|e| unreachable.contains(&e.commit) && declares(&ctx.schema, kind, e).is_some())
+            .filter(|e| {
+                unreachable.contains(&e.commit) && declares(&ctx.workflow, kind, e).is_some()
+            })
             .collect();
         if !hidden.is_empty() {
             findings.push(Finding {
@@ -349,11 +351,11 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
             .filter_map(|e| {
                 if e.verb == events::GENESIS {
                     let kind = kind?;
-                    return super::fold::initial_state(&ctx.schema, kind)
+                    return super::fold::initial_state(&ctx.workflow, kind)
                         .ok()
                         .map(|to| (e, to));
                 }
-                declares(&ctx.schema, kind, e).map(|to| (e, to))
+                declares(&ctx.workflow, kind, e).map(|to| (e, to))
             })
             .collect();
         let maximal: BTreeSet<String> = git::merge_base_independent(

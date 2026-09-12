@@ -30,7 +30,7 @@ fn schema_doc() -> Value {
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("{SCHEMA_PATH} is not valid JSON: {e}"))
 }
 
-/// The three published entry points: the root schema for `.plan/schema.yml`,
+/// The three published entry points: the root schema for `.plan/workflow.yml`,
 /// and the `#ticket` and `#commit` anchors inside the same document.
 struct Targets {
     schemas: Schemas,
@@ -191,7 +191,7 @@ fn fixtures_validate_as_intended() {
 }
 
 #[test]
-fn the_reference_schema_validates_against_the_published_schema() {
+fn the_reference_workflow_validates_against_the_published_schema() {
     // The drift-catcher. Every other test here validates FIXTURES, which are
     // written to match the published schema and so can never disagree with
     // it. Nothing validated the schema the tool actually loads -- and that is
@@ -199,16 +199,16 @@ fn the_reference_schema_validates_against_the_published_schema() {
     // `effect: delete` and `templates.<kind>.sections` for two renames after
     // the implementation had moved to `ticket-only` and `initial`, and both
     // sides passed their own tests throughout.
-    let path = repo_root().join(".plan/schema.yml");
+    let path = repo_root().join(".plan/workflow.yml");
     let text =
         fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
     let instance = serde_yaml::from_str::<Value>(&text)
-        .unwrap_or_else(|e| panic!(".plan/schema.yml is not valid YAML: {e}"));
+        .unwrap_or_else(|e| panic!(".plan/workflow.yml is not valid YAML: {e}"));
 
     let targets = Targets::compile();
     if let Err(e) = targets.accepts("root", &instance) {
         panic!(
-            "the reference schema at .plan/schema.yml does not satisfy the published schema.\n\
+            "the reference schema at .plan/workflow.yml does not satisfy the published schema.\n\
              One of them is behind the other; reconcile before publishing.\n{e}"
         );
     }

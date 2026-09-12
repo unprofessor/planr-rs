@@ -66,8 +66,8 @@ fn setup(dir: &Path) {
     git(dir, &["config", "user.name", "E2E Test"]);
 
     std::fs::create_dir_all(dir.join(".plan/tickets")).unwrap();
-    let schema = include_str!("../.plan/schema.yml");
-    std::fs::write(dir.join(".plan/schema.yml"), schema).unwrap();
+    let schema = include_str!("../.plan/workflow.yml");
+    std::fs::write(dir.join(".plan/workflow.yml"), schema).unwrap();
     std::fs::write(dir.join(".plan/tickets/.gitkeep"), "").unwrap();
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-m", "seed"]);

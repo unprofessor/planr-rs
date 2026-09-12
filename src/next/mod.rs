@@ -2,25 +2,25 @@
 //!
 //! 0.3's commands are untouched and keep working; everything here is
 //! additive, so the two can coexist until a migration path exists. The model
-//! is experimental and the schema is deliberately in-tree and unpinned.
+//! is experimental, and the workflow does not yet pin a language version.
 
 pub mod check;
 pub mod events;
 pub mod fold;
 pub mod plumbing;
-pub mod schema;
 pub mod verb;
+pub mod workflow;
 
-use schema::Schema;
-use schema::SLUG_MAX;
 use verb::Ctx;
+use workflow::Workflow;
+use workflow::SLUG_MAX;
 
 pub fn load_ctx(plan_dir: &str, trunk: &str) -> Result<Ctx, String> {
-    let schema = Schema::load(std::path::Path::new(plan_dir))?;
+    let workflow = Workflow::load(std::path::Path::new(plan_dir))?;
     Ok(Ctx {
         plan_dir: plan_dir.to_string(),
         trunk: trunk.to_string(),
-        schema,
+        workflow,
     })
 }
 
@@ -33,7 +33,7 @@ pub fn new_ticket(
     title: &str,
     parent: Option<&str>,
 ) -> Result<String, String> {
-    if !ctx.schema.kinds.iter().any(|k| k.name == kind) {
+    if !ctx.workflow.kinds.iter().any(|k| k.name == kind) {
         return Err(format!("unknown kind '{kind}'"));
     }
     check_slug(slug)?;
@@ -60,7 +60,7 @@ pub fn new_ticket(
         fm.push_str(&format!("\nparent: {p}"));
     }
     let body = ctx
-        .schema
+        .workflow
         .templates
         .get(kind)
         .map(|t| t.body.clone())
@@ -105,7 +105,7 @@ pub fn new_ticket(
     // would put the worktree ahead of the ref it is checked out on, which is
     // the same inconsistency a step earlier and with no commit to point at.
     let mut out = format!("new {kind} '{slug}' at {} ({})\n  {path}", &commit[..7], {
-        fold::initial_state(&ctx.schema, kind)?
+        fold::initial_state(&ctx.workflow, kind)?
     });
     if let Err(e) = plumbing::sync_path(&ctx.trunk, &commit, &path) {
         out.push_str(&format!(
@@ -121,7 +121,7 @@ pub fn new_ticket(
 /// A slug has to be exactly what comes back out of its own `Planr-Ticket`
 /// trailer.
 ///
-/// That is the invariant; [`schema::SLUG_PATTERN`] is how it is enforced.
+/// That is the invariant; [`workflow::SLUG_PATTERN`] is how it is enforced.
 /// Nothing checked this before, and the gap was not exotic -- a trailing space
 /// from a shell paste or an agent assembling arguments is enough. Git's
 /// trailer reader trims, and so does the record parser, so `new task "foo "`
@@ -144,13 +144,13 @@ pub fn new_ticket(
 /// Recovering from that needs history surgery, which the reservation now
 /// refuses to reason about.
 ///
-/// [`schema::SLUG_MAX`] is well under the 255-byte filesystem limit on
+/// [`workflow::SLUG_MAX`] is well under the 255-byte filesystem limit on
 /// `<slug>.md`, because the slug is also interpolated into
 /// `plan/<kind>/<slug>` ref names and into worktree paths, each sitting inside
 /// a directory of unknown depth. Nothing real is at risk of hitting it: it is
 /// a guard against a generated or pasted name, not a budget to plan against.
 fn check_slug(slug: &str) -> Result<(), String> {
-    let pattern = regex::Regex::new(schema::SLUG_PATTERN)
+    let pattern = regex::Regex::new(workflow::SLUG_PATTERN)
         .map_err(|e| format!("the slug pattern does not compile: {e}"))?;
     if pattern.is_match(slug) {
         if slug.len() > SLUG_MAX {
@@ -170,7 +170,7 @@ fn check_slug(slug: &str) -> Result<(), String> {
          the slug is both the ticket's filename and its identity in the event log, and trailers \
          are trimmed when they are read back, so anything else would name one ticket on disk and \
          a different one in history",
-        schema::SLUG_PATTERN
+        workflow::SLUG_PATTERN
     ))
 }
 
@@ -310,13 +310,13 @@ pub fn cmd_state(ctx: &Ctx, slug: &str) -> Result<String, String> {
 pub fn cmd_lifecycle(ctx: &Ctx, kind: Option<&str>) -> Result<String, String> {
     let mut out = String::new();
     match kind {
-        Some(k) => out.push_str(&fold::render_lifecycle(&ctx.schema, k)?),
+        Some(k) => out.push_str(&fold::render_lifecycle(&ctx.workflow, k)?),
         None => {
-            for k in &ctx.schema.kinds {
-                out.push_str(&fold::render_lifecycle(&ctx.schema, &k.name)?);
+            for k in &ctx.workflow.kinds {
+                out.push_str(&fold::render_lifecycle(&ctx.workflow, &k.name)?);
                 out.push('\n');
             }
-            if let Some(unit) = ctx.schema.unit() {
+            if let Some(unit) = ctx.workflow.unit() {
                 out.push_str(&format!(
                     "unit: {unit} (derived -- the kind whose verbs create a worktree)\n"
                 ));
@@ -387,7 +387,7 @@ pub fn cmd_board(ctx: &Ctx) -> Result<String, String> {
         let row = match ticket {
             Ok(ticket) => {
                 let ticket_events = events.get(slug).map(Vec::as_slice).unwrap_or(&[]);
-                match fold::fold_state(&ctx.schema, &ticket.kind, ticket_events) {
+                match fold::fold_state(&ctx.workflow, &ticket.kind, ticket_events) {
                     Ok(state) => format!(
                         "  {slug:<24} {:<8} {state:<14} {} event(s)",
                         ticket.kind,
