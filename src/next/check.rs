@@ -31,7 +31,7 @@ use super::workflow::Workflow;
 
 /// What went wrong with one slug's history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Kind {
+pub enum FindingKind {
     /// Two or more `new` records. The floor of a bounded walk is whichever one
     /// the backwards scan meets first, so the ticket's state is clock-chosen.
     DuplicateGenesis,
@@ -49,14 +49,14 @@ pub enum Kind {
     Unresolvable,
 }
 
-impl Kind {
+impl FindingKind {
     fn code(self) -> &'static str {
         match self {
-            Kind::DuplicateGenesis => "duplicate-genesis",
-            Kind::Severed => "severed",
-            Kind::Divergent => "divergent",
-            Kind::Shadowed => "shadowed",
-            Kind::Unresolvable => "unresolvable",
+            FindingKind::DuplicateGenesis => "duplicate-genesis",
+            FindingKind::Severed => "severed",
+            FindingKind::Divergent => "divergent",
+            FindingKind::Shadowed => "shadowed",
+            FindingKind::Unresolvable => "unresolvable",
         }
     }
 
@@ -68,14 +68,14 @@ impl Kind {
     /// for it would make the check unusable in the workflow that produces it
     /// on purpose.
     fn is_fault(self) -> bool {
-        !matches!(self, Kind::Shadowed)
+        !matches!(self, FindingKind::Shadowed)
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Finding {
     pub slug: String,
-    pub kind: Kind,
+    pub kind: FindingKind,
     pub detail: String,
 }
 
@@ -110,7 +110,7 @@ fn union_by_ticket(
 /// standing resolves to trunk whatever its kind is. That keeps the cost at two
 /// processes per archived-ticket-with-a-live-branch, which is the anomaly
 /// itself and normally none.
-fn kinds(
+fn ticket_kinds(
     ctx: &Ctx,
     slugs: impl Iterator<Item = String>,
     unintegrated: &BTreeSet<String>,
@@ -190,7 +190,7 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
 
     let unintegrated = events::unintegrated(&ctx.trunk)?;
     let buckets = union_by_ticket(&ctx.trunk, &unintegrated)?;
-    let kinds = kinds(ctx, buckets.keys().cloned(), &unintegrated)?;
+    let kinds = ticket_kinds(ctx, buckets.keys().cloned(), &unintegrated)?;
     let mut findings = Vec::new();
 
     // Which of these commits trunk cannot reach, for the whole backlog in one
@@ -215,7 +215,7 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
             1 => {}
             0 => findings.push(Finding {
                 slug: slug.clone(),
-                kind: Kind::Severed,
+                kind: FindingKind::Severed,
                 detail: format!(
                     "{} event(s) and no '{}' record: last is '{}' at {}. The fold answers for \
                      these events, so the slug is neither free nor explicable -- the history was \
@@ -228,7 +228,7 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
             }),
             n => findings.push(Finding {
                 slug: slug.clone(),
-                kind: Kind::DuplicateGenesis,
+                kind: FindingKind::DuplicateGenesis,
                 detail: format!(
                     "{n} '{}' records: {}. Two lineages each created this slug and their merge \
                      was clean, because archival deleted the file on one side. A bounded walk \
@@ -258,7 +258,7 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
         {
             findings.push(Finding {
                 slug: slug.clone(),
-                kind: Kind::Unresolvable,
+                kind: FindingKind::Unresolvable,
                 detail:
                     "a branch stands for this slug and its ticket cannot be read, so its kind is \
                      unknown -- and the kind is what names the branch the authority rule looks \
@@ -300,7 +300,7 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
         if !hidden.is_empty() {
             findings.push(Finding {
                 slug: slug.clone(),
-                kind: Kind::Shadowed,
+                kind: FindingKind::Shadowed,
                 detail: format!(
                     "{ref_} answers for this ticket and cannot reach {} state-changing \
                      declaration(s) on another lane: {}. That is the authority rule working -- \
@@ -374,7 +374,7 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
         if outcomes.len() > 1 {
             findings.push(Finding {
                 slug: slug.clone(),
-                kind: Kind::Divergent,
+                kind: FindingKind::Divergent,
                 detail: format!(
                     "{} declarations the commit graph does not order, and they disagree: {}. \
                      The state is whichever committer clock ran later, so reading the same \
