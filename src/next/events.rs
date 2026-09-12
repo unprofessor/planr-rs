@@ -257,8 +257,8 @@ pub fn for_ticket(
 /// same `git log` stream in the same order, so a wrong ref set, a wrong
 /// ordering flag, a wrong format or separator, and any [`parse_record`] bug
 /// are invisible to it BY CONSTRUCTION: the two would agree on the same wrong
-/// answer. The ordering question in particular belongs to the
-/// integration check, which asks the graph directly.
+/// answer. The ordering question in particular belongs to
+/// [`crate::next::check`], which asks the graph directly.
 ///
 /// Reached by tests through `PLANR_NEXT_ORACLE`; it is not a CLI mode.
 pub fn for_ticket_unbounded(slug: &str, kind: &str, trunk: &str) -> Result<Walk, String> {
