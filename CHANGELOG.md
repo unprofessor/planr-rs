@@ -11,7 +11,7 @@
   `state`, `board`, `lifecycle`, and `do <verb>`. Every classic command is
   unchanged.
 
-- **`planr next check`** reports ticket histories the 0.4 model cannot read
+- **`planr next check`** reports ticket histories `planr next` cannot read
   reliably -- a slug created twice by two clones, events whose creation is
   missing, and declarations whose order depends on which machine's clock ran
   later -- and exits non-zero when it finds one. It reports and never
