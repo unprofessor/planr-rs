@@ -1,4 +1,4 @@
-//! Workflow loading for the 0.4 typed-graph model.
+//! Workflow loading for the typed-graph model.
 //!
 //! The workflow is data: kinds are a containment spine, verbs are declarations
 //! with a base/content/effect shape. Nothing here is pinned to a published
@@ -23,7 +23,7 @@ use serde::Deserialize;
 /// round trip hold; the property itself is asserted in `tests/next-identity`
 /// over every accepted shape.
 ///
-/// Deliberately NOT 0.3's stricter `^[a-z0-9]+(-[a-z0-9]+)*$`: 0.4's contract
+/// Deliberately NOT the classic commands' stricter `^[a-z0-9]+(-[a-z0-9]+)*$`: `next`'s contract
 /// is the published document, and rejecting a slug that document calls valid
 /// would be a new drift rather than a shared rule.
 pub const SLUG_PATTERN: &str = "^[a-z0-9][a-z0-9_-]*$";

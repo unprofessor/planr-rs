@@ -1,4 +1,4 @@
-//! The two topology scenarios the 0.4 rework exists to justify.
+//! The two topology scenarios the typed-graph model exists to justify.
 //!
 //! `next-e2e.rs` proves the verb machinery works on a flat backlog. This file
 //! proves the two shapes that motivated the rework in the first place:

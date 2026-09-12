@@ -1,6 +1,6 @@
-//! `planr next` -- the 0.4 typed-graph model, behind a subcommand.
+//! `planr next` -- the typed-graph model, behind a subcommand.
 //!
-//! 0.3's commands are untouched and keep working; everything here is
+//! The classic commands are untouched and keep working; everything here is
 //! additive, so the two can coexist until a migration path exists. The model
 //! is experimental, and the workflow does not yet pin a language version.
 
