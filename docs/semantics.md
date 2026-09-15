@@ -38,7 +38,7 @@ A workflow declares a set of kinds `K` and a set of verbs `V`. For a verb `v`:
 | `req(v)` | the guard: `self`, `sections`, `neighbors` |
 | `content(v)` | a list of tree transforms |
 
-For a ticket `t`: `own(t)` is the ref `plan/<kind>/<slug>`; `home` is trunk.
+For a ticket `t`: `own(t)` is the branch `planr/<slug>`; `home` is trunk.
 
 ## 1. Abstract syntax
 

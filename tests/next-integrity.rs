@@ -101,7 +101,7 @@ fn claim_and_submit(dir: &Path, slug: &str) {
 
     // The worker's own commit, in the worker's own worktree, which is where
     // `submit`'s gate reads from.
-    let wt = dir.join(format!(".plan/worktrees/task/{slug}"));
+    let wt = dir.join(format!(".plan/worktrees/{slug}"));
     let ticket = wt.join(format!(".plan/tickets/{slug}.md"));
     let body = std::fs::read_to_string(&ticket).unwrap();
     std::fs::write(&ticket, format!("{body}\n## Validation\n\ncargo test\n")).unwrap();
@@ -187,10 +187,7 @@ fn a_branch_trunk_has_already_taken_stops_answering() {
 
     // Integrate the branch by hand and leave the ref in place -- the state
     // `close` reaches through, minus the ref deletion.
-    git(
-        dir,
-        &["merge", "--no-ff", "-m", "integrate", "plan/task/foo"],
-    );
+    git(dir, &["merge", "--no-ff", "-m", "integrate", "planr/foo"]);
     assert_eq!(state(dir, "foo"), "review");
 
     declare(dir, "main", "yield", "foo", "2030-01-01T00:00:00Z");

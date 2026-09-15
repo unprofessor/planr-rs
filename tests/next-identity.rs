@@ -515,13 +515,13 @@ fn a_slug_alive_on_a_branch_is_refused_from_a_ref_that_cannot_see_it() {
     // The gap between the reservation and the fold, one dimension over. An
     // earlier round closed it on the KIND of event; this is the same
     // asymmetry in the REF SET. Reads walk trunk unioned with the ticket's
-    // own ref, and `board` walks trunk plus every `plan/*`, but the
+    // own ref, and `board` walks trunk plus every `planr/*`, but the
     // reservation walked a single rev -- a strict subset. So a slug could be
     // unused to the check and live to the reader.
     //
     // Nothing exotic reaches it: cut a release branch, create and claim a
     // ticket on the mainline, then plan against the release branch. That
-    // branch cannot see the ticket, its ref `plan/task/relx` is sitting right
+    // branch cannot see the ticket, its ref `planr/relx` is sitting right
     // there, and `--trunk` is an ordinary flag.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -531,9 +531,9 @@ fn a_slug_alive_on_a_branch_is_refused_from_a_ref_that_cannot_see_it() {
     ok(dir, &["next", "new", "task", "relx", "On mainline"]);
     ok(dir, &["next", "do", "claim", "relx", ""]);
 
-    // The claim commit lives ONLY on plan/task/relx, so a refusal that names
+    // The claim commit lives ONLY on planr/relx, so a refusal that names
     // it proves the walk reached past the rev it was handed.
-    let branch_only = git_out(dir, &["log", "--format=%s", "release..plan/task/relx"]);
+    let branch_only = git_out(dir, &["log", "--format=%s", "release..planr/relx"]);
     assert!(
         branch_only.contains("claim relx"),
         "the claim should be unreachable from release: {branch_only}"
@@ -638,7 +638,7 @@ fn a_relative_plan_dir_names_the_same_backlog_from_any_directory() {
 
 /// Drive a claimed task to `approved`, which is what `close` needs.
 fn drive_to_approved(dir: &Path, slug: &str) {
-    let wt = dir.join(format!(".plan/worktrees/task/{slug}"));
+    let wt = dir.join(format!(".plan/worktrees/{slug}"));
     let ticket = wt.join(format!(".plan/tickets/{slug}.md"));
     let mut s = std::fs::read_to_string(&ticket).unwrap();
     s.push_str("\n## Validation\n\nchecked\n");
@@ -690,10 +690,10 @@ fn a_worktree_that_cannot_be_updated_does_not_half_apply_a_verb() {
     // The verb ran to completion: the ref was released rather than leaked.
     let refs = git_out(
         dir,
-        &["for-each-ref", "--format=%(refname)", "refs/heads/plan/"],
+        &["for-each-ref", "--format=%(refname)", "refs/heads/planr/"],
     );
     assert!(
-        !refs.contains("plan/task/t1"),
+        !refs.contains("planr/t1"),
         "the ticket's ref leaked, so the verb was half-applied:\n{refs}"
     );
 }
@@ -701,9 +701,9 @@ fn a_worktree_that_cannot_be_updated_does_not_half_apply_a_verb() {
 #[test]
 fn a_tag_named_after_a_ticket_cannot_shadow_its_branch() {
     // `git rev-parse <name>` searches refs/<name>, then refs/tags/<name>, then
-    // refs/heads/<name>. An unqualified `plan/<kind>/<slug>` therefore resolved
+    // refs/heads/<name>. An unqualified `planr/<slug>` therefore resolved
     // a TAG in preference to the branch -- so the reader's ref set was larger
-    // than the reservation's, which enumerates refs/heads/plan/. Worse, once a
+    // than the reservation's, which enumerates refs/heads/planr/. Worse, once a
     // ticket was claimed the tag permanently shadowed its real branch and the
     // ticket froze: `state` read the tag forever, so no `from` gate could be
     // met again.
@@ -718,7 +718,7 @@ fn a_tag_named_after_a_ticket_cannot_shadow_its_branch() {
 
     ok(dir, &["next", "new", "task", "t1", "Task one"]);
     ok(dir, &["next", "do", "claim", "t1", ""]);
-    let branch = git_out(dir, &["rev-parse", "refs/heads/plan/task/t1"])
+    let branch = git_out(dir, &["rev-parse", "refs/heads/planr/t1"])
         .trim()
         .to_string();
 
@@ -726,7 +726,7 @@ fn a_tag_named_after_a_ticket_cannot_shadow_its_branch() {
     let root = git_out(dir, &["rev-list", "--max-parents=0", "HEAD"])
         .trim()
         .to_string();
-    git(dir, &["tag", "plan/task/t1", &root]);
+    git(dir, &["tag", "planr/t1", &root]);
     assert_ne!(
         branch, root,
         "the tag must point elsewhere for this to prove anything"
@@ -739,10 +739,10 @@ fn a_tag_named_after_a_ticket_cannot_shadow_its_branch() {
         "a tag shadowed the ticket's branch: {state}"
     );
 
-    // `board` and the reservation walk `plan/*` by enumeration rather than by
+    // `board` and the reservation walk `planr/*` by enumeration rather than by
     // name, and that is a second way to get this wrong. `%(refname:short)` is
     // the shortest UNAMBIGUOUS name, so a same-named tag makes git lengthen it
-    // to `heads/plan/task/t1` -- and a caller reconstructing `refs/heads/{r}`
+    // to `heads/planr/t1` -- and a caller reconstructing `refs/heads/{r}`
     // from that names nothing. Board died with git's usage blurb and the
     // reservation lost its refusal, both only when a tag was present, which is
     // the one case the qualification exists for.
@@ -790,7 +790,7 @@ fn a_verb_run_from_inside_the_worktree_reconciles_it() {
 
     // Stop at `review`. `request-changes` is the own/advance verb that carries
     // content, and it is exactly what a reviewer runs from inside the worktree.
-    let wt = dir.join(".plan/worktrees/task/t1");
+    let wt = dir.join(".plan/worktrees/t1");
     let ticket = wt.join(".plan/tickets/t1.md");
     let mut seeded = std::fs::read_to_string(&ticket).unwrap();
     seeded.push_str("\n## Validation\n\nchecked\n");

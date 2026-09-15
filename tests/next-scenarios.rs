@@ -82,7 +82,7 @@ fn setup(dir: &Path) {
 /// worktree on the way.
 fn finish_task(dir: &Path, slug: &str) {
     ok(dir, &["next", "do", "claim", slug]);
-    let wt = dir.join(format!(".plan/worktrees/task/{slug}"));
+    let wt = dir.join(format!(".plan/worktrees/{slug}"));
     let ticket = wt.join(format!(".plan/tickets/{slug}.md"));
     let body = std::fs::read_to_string(&ticket).unwrap();
     std::fs::write(&ticket, format!("{body}\n## Validation\n\nchecked\n")).unwrap();
@@ -153,7 +153,7 @@ fn a_container_closes_only_when_every_child_is_terminal() {
 const STORY_AS_UNIT: &str = r###"
 kinds: [story, task]
 
-worktrees: .plan/worktrees/$kind/$slug
+worktrees: .plan/worktrees/$slug
 
 templates:
   story: { body: "## Goal\n\n## Tasks\n" }
@@ -217,24 +217,22 @@ fn the_unit_can_sit_above_the_leaf() {
 
     ok(dir, &["next", "do", "claim", "ingest"]);
 
-    // ONE worktree and ONE branch for the whole story.
-    let worktrees = std::fs::read_dir(dir.join(".plan/worktrees/story"))
+    // ONE worktree and ONE branch for the whole story, none for its tasks.
+    let worktrees = std::fs::read_dir(dir.join(".plan/worktrees"))
         .unwrap()
         .count();
-    assert_eq!(worktrees, 1, "expected exactly one worktree for the story");
-    assert!(
-        !dir.join(".plan/worktrees/task").exists(),
-        "a task below the cut must not get a worktree"
-    );
+    assert_eq!(worktrees, 1, "expected exactly one worktree, the story's");
     let refs = show_refs(dir);
-    assert!(refs.contains("plan/story/ingest"), "{refs}");
-    assert!(
-        !refs.contains("plan/task/"),
-        "a task below the cut must not get a branch: {refs}"
-    );
+    assert!(refs.contains("planr/ingest"), "{refs}");
+    for slug in ["read-header", "read-body", "verify-crc"] {
+        assert!(
+            !refs.contains(&format!("planr/{slug}")),
+            "a task below the cut must not get a branch: {refs}"
+        );
+    }
 
     // The work happens once, in the story's worktree.
-    let wt = dir.join(".plan/worktrees/story/ingest");
+    let wt = dir.join(".plan/worktrees/ingest");
     std::fs::write(wt.join("ingest.rs"), "fn read_header() {}\n").unwrap();
     git(&wt, &["add", "-A"]);
     git(&wt, &["commit", "-m", "read the header"]);

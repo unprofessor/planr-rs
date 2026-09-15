@@ -150,7 +150,7 @@ fn agree(dir: &Path, slug: &str) -> String {
 /// Drive a task to `done`, doing real work in its worktree on the way.
 fn finish_task(dir: &Path, slug: &str) {
     ok(dir, &["next", "do", "claim", slug]);
-    let wt = dir.join(format!(".plan/worktrees/task/{slug}"));
+    let wt = dir.join(format!(".plan/worktrees/{slug}"));
     let ticket = wt.join(format!(".plan/tickets/{slug}.md"));
     let body = std::fs::read_to_string(&ticket).unwrap();
     std::fs::write(&ticket, format!("{body}\n## Validation\n\nchecked\n")).unwrap();
@@ -207,7 +207,7 @@ fn bounded_and_unbounded_agree_across_a_whole_lifecycle() {
     ok(dir, &["next", "do", "resume", "parser"]);
     assert_eq!(agree(dir, "parser"), "parser: in_progress");
 
-    let wt = dir.join(".plan/worktrees/task/parser");
+    let wt = dir.join(".plan/worktrees/parser");
     let ticket = wt.join(".plan/tickets/parser.md");
     let body = std::fs::read_to_string(&ticket).unwrap();
     std::fs::write(&ticket, format!("{body}\n## Validation\n\nchecked\n")).unwrap();

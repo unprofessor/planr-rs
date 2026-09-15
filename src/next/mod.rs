@@ -145,7 +145,7 @@ pub fn new_ticket(
 ///
 /// [`workflow::SLUG_MAX`] is well under the 255-byte filesystem limit on
 /// `<slug>.md`, because the slug is also interpolated into
-/// `plan/<kind>/<slug>` ref names and into worktree paths, each sitting inside
+/// `planr/<slug>` branch names and into worktree paths, each sitting inside
 /// a directory of unknown depth. Nothing real is at risk of hitting it: it is
 /// a guard against a generated or pasted name, not a budget to plan against.
 fn check_slug(slug: &str) -> Result<(), String> {
@@ -339,11 +339,6 @@ pub fn cmd_lifecycle(ctx: &Ctx, kind: Option<&str>) -> Result<String, String> {
 /// The shape is the claim worth making. An exact total has been written down
 /// wrong twice, because it depends on which calls short-circuit on an empty
 /// backlog; `docs/typed-graph-design.md` carries the measured figures.
-///
-/// The blobs are read BEFORE the walk, because each ticket's kind names the
-/// branch the authority rule asks about. Reading them afterward would leave the
-/// walk unable to tell which ref answers for which slug, and board would fold a
-/// wider event set than `state` does.
 pub fn cmd_board(ctx: &Ctx) -> Result<String, String> {
     let dir = format!("{}/tickets", ctx.plan_dir);
     let files = crate::git::ls_tree_md(&ctx.trunk, &dir)?;
@@ -361,8 +356,8 @@ pub fn cmd_board(ctx: &Ctx) -> Result<String, String> {
     let blobs = plumbing::cat_file_batch(&specs)?;
 
     // The kind still has to be read, because it selects the sub-machine the
-    // fold runs against and the branch the authority rule looks for -- but it
-    // is a tree read, not a history walk, and not a process per ticket either.
+    // fold runs against -- but it is a tree read, not a history walk, and not a
+    // process per ticket either.
     let parsed: Vec<(String, Result<verb::Ticket, String>)> = slugs
         .iter()
         .cloned()
@@ -374,12 +369,7 @@ pub fn cmd_board(ctx: &Ctx) -> Result<String, String> {
             (slug, ticket)
         })
         .collect();
-    let kinds: std::collections::BTreeMap<String, String> = parsed
-        .iter()
-        .filter_map(|(slug, t)| t.as_ref().ok().map(|t| (slug.clone(), t.kind.clone())))
-        .collect();
-
-    let events = events::all_by_ticket(&ctx.trunk, &kinds)?;
+    let events = events::all_by_ticket(&ctx.trunk)?;
 
     let mut rows = Vec::new();
     for (slug, ticket) in &parsed {

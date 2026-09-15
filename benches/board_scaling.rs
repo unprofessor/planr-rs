@@ -94,7 +94,7 @@ fn capture(dir: &Path, args: &[&str]) -> String {
 ///
 /// Every fourth ticket is left **in flight**: claimed, with a live branch and
 /// worktree. That is not decoration. An earlier version of this bench closed
-/// every ticket, so board always ran with zero `plan/*` refs -- and therefore
+/// every ticket, so board always ran with zero `planr/*` refs -- and therefore
 /// never enumerated branches at all. It consequently could not see that board
 /// failed outright whenever any ticket was claimed, because `git branch
 /// --list` prefixes a ref checked out in another worktree with "+ " and the
@@ -117,7 +117,7 @@ fn build_backlog(dir: &Path, n: usize) {
         planr(dir, &["next", "do", "claim", &slug]);
 
         // A worker satisfies submit's gate on the ticket's own branch.
-        let wt = dir.join(format!(".plan/worktrees/task/{slug}"));
+        let wt = dir.join(format!(".plan/worktrees/{slug}"));
         let ticket = wt.join(format!(".plan/tickets/{slug}.md"));
         let body = std::fs::read_to_string(&ticket).unwrap();
         std::fs::write(&ticket, format!("{body}\n## Validation\n\nchecked\n")).unwrap();
