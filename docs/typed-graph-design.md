@@ -253,7 +253,7 @@ readable from repository structure alone:
 
 | layer | facts | needs the schema? |
 |---|---|---|
-| **structural facts** | present / archived (file in tree); open / closed (a close-class declaration); in-progress (a `plan/<kind>/<slug>` ref exists); done / abandoned (closed *with* a merge / *without* one) | **no** |
+| **structural facts** | present / archived (file in tree); open / closed (a close-class declaration); in-progress (a `planr/<slug>` branch exists); done / abandoned (closed *with* a merge / *without* one) | **no** |
 | **refinements** | `review`, `approved`, `qa`, … — all subdivisions of `open` | yes |
 
 The derivable three — untouched, claimed, absorbed — are exactly git's own
@@ -381,7 +381,7 @@ verbs:
     to: in_progress
     require: { neighbors: { depends_on: done } }   # deps must have SUCCEEDED, not merely be terminal
     base: home                        # build the declaration against the integration ref...
-    effect: create                    # ...then cut plan/task/<slug> at that commit
+    effect: create                    # ...then cut planr/<slug> at that commit
     worktree: create                  # declaring this is what makes `task` the unit
 
   - name: submit                      # worker: "ready for review"
@@ -498,7 +498,7 @@ Decisions baked in:
 - **`base` and `effect` replace the old ordered `do` list (round-3).** `base` is
   the ref the verb's commit is built on — `home` (the ticket's integration ref:
   trunk, or the nearest ancestor holding an open integration branch) or `own`
-  (`plan/<kind>/<slug>`). `effect` is the single ref movement: `advance` (the
+  (`planr/<slug>`). `effect` is the single ref movement: `advance` (the
   base moves), `create` (cut the ticket's ref at the new commit), `merge`
   (integrate into `home`), `delete` (drop the ref without integrating). Trunk is
   a *value* resolved by walking up `parent` edges, never a constant baked into a
@@ -597,7 +597,7 @@ call — `git rm` was never in the same category as `merge`.
 
 - **`advance`** — the commit lands on `base` and the base ref moves. The default,
   and what every edge-mutation verb does.
-- **`create`** — cut `plan/<kind>/<slug>` at the new commit. Because the commit
+- **`create`** — cut `planr/<slug>` at the new commit. Because the commit
   is built *before* the ref exists, the branch springs into existence already
   carrying the claim; there is no instant at which the ref exists but the ticket
   is unclaimed. `git branch` is an atomic create-or-fail, so two agents claiming
@@ -933,14 +933,16 @@ in-repo (observable, same trust boundary as the code being built).
   reaches the older events. It is also what
   [the semantics](semantics.md#6-assumptions-this-rests-on) assumption 3 needs
   in order to be true.
-- **Branch refs are `plan/<kind>/<slug>`** (round-3), not flat `plan/<slug>`.
-  Slugs contain no `/` and refs are always three segments, so git's
-  directory/file ref conflict can never arise. It makes `board` *cheaper*: the
-  ref itself names the kind, so enumerating `plan/story/*` needs no blob reads.
-  The invariant it introduces: **kind is immutable for a claimed ticket**, since
-  the ref is derived from it. No kind-change verb exists; if one is ever added
-  it must refuse on a claimed ticket.
-- **Worktrees live at `.plan/worktrees/$kind/$slug`** by default, and the path is
+- **Branches are `planr/<slug>`**, neither `plan/<kind>/<slug>` nor
+  `plan/<slug>`. A slug is unique across kinds, so the kind adds nothing to the
+  name, and leaving it out removes an invariant (a claimed ticket's kind could
+  never change) along with every place that had to recover a ticket's kind to
+  find its branch. The `planr/` prefix keeps these branches out of `plan/`,
+  where classic planr claims tasks: classic `board` lists every `plan/*` branch
+  as a classic claim, and git refuses `plan/<name>` beside `plan/<name>/...`.
+  Slugs contain no `/`, so every `planr/<slug>` is two segments and git's
+  directory/file ref conflict cannot arise among them.
+- **Worktrees live at `.plan/worktrees/$slug`** by default, and the path is
   a configurable template (`worktrees:`, §3.4). Classic planr already had both the in-repo
   default and the override — an earlier `next` draft froze `../wt-<slug>` into the
   primitive and dropped the knob, which was a regression, not a simplification.
@@ -991,7 +993,7 @@ branch.
 - **Branch lane — per-unit, parallel, lock-free.** Verbs whose `base` is `own`:
   `submit`, `approve`, `request-changes`, `yield`, plus `abandon` / edge-edits
   *of a claimed ticket*. Run by the worker or reviewer in the unit's worktree;
-  commit to `plan/<kind>/<slug>`; touch only **the unit's ticket file and its
+  commit to `planr/<slug>`; touch only **the unit's ticket file and its
   sub-unit descendants**. N units = N branches = zero contention. This is where
   all parallelism lives — no serialization ever.
 - **Integration lane — structure and integration, serialized.** Verbs whose
@@ -1006,14 +1008,14 @@ owned by that one branch. Exclusive ownership was always the property doing the
 work; "one ticket file" was just the special case where the cut sat at the leaf.
 
 **`claim` spans the lanes and needs no lock.** It builds its declaration against
-`home` and creates `plan/<kind>/<slug>` at that commit. Because the commit exists
+`home` and creates `planr/<slug>` at that commit. Because the commit exists
 before the ref does, the branch springs into existence already carrying the
 claim, and `git branch`'s atomic create-or-fail resolves two concurrent claims of
 one ticket by ref CAS (§3.5). Classic planr needed a lock here partly for prefix allocation,
 which the flat layout deleted; this removes the rest of the reason.
 
 **`close` bridges the lanes** and dissolves the apparent chicken-and-egg: it
-folds the task's state *from its branch* (`git show plan/task/<slug>:...` plus
+folds the task's state *from its branch* (`git show planr/<slug>:...` plus
 that branch's `Planr-Verb` trailers — classic planr's board already reads branches this
 way), gates on `approved`, **builds the `done` declaration on the branch tip,
 then merges that into `home`** — so the terminal state rides into trunk *with*
@@ -1863,7 +1865,7 @@ pinned by a test.
   commit along with the work it was recording — abandoning destroyed the
   evidence that it happened.
 - **The "in-progress" structural fact is wrong.** §3.3 lists
-  "*in-progress (a `plan/<kind>/<slug>` ref exists)*" as schema-free. After a
+  "*in-progress (a `planr/<slug>` branch exists)*" as schema-free. After a
   `yield` the ref exists and the state is `todo`. The correct structural fact is
   **has work in flight**, which is a different and more useful thing: it is
   exactly what a supervisor weighs when deciding whether to replan or abandon.
@@ -2155,7 +2157,6 @@ needs.
 | `severed` | events with no reachable creation; the slug reads as free |
 | `divergent` | declarations the graph cannot order that declare different states, so committer date decides the state |
 | `shadowed` | the answering ref cannot reach a declaration on another lane -- the authority rule working, reported so a human sees the clash |
-| `unresolvable` | a branch stands for the slug and its ticket will not parse, so which ref answers is not knowable |
 
 `divergent` is the ordering oracle the differential test could never be: it
 asks git for reachability rather than re-reading the same date-ordered stream
