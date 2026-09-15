@@ -387,10 +387,10 @@ Named so that breaking one is a decision rather than an accident.
    Closing the gap needs migration, which is
    [not yet designed](typed-graph-design.md#workflow-evolution-is-not-yet-designed).
 
-   *Workflow* means this project's `.plan/workflow.yml`; *planr schema* means
    *Workflow* means this project's `.plan/workflow.yml`. planr publishes no
    separate schema for it; the engine's own validation is the only one. See
    [the note](typed-graph-design.md#the-workflow-has-no-published-schema).
+5. **Trailers survive.** Events are attributable because commit messages are
    immutable; a history rewrite that drops trailers drops events.
 
 ## 7. What this does not cover
