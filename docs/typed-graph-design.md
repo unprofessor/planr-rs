@@ -136,23 +136,23 @@ kinds:
   YAGNI: we are *not* building multi-parent decomposition now, but the
   adjacency representation leaves the door open.
 
-**Non-spine kinds live in `groups` (R6).** `kinds` is the *containment spine*, so
+**Group kinds live in `groups` (R6).** `kinds` is the *decomposition tree*, so
 a kind that isn't part of decomposition (a milestone) doesn't belong in it —
 which is exactly why `parents: []` there would collide with an epic-as-root. A
 grouping kind is declared separately and additively, so the common case stays a
 clean list:
 
 ```yaml
-kinds: [epic, story, task]           # containment spine (unchanged)
+kinds: [epic, story, task]           # decomposition tree (unchanged)
 groups:
-  milestone: { inverse: members }    # a non-spine kind + its group edge, one declaration
+  milestone: { inverse: members }    # a group kind + its group edge, one declaration
 ```
 
 `groups.milestone` materializes **both** the milestone *node-kind* (with its own
 derived lifecycle, §3.3) **and** the `milestone` *group edge* on members (forward
 field on the member; inverse role `members`, which also feeds R9's inverse-role
 registry). This is the concrete form of §3.2's "a milestone is both a kind and an
-edge." Each kind's lifecycle — spine or group — is *derived from the verbs that
+edge." Each kind's lifecycle, in the tree or in a group, is *derived from the verbs that
 apply to it* (§3.3), so nothing per-kind is declared beyond the kind itself.
 
 ### 3.2 Edges and groups — the typed graph, disciplined
@@ -194,7 +194,7 @@ the relationship — which gives correct behavior under mutation for free:
 - a group edge (`milestone`) on the **member** → same mechanic as `parent`.
 
 A **milestone is both a kind and an edge**: a node of kind `milestone` (outside
-the decomposition spine — no `parent`, not a `unit`) that holds the release
+the decomposition tree — no `parent`, not a `unit`) that holds the release
 record and its own lifecycle (`planned → in_progress → released`), plus the
 `milestone` group edge that members point at. Its completion is opt-in-gated by
 a `release` verb requiring `{members: terminal}` (§3.6) — non-blocking as a
@@ -259,7 +259,7 @@ readable from repository structure alone:
 
 | layer | facts | needs the schema? |
 |---|---|---|
-| **structural spine** | present / archived (file in tree); open / closed (a close-class declaration); in-progress (a `plan/<kind>/<slug>` ref exists); done / abandoned (closed *with* a merge / *without* one) | **no** |
+| **structural facts** | present / archived (file in tree); open / closed (a close-class declaration); in-progress (a `plan/<kind>/<slug>` ref exists); done / abandoned (closed *with* a merge / *without* one) | **no** |
 | **refinements** | `review`, `approved`, `qa`, … — all subdivisions of `open` | yes |
 
 The derivable three — untouched, claimed, absorbed — are exactly git's own
@@ -269,7 +269,7 @@ worker, assert this is complete"; `approved` is "I, the reviewer, judge it
 acceptable"; `abandoned` is "I, the leader, decide this shouldn't happen." Git
 represents work, not judgments about work, so those live as declarations. The
 payoff of the layering is that an agent with git and no schema can still read
-the spine; only the refinements require the fold.
+the structural facts; only the refinements require the fold.
 
 **The lifecycle is not authored — it is entirely emergent (R6).** There is no
 `lifecycle` block in the schema. The state set is *derived* as the union of every
@@ -362,7 +362,7 @@ explicit-`from` transition; any state with no explicit outgoing transition is
 ### 3.4 `verbs` — one declaration, one commit
 
 A **verb** is a named lifecycle mutation. `board`/`lint`/`graph`/`brief` are
-*not* verbs — they are fixed read tooling (the tool's spine). Verbs are a
+*not* verbs — they are fixed read tooling. Verbs are a
 **list**, each entry selected by `(name, applies-to)`.
 
 Every verb has the same shape, and it is a shape with no ordering in it:
@@ -461,7 +461,7 @@ verbs:
     applies-to: [epic, story]
     content: [ edge: { set: { milestone: $target } } ]
 
-  # --- milestone lifecycle (a non-spine `groups` kind, R6) ---
+  # --- milestone lifecycle (a `groups` kind, R6) ---
   # `planned` is DERIVED as the initial state: it is a `from` that is never a `to`.
   - name: start
     applies-to: [milestone]
@@ -837,7 +837,7 @@ declared in a dedicated schema key (working name **`templates`**, echoing classi
 workspace-initialization semantics):
 
 ```yaml
-templates:                            # one entry per kind — spine kinds AND groups
+templates:                            # one entry per kind — tree kinds AND groups
   epic:      { body: "## Goal\n\n## Context\n\n## Stories\n" }
   story:     { body: "## Goal\n\n## Context\n\n## Tasks\n" }
   task:      { body: "## Goal\n\n## Acceptance\n\n## Validation\n" }
@@ -1141,7 +1141,7 @@ outside git; more git-native than a manifest.
 state (§3.3): an archived ticket keeps whatever terminal state it folded to;
 archival only relocates the file to history. That the file is gone is itself
 derivable, which is why `archived` is a sub-status of `closed` on the structural
-spine rather than a lifecycle state.
+facts rather than a lifecycle state.
 
 ### 5.1 The derived index
 
@@ -1455,8 +1455,8 @@ prose above yet except where noted.
   `∀ ticket where when(t): must(t)`. A verb precondition is the degenerate
   single-ticket case. Claim corrected from "identical grammar" to "shared
   vocabulary + a quantifier"; many invariants also derive from verb requires.
-- **R6 — Per-kind lifecycle / non-spine kinds. ✅ RESOLVED (§3.1, §3.3).**
-  Non-spine kinds go in a separate **`groups`** key (§3.1), which materializes a
+- **R6 — Per-kind lifecycle / group kinds. ✅ RESOLVED (§3.1, §3.3).**
+  Group kinds go in a separate **`groups`** key (§3.1), which materializes a
   grouping node-kind + its group edge, dissolving the `parents: []`/epic
   collision. Per-kind lifecycle is **not declared — it's derived** from the
   verbs that `apply-to` each kind (like `terminal`), with the initial state from
@@ -1587,7 +1587,7 @@ is; declarations encode what someone has decided about it.** `todo` /
 `done` vs `abandoned` (closed *with* a merge vs *without* one) and `archived`
 (the file left the tree). `review`, `approved` and `abandoned` are speech acts
 and must be declared. Hence the two-layer model, whose real payoff is that the
-structural spine is readable **without the schema at all**.
+structural facts are readable **without the schema at all**.
 
 Consequences that fell out, each recorded in place:
 
@@ -1871,7 +1871,7 @@ pinned by a test.
   `delete` deleted the ref without advancing the base, orphaning the verb's own
   commit along with the work it was recording — abandoning destroyed the
   evidence that it happened.
-- **The structural spine's "in-progress" fact is wrong.** §3.3 lists
+- **The "in-progress" structural fact is wrong.** §3.3 lists
   "*in-progress (a `plan/<kind>/<slug>` ref exists)*" as schema-free. After a
   `yield` the ref exists and the state is `todo`. The correct structural fact is
   **has work in flight**, which is a different and more useful thing: it is
