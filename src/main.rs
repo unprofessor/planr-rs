@@ -174,7 +174,7 @@ enum Command {
     },
 
     /// The typed-graph model: workflow-driven verbs, state derived from
-    /// commit events. Experimental -- the planr schema language is not yet pinned.
+    /// commit events. Experimental: the workflow language may still change.
     #[cfg(feature = "next")]
     Next {
         #[command(subcommand)]

@@ -10,9 +10,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-/// What a ticket's slug may look like, mirroring `$defs/slug` in the published
-/// schema -- and pinned against that document by a test below, because this is
-/// the third copy of a rule and the other two have drifted before.
+/// What a ticket's slug may look like.
 ///
 /// The rule the pattern stands in for: **a slug must be exactly what comes
 /// back out of `Planr-Ticket`.** The slug is the ticket's identity in the
@@ -166,8 +164,6 @@ struct WorkflowFile {
     verbs: Vec<Verb>,
     #[serde(default = "default_worktrees")]
     worktrees: String,
-    #[serde(default, rename = "$schema")]
-    _schema: Option<String>,
     #[serde(default)]
     templates: BTreeMap<String, Template>,
 }
@@ -265,9 +261,8 @@ impl Workflow {
             // the same name puts a second floor into every walk, and it fails
             // silently rather than loudly: `verb::run` reads the before and
             // after states through that same walk, so even a stateless verb
-            // would report itself as a transition to the initial state. The
-            // published schema rejects it too, and the constant lives with the
-            // walk that depends on it.
+            // would report itself as a transition to the initial state.
+            // The constant lives with the walk that depends on it.
             if verb.name == super::events::GENESIS {
                 return Err(format!(
                     "verb '{}' is a reserved name: creation is fixed tooling rather than a verb, and it writes 'Planr-Verb: {}' -- the record a bounded state read stops at. A verb of that name would end every walk at itself. Rename it",
@@ -286,7 +281,7 @@ impl Workflow {
                     ));
                 }
             }
-            // The ref algebra, enforced here as well as in the published schema.
+            // The ref algebra.
             if verb.effect == Effect::Create && verb.base != Base::Home {
                 return Err(format!(
                     "verb '{}': effect 'create' requires base 'home'",
@@ -555,10 +550,7 @@ mod wf {
         }
     }
 
-    /// Section 2.2, W-Reserved. The published schema rejects this too, via
-    /// `tests/fixtures/workflow/root/invalid/verb-named-new.yml` -- both sides
-    /// are pinned because three-way drift between the reference workflow, this
-    /// file, and the published document is how the earlier renames got lost.
+    /// Section 2.2, W-Reserved.
     #[test]
     fn the_genesis_name_is_not_available_to_a_verb() {
         let with_name = |name: &str| {
@@ -575,31 +567,5 @@ mod wf {
         assert!(err.contains("reserved"), "unhelpful refusal: {err}");
         // Only the name is disqualifying -- the same verb otherwise loads.
         assert!(Workflow::parse(&with_name("spawn")).is_ok());
-    }
-
-    /// The slug rule is written down twice -- here and in the published
-    /// document -- so it is read out of the document rather than restated.
-    /// `tests/workflow.rs` validates fixtures against the document and would not
-    /// notice the ENGINE drifting away from it, which is the direction that
-    /// lets planr accept a slug its own workflow calls invalid.
-    #[test]
-    fn the_slug_pattern_matches_the_published_schema() {
-        const PUBLISHED: &str = include_str!("../../schemas/planr/v1/1.0.0/planr.schema.json");
-        let doc: serde_json::Value = serde_json::from_str(PUBLISHED).unwrap();
-        let published = doc["$defs"]["slug"]["pattern"]
-            .as_str()
-            .expect("the published schema has no $defs/slug pattern");
-        assert_eq!(
-            published, SLUG_PATTERN,
-            "the engine and the published schema disagree about what a slug is"
-        );
-
-        let max = doc["$defs"]["slug"]["maxLength"]
-            .as_u64()
-            .expect("the published schema has no $defs/slug maxLength");
-        assert_eq!(
-            max as usize, SLUG_MAX,
-            "the engine and the published schema disagree about how long a slug may be"
-        );
     }
 }

@@ -33,8 +33,6 @@
 #
 # A verb without `from` runs from any state except a final one (`done` or
 # `abandoned`).
-#
-# The file declares no `$schema:` URL, because the language may still change.
 
 kinds: [epic, story, task]
 
