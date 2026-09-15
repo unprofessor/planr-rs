@@ -1,4 +1,4 @@
-# A schema with no containment spine.
+# A workflow with no decomposition tree (no kinds).
 verbs:
   - name: claim
     applies-to: [task]

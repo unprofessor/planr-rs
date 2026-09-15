@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json",
   "title": "planr schema language v1",
-  "description": "Version 1 of the planr schema language. This number tracks the LANGUAGE, not the planr binary: it does not mean 'the schema for planr v1', and it moves only when the key set or a primitive's meaning changes, never with a planr release. The root schema validates a project's .plan/workflow.yml. Two further artifacts are addressable by anchor: '#ticket' validates a ticket file's YAML frontmatter, and '#commit' validates the parsed Planr-* trailer block of a planr commit. These schemas constrain FORM only. The vocabulary they admit -- which kind names are legal, which verb names exist -- is supplied by the project's own workflow file and checked by planr against the tree at each commit, never here. This document is an identifier and an offline validator; planr never dereferences it at runtime.",
+  "description": "The planr schema language, version 1. It describes three things: a project's workflow file (.plan/workflow.yml), which declares the kinds of ticket the project uses and the verbs that move tickets between states; a ticket file's YAML frontmatter ('#ticket'); and the Planr-* trailers planr writes into each of its commits ('#commit'). Terms used throughout: a ticket is one file in .plan/tickets/, identified by its slug. A kind is a ticket's type, such as epic, story, or task. A state is a stage in a ticket's lifecycle, such as todo or done; planr computes it from the ticket's commits and never stores it. A verb is a named operation that moves a ticket from one state to another and makes exactly one commit. The version number tracks this language, not planr releases: it changes only when a key is added or removed or a key's meaning changes. This schema checks structure only; planr checks that each named kind and verb exists in the workflow. planr never fetches this document at runtime.",
   "type": "object",
   "required": ["kinds", "verbs"],
   "additionalProperties": false,
@@ -11,7 +11,7 @@
     "$schema": {
       "type": "string",
       "pattern": "^https://schemas\\.columnzero\\.com/planr/v1/(\\d+\\.\\d+\\.\\d+/)?planr\\.schema\\.json$",
-      "description": "Declares which planr schema language this file speaks. Optional -- a file with no declaration is assumed to be v1. Cite the alias -- the major line -- so compatible releases do not churn every repo, or pin the canonical versioned URL. This document's own $id is the canonical form, which never moves; the alias moves forward with each release, so a validator that fetches the alias gets a document whose $id differs from the retrieval URL. That is the intended registry behaviour: the embedded $id establishes the base URI. A URL naming a different major version is a clear 'this binary understands v1' error rather than a parse failure."
+      "description": "Declares which version of the planr schema language this file uses. Optional; planr treats a file without it as version 1. Cite the major-version alias (.../planr/v1/planr.schema.json) so compatible releases need no edit, or pin an exact version. Each version's $id is its exact, permanent URL, and the alias always points at the newest compatible version, so a document fetched through the alias carries an $id that differs from the URL used to fetch it. That is expected: the $id identifies the document. planr rejects a URL that names another major version with an explicit error."
     },
 
     "kinds": { "$ref": "#/$defs/kinds" },
@@ -23,13 +23,13 @@
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/verb" },
-      "description": "Every lifecycle mutation. Read tooling -- board, lint, graph, brief -- is not a verb and is not declared here. Each entry is selected by the pair name + applies-to; the same name may repeat with disjoint applies-to, which is how close overloads across unit and container kinds. Overlapping applies-to for one name is a lint error."
+      "description": "The operations that change tickets. planr identifies a verb by its name together with 'applies-to', so a name may appear more than once when the entries apply to different kinds. That is how 'close' works one way for tasks and another for epics. Two entries with the same name must not apply to the same kind."
     },
 
     "worktrees": {
       "type": "string",
       "default": ".plan/worktrees/$kind/$slug",
-      "description": "Path template for unit worktrees, relative to the repository root unless absolute. Supports $kind and $slug. Worktrees are ephemeral local workspace and never appear in history, which is why this is configuration rather than a verb effect. An in-repo default keeps worktrees inside an agent's sandbox boundary and avoids collisions between sibling clones; set it to something like ../wt-$slug if a recursive file watcher is a problem."
+      "description": "Where planr creates worktrees for the unit. The unit is the kind whose tickets each get their own branch and worktree: the kind with a verb that declares 'worktree: create', usually task. The value is a path template, relative to the repository root unless absolute, in which $kind and $slug expand to the ticket's kind and slug. Worktrees are local and never committed, which is why this is a setting rather than part of a verb. The default keeps worktrees inside the repository, and so inside an agent's sandbox; use a path such as ../wt-$slug if a recursive file watcher is a problem."
     }
   },
 
@@ -38,31 +38,31 @@
     "identifier": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_-]*$",
-      "description": "A lowercase token. Used for kind names, verb names, edge names, and state names. Underscores are permitted so established names such as depends_on and in_progress stay expressible."
+      "description": "A lowercase name, used for kinds, verbs, links, and states. Underscores are allowed so that names such as depends_on and in_progress fit."
     },
 
     "verb-name": {
       "$ref": "#/$defs/identifier",
       "not": { "const": "new" },
-      "description": "A verb's name: any identifier except the reserved 'new'. Creation is fixed tooling rather than a verb, and it writes 'Planr-Verb: new' -- the record a bounded state read stops its backwards walk at, and the only floor a ticket that has never transitioned has. A verb of that name would end every walk at itself, and silently: the runner reads a verb's before and after states through that same walk, so even a stateless verb would report itself as a transition. The '#commit' anchor still admits 'new' as a Planr-Verb, because that trailer is exactly what creation writes."
+      "description": "A verb's name: any identifier except 'new', which is reserved for ticket creation (see 'Planr-Verb')."
     },
 
     "slug": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9_-]*$",
       "maxLength": 96,
-      "description": "A ticket's identity, and its primary key. The slug is the filename stem and the last segment of its branch ref; it carries no numeric prefix and must not contain a slash. The mapping from slug to file path is one-to-one and permanent: archival deletes the file but does not release the name, because every event is attributed by 'Planr-Ticket: <slug>' and a reused slug would make one identifier name two tickets, folding a dead ticket's events into a live one. The length bound is a filesystem constraint rather than a stylistic one: the slug is also '<slug>.md' on disk and a segment of a worktree path, and a name that overruns the filesystem limit is committed to history before the write that fails, leaving a repository no clone can check out."
+      "description": "A ticket's identity. The slug names the ticket's file (<slug>.md) and its branch, has no numeric prefix, and contains no slash. A slug is never reused: archiving deletes the file but keeps the name, because every commit about the ticket records its slug, and reusing the slug would attach the old ticket's history to the new one. The length limit keeps file names and worktree paths within filesystem limits."
     },
 
     "kinds": {
-      "description": "The containment spine. Non-spine kinds -- a milestone, say -- belong in 'groups', not here. Note there is no 'unit' key: the unit is derived as the kind whose verbs create a worktree, so the execution boundary is a declared cut across the tree rather than necessarily its leaf.",
+      "description": "The kinds of ticket this project uses, arranged as a decomposition tree: each kind breaks down into the kinds below it, as an epic breaks down into stories and a story into tasks. A kind that groups tickets without breaking them down, such as a milestone, belongs in 'groups' instead. There is no 'unit' key. The unit is whichever kind has a verb that declares 'worktree: create', and it need not be the lowest kind in the tree.",
       "oneOf": [
         {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/identifier" },
-          "description": "List form -- sugar for a totally-ordered hierarchy. Desugars to adjacency internally, so the engine always speaks adjacency."
+          "description": "List form: kinds in order from outermost to innermost, each one containing the next. planr reads it as the equivalent object form."
         },
         {
           "type": "object",
@@ -77,11 +77,11 @@
                 "type": "array",
                 "uniqueItems": true,
                 "items": { "$ref": "#/$defs/identifier" },
-                "description": "Kinds that may contain this one. An empty list marks a root kind. Decomposition stays a tree at runtime -- a node has one parent -- but the adjacency form allows a kind with several legal parents."
+                "description": "The kinds that may contain this one. An empty list marks a top-level kind. A ticket still has at most one parent; listing several kinds here lets that parent be any one of them."
               }
             }
           },
-          "description": "Object form -- explicit adjacency. Needed for multi-parent kinds."
+          "description": "Object form: each kind lists the kinds that may contain it. Use it when a kind may sit under more than one kind of parent."
         }
       ]
     },
@@ -96,11 +96,11 @@
         "properties": {
           "inverse": {
             "$ref": "#/$defs/identifier",
-            "description": "Name of the read-only derived role on the group node, e.g. 'members'. Inverse roles are never written -- only the forward field on the member is."
+            "description": "The name of the list of tickets in a group, such as 'members' for a milestone. planr builds the list from the member tickets' own fields and never stores it on the group ticket."
           }
         }
       },
-      "description": "Non-spine kinds and their group edges, declared together. One entry materializes both a node kind with its own derived lifecycle and a forward edge field on its members."
+      "description": "Kinds that group tickets rather than breaking them down, such as a milestone. Each entry declares two things: a kind of ticket, the group itself, with its own lifecycle; and a field of the same name that other tickets set to join the group, as in 'milestone: v1-launch'."
     },
 
     "edges": {
@@ -113,16 +113,16 @@
         "properties": {
           "cardinality": {
             "enum": ["one", "many"],
-            "description": "'one' takes edge/set; 'many' takes edge/add and edge/remove. A multi-valued edge is stored as a block list, one target per line, so concurrent additions of different targets land on different lines and merge cleanly."
+            "description": "'one' means the field holds a single target, changed with the 'set' operation. 'many' means it holds a list, changed with 'add' and 'remove'. planr writes a list one target per line, so two branches that add different targets merge without a conflict."
           },
           "semantics": {
             "enum": ["rollup", "gate", "group", "info"],
-            "description": "What the edge means to the engine. 'rollup' feeds container closure; 'gate' blocks a verb until its targets are done; 'group' groups without gating or rolling up; 'info' is cosmetic. Note `link` is body [[..]] prose rather than a frontmatter edge, so it is not declared here."
+            "description": "What the link means to planr. With 'rollup', a container closes only when its children have finished. With 'gate', a verb waits until every target is done. 'group' groups tickets without either effect, and 'info' is informational only. A [[slug]] link in a ticket's body is prose, not a link field, and is not declared here."
           },
           "inverse": { "$ref": "#/$defs/identifier" }
         }
       },
-      "description": "Additional typed edges beyond the built-in 'parent' -- rollup, one -- and 'depends_on' -- gate, many."
+      "description": "Typed links between tickets, beyond the two that are built in. 'parent' is a single link that rolls up: a container closes only when its children have finished. 'depends_on' is a list of links that gate: a verb waits until each target is done."
     },
 
     "templates": {
@@ -134,51 +134,51 @@
         "properties": {
           "body": {
             "type": "string",
-            "description": "Literal body scaffolded into a new ticket of this kind. Take care not to scaffold a section that a verb gates on: `submit` requiring `sections: [Validation]` checks existence only, so a template that pre-creates that heading satisfies the gate at birth and it then checks nothing, forever."
+            "description": "The text a new ticket of this kind starts with. Leave out any section a verb requires, such as the Validation section 'submit' checks for. The check only tests that the section exists, so a body that already had it would pass the check before any work was done."
           },
           "initial": {
             "$ref": "#/$defs/identifier",
-            "description": "The kind's initial state. Omit it while the state graph is acyclic -- it is derived then, as the state that appears as some verb's 'from' but never as any verb's 'to'. It becomes REQUIRED once a rework cycle reaches back to the entry state (a `yield` returning a task to `todo` makes `todo` both a 'from' and a 'to'), because creation is fixed tooling rather than a verb, so the entry state is not an edge in the verb graph at all."
+            "description": "The state a new ticket of this kind starts in. planr usually works this out: the starting state is the one state that some verb moves a ticket out of and no verb moves a ticket into. Declare it when a verb moves tickets back into the starting state, as 'yield' moves a task back to 'todo', because then no state qualifies."
           }
         }
       },
-      "description": "Per-kind scaffolding for 'new', plus the initial state where it cannot be derived."
+      "description": "Per-kind scaffolding for 'new', plus the initial state where planr cannot derive it."
     },
 
     "require": {
       "type": "object",
       "minProperties": 1,
       "additionalProperties": false,
-      "description": "A precondition evaluated before any side effect. The vocabulary is three reserved structural operators combined by implicit AND. There is no custom-hook escape hatch and no transitive closure, counts, negation, or disjunction -- every predicate is a pure graph fact, so it is derivable, cacheable, and reusable by lint as a standing invariant. Structure only, never semantic judgment: planr may check that a ticket is in the approved state, never whether the work is actually acceptable.",
+      "description": "A precondition evaluated before any side effect. The vocabulary is three reserved structural operators combined by implicit AND. Every predicate is a pure graph fact, so it is derivable, cacheable, and reusable by lint as a standing invariant. Note that predicates are structural only, never semantic judgment; planr may check that a ticket is in the approved state, never whether the work is actually acceptable.",
       "properties": {
         "self": {
           "type": "object",
           "minProperties": 1,
           "additionalProperties": { "type": "string" },
-          "description": "Field checks on the ticket itself, e.g. status: approved. 'status' here is the folded state, not a stored field."
+          "description": "Checks on the ticket itself, such as 'status: approved'. Here 'status' is the ticket's computed state, not a stored field."
         },
         "neighbors": {
           "type": "object",
           "minProperties": 1,
           "propertyNames": { "$ref": "#/$defs/identifier" },
           "additionalProperties": { "type": "string" },
-          "description": "Universally-quantified checks over an edge role, e.g. children: terminal, or depends_on: done. Only forall -- there is no exists and no count. Note the asymmetry this makes visible: a dependency gate wants 'done' because the work must have succeeded, while rollup wants 'terminal' because an abandoned child is a resolved decision."
+          "description": "Checks that every ticket at the other end of a link is in a given state, such as 'children: terminal' or 'depends_on: done'. There is no 'any' and no count. A dependency asks for 'done' because the work must have succeeded, while a container asks its children for 'terminal' (done or abandoned) because an abandoned child is a decision already made."
         },
         "sections": {
           "type": "array",
           "minItems": 1,
           "items": { "type": "string" },
-          "description": "Named sections that must be present in the ticket body, e.g. Validation. Structural -- their presence is checked, never their content."
+          "description": "Named sections that must be present in the ticket body, e.g. Validation."
         }
       }
     },
 
     "content-step": {
-      "description": "A pure tree transformation. Content steps know nothing of HEAD, refs, or worktrees: they take a tree and return a tree, and the verb's base and effect decide where the resulting commit is built and which ref moves. All of a verb's content steps are staged into its single commit.",
+      "description": "An edit to the ticket file. Content steps change files only; the verb's 'base' and 'effect' decide which branch the commit is built on and which branch moves. All of a verb's content steps go into its one commit.",
       "oneOf": [
         {
           "const": "remove",
-          "description": "Delete the ticket file. This is what archival is -- a tree change, not a git primitive and not a state. An archived ticket keeps whatever terminal state it folded to; git history is the archive, and the deleting commit's trailers are how it is found again."
+          "description": "Delete the ticket file. This is what archiving means: the file leaves the tree, the ticket keeps its final state, and git history keeps everything else."
         },
         {
           "type": "object",
@@ -191,11 +191,11 @@
               "additionalProperties": false,
               "properties": {
                 "section": { "type": "string" },
-                "body": { "type": "string", "description": "Templated body text; $message carries the invoker's message." }
+                "body": { "type": "string", "description": "The section's text. $message expands to the message given on the command line." }
               }
             }
           },
-          "description": "Write a named section with a templated body. Use this for material a future reader must act on -- review findings, for instance. Commentary that nothing downstream acts on belongs in the commit message instead."
+          "description": "Add a named section to the ticket body, such as a reviewer's findings. Use it for notes that someone must act on; other commentary belongs in the commit message."
         },
         {
           "type": "object",
@@ -214,7 +214,7 @@
               }
             }
           },
-          "description": "Write a forward edge field on the owning node. Inverse roles are derived and never written. Enforces the same checks lint runs: target exists, adjacency is legal for the kinds involved, the graph stays acyclic, and the operation matches the edge's declared cardinality."
+          "description": "Set, add to, or remove from a link field on the ticket. planr writes only the ticket's own fields; the reverse list on the other ticket is computed. planr checks that the target exists, that the two kinds may be linked, that the link creates no cycle, and that the operation fits the field's cardinality."
         }
       ]
     },
@@ -225,14 +225,14 @@
       "maxProperties": 1,
       "propertyNames": { "$ref": "#/$defs/identifier" },
       "additionalProperties": { "type": "string" },
-      "description": "One edge name mapped to its target, usually the template variable $target."
+      "description": "One link field mapped to its target, usually $target, which expands to the slug given on the command line."
     },
 
     "verb": {
       "type": "object",
       "required": ["name", "applies-to"],
       "additionalProperties": false,
-      "description": "One named lifecycle mutation, and one commit. A verb is a declaration first and a content mutation second: several verbs legitimately have no content at all, and their commit message carries the whole payload. The commit is built from 'base', carries the content steps if any, and lands per 'effect' -- so there is nothing to order and no ordering key.",
+      "description": "One operation on a ticket, making exactly one commit. Some verbs change no file at all, and their commit message records the whole operation. planr builds the commit on 'base', puts any content steps in it, and then applies it as 'effect' says, so the keys have no order to declare.",
 
       "properties": {
         "name": { "$ref": "#/$defs/verb-name" },
@@ -242,17 +242,17 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/identifier" },
-          "description": "Kinds this definition serves. Per-kind capability is derived from this: an epic offers no claim because no claim verb applies to it, so a board can list each ticket's available actions for free."
+          "description": "The kinds this verb works on. It also defines what each kind can do: an epic cannot be claimed because no 'claim' verb applies to epics."
         },
 
         "from": {
           "$ref": "#/$defs/identifier",
-          "description": "The source state. Structural, and what makes each kind's sub-machine well-formed and 'terminal' derivable. Every progression verb that is the sole exit of its source state must declare it. Omitting it means 'any non-terminal state' and is reserved for a verb like abandon, which is never a sole exit and so cannot freeze a state. 'require' adds a precondition; it never substitutes for 'from'."
+          "description": "The source state. Structural, and what makes each kind's sub-machine well-formed and 'terminal' derivable. Every progression verb that is the sole exit of its source state must declare it. Omitting it means 'any non-terminal state' and is reserved for a verb like 'abandon', which is never a sole exit and so cannot freeze a state. 'require' adds a precondition; it never substitutes for 'from'."
         },
 
         "to": {
           "$ref": "#/$defs/identifier",
-          "description": "The state this verb's declaration folds to. Omit for verbs that change no state, such as edge mutations. Nothing stores this -- it is the fold's output, computed from the event chain."
+          "description": "The state the ticket is in after this verb. Omit it for verbs that change no state, such as link edits. planr computes a ticket's state from its commits; nothing stores it."
         },
 
         "require": { "$ref": "#/$defs/require" },
@@ -260,37 +260,37 @@
         "content": {
           "type": "array",
           "items": { "$ref": "#/$defs/content-step" },
-          "description": "Tree transformations staged into this verb's single commit. May be empty or omitted: claim, submit, and unit close change no bytes, and their commit message carries the entire declaration. An empty declaration is legitimate, but pair it with a 'require' -- a verb that asserts progress while checking nothing is the one shape that lets an actor plough on and hope."
+          "description": "The edits this verb makes to the ticket file, all in its one commit. May be empty: 'claim', 'submit', and closing a task edit no file, and their commit message records the whole operation. A verb with no content should have a 'require'; otherwise it records progress without checking anything."
         },
 
         "base": {
           "enum": ["home", "own"],
           "default": "home",
-          "description": "Which ref the verb's commit is built on. 'home' is the ticket's integration ref -- trunk, or the nearest ancestor holding an open integration branch, resolved by walking up parent edges. 'own' is the ticket's own ref, plan/<kind>/<slug>. The commit is always constructed against the base tree with plumbing and never checks out a branch or moves an unrelated ref, so a ref held in another worktree is never an obstacle."
+          "description": "The branch the verb's commit is built on. 'home' is the ticket's integration branch, which is trunk. 'own' is the ticket's branch, plan/<kind>/<slug>. planr builds the commit without checking out a branch, so a branch checked out in another worktree is no obstacle."
         },
 
         "effect": {
           "enum": ["advance", "create", "merge", "ticket-only"],
           "default": "advance",
-          "description": "What happens to refs, exactly one per verb. 'advance' moves the base ref to the new commit. 'create' cuts plan/<kind>/<slug> at the new commit, so the ref springs into existence already carrying the claim -- an atomic create-or-fail that makes concurrent claims of one ticket resolve by ref CAS with no lock. 'merge' integrates the new commit into home, so a terminal state rides in with the work as one ref move, revertible in one operation. 'ticket-only' integrates the TICKET and not the work: the tree is home's with this ticket taken from its own ref, and the parents are home and that ref -- an ours-style merge, so the branch's commits stay reachable from home while never entering its tree, and the ref can then be released without destroying anything. There is deliberately no destructive effect: releasing a ref and destroying work are separable, and only the first belongs to planr."
+          "description": "The one branch this verb moves. 'advance' moves the base branch to the new commit. 'create' creates the ticket's branch at the new commit, and fails if the branch already exists, so two agents claiming one ticket at once cannot both succeed. 'merge' merges the new commit into trunk, so the ticket's final state and its work arrive together and one revert undoes both. 'ticket-only' merges the ticket file but not the work: trunk's files stay as they were apart from the ticket, and the merge records the ticket's branch as a parent, so the branch's commits stay in history and the branch can be deleted without losing them. No effect destroys work; deleting a branch outright is left to git."
         },
 
         "retain-ref": {
           "type": "boolean",
           "default": false,
-          "description": "With effect 'merge', keep plan/<kind>/<slug> after integration instead of deleting it. The commits are reachable from home either way; retain only if something outside planr, such as a code-forge review record, still needs the ref."
+          "description": "With effect 'merge', keep the ticket's branch after merging instead of deleting it. The commits are reachable from trunk either way; keep the branch only if something outside planr, such as a code review on a forge, still needs it."
         },
 
         "worktree": {
           "enum": ["create", "remove"],
-          "description": "Workspace side effect. Declaring 'create' is what makes a kind the unit. Idempotent in both directions: a missing worktree is a no-op on remove, so a re-run after a partial failure completes."
+          "description": "Creates or removes a worktree for the ticket's branch. The kind with a verb that declares 'create' is the unit. Both actions are safe to repeat: removing a worktree that does not exist does nothing, so re-running a verb after a partial failure completes it."
         },
 
         "hook": {
           "type": "object",
           "required": ["run"],
           "additionalProperties": false,
-          "description": "Escape hatch -- run a project script. Deliberately off the main path so a stateless agent can read a verb and know what it does. Never available inside 'require': gating stays pure and derivable.",
+          "description": "Runs a project script. It is kept out of the common path so that an agent can read a verb and know what it does, and it is never allowed inside 'require', which stays a pure check.",
           "properties": {
             "run": { "type": "string" },
             "sandbox": { "type": "boolean", "default": false }
@@ -339,56 +339,56 @@
     "ticket": {
       "$anchor": "ticket",
       "title": "planr ticket frontmatter",
-      "description": "The YAML frontmatter of a ticket file. What remains here is exactly what git cannot derive: what kind this is, what it is called, and what it is connected to. State is not stored -- it is folded from the ticket's commit history under the schema in force at each commit.",
+      "description": "The YAML frontmatter of a ticket file. It holds only what git cannot supply: the ticket's kind, its title, and its links. planr computes the ticket's state from its commits, reading each commit under the workflow in force when it was made.",
       "type": "object",
       "required": ["kind", "title"],
 
       "properties": {
         "kind": {
           "$ref": "#/$defs/identifier",
-          "description": "Must name a kind in the project's schema. Immutable once the ticket is claimed, because the branch ref plan/<kind>/<slug> is derived from it."
+          "description": "Must name a kind in the project's workflow. It cannot change once the ticket is claimed, because the ticket's branch name, plan/<kind>/<slug>, includes it."
         },
         "title": { "type": "string" },
         "parent": {
           "type": ["string", "null"],
-          "description": "Slug of the containing ticket. Null or absent for a root."
+          "description": "The slug of the ticket that contains this one. Null or absent for a top-level ticket."
         },
         "depends_on": {
           "type": "array",
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/slug" },
-          "description": "Gate edges. Written as a block list, one target per line, so concurrent additions of different targets auto-merge."
+          "description": "The tickets this one waits on. planr writes the list one slug per line, so two branches that add different dependencies merge without a conflict."
         },
 
         "status": {
           "not": {},
-          "description": "Removed in v1. State is derived by folding the ticket's Planr-Verb events, refined by structure: open or closed, in-progress when a branch ref exists, done or abandoned according to whether closure carried a merge. Storing it alongside the events that determine it is redundant, and a schema edit would silently invalidate every stored copy."
+          "description": "Not allowed. planr computes a ticket's state from its commits, and a stored copy would stop matching them as soon as the workflow changed."
         },
         "id": {
           "not": {},
-          "description": "Removed in v1. The slug is the identity."
+          "description": "Not allowed. The slug is the ticket's identity."
         },
         "created": {
           "not": {},
-          "description": "Removed in v1. Derive from the ticket file's first commit."
+          "description": "Not allowed. The first commit of the ticket's file records when it was created."
         },
         "updated": {
           "not": {},
-          "description": "Removed in v1. Derive from the ticket file's most recent commit."
+          "description": "Not allowed. The latest commit of the ticket's file records when it was updated."
         }
       },
 
       "additionalProperties": {
         "type": ["string", "array", "null"],
         "items": { "type": "string" },
-        "description": "Group and project-defined edge fields, e.g. milestone. Single-valued edges are strings; multi-valued edges are block lists."
+        "description": "Group membership and project-defined link fields, such as milestone. A single link is a string; a list of links is a block list."
       }
     },
 
     "commit": {
       "$anchor": "commit",
       "title": "planr commit trailers",
-      "description": "The parsed Planr-* trailer block of a planr commit. JSON Schema can describe the parsed object but not its encoding, so the encoding rules are stated here and enforced by planr: trailers appear in the commit message's trailer block per git-interpret-trailers, and a planr commit carries exactly one Planr-Verb. The commit subject is conventionally 'plan: <verb> <slug>' and asserts no state, because state is computed rather than declared. No schema identifier appears here: the schema file is tracked in the same history, so the tree at each commit already carries the schema in force when that event was declared -- which also means a branch's events are read under the schema its worker could see, not one the leader adopted later.",
+      "description": "The Planr-* trailers of a planr commit, as parsed key-value pairs. planr writes them as git trailers (see git-interpret-trailers), with exactly one Planr-Verb; JSON Schema can describe the parsed pairs but not that encoding. The subject line is conventionally 'plan: <verb> <slug>'. A commit records no workflow version: the workflow file lives in the same history, so the commit's own tree holds the workflow that applied when it was made, and a branch's commits are read under the workflow its author could see.",
       "type": "object",
       "required": ["Planr-Verb", "Planr-Ticket"],
       "additionalProperties": false,
@@ -396,11 +396,11 @@
       "properties": {
         "Planr-Verb": {
           "$ref": "#/$defs/identifier",
-          "description": "The declaration this commit makes. Irreducible: approve and request-changes produce identical content shapes, so only the declaration distinguishes them. This schema constrains the token's form; whether it names a real verb is checked against the project's schema at that commit."
+          "description": "The verb this commit records. 'new' is not a verb: it marks the commit that created the ticket, and planr reads a ticket's history back to that commit and no further, which is why no verb may be named 'new'. Some verbs make identical file changes ('approve' and 'request-changes' both add a Review section), so this trailer is the only record of which one ran. This schema checks the name's form; planr checks that it names a verb in the workflow."
         },
         "Planr-Ticket": {
           "$ref": "#/$defs/slug",
-          "description": "The ticket this event belongs to. Derivable from changed paths in the common case, but recorded explicitly so the event chain survives renames and so an archival commit, which deletes the path outright, stays attributable."
+          "description": "The slug of the ticket this commit acts on. planr records it rather than inferring it from the files the commit changes, so a ticket's history survives renames, and a commit that deletes the ticket file still names its ticket."
         }
       }
     }

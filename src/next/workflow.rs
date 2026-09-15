@@ -1,6 +1,6 @@
 //! Workflow loading for the typed-graph model.
 //!
-//! The workflow is data: kinds are a containment spine, verbs are declarations
+//! The workflow is data: kinds form a decomposition tree, verbs are declarations
 //! with a base/content/effect shape. Nothing here is pinned to a published
 //! URL yet -- the in-tree workflow is deliberately unadvertised while the model
 //! is still being experimented with.

@@ -1,45 +1,75 @@
-# planr workflow -- EXPERIMENTAL; no language version is pinned yet.
+# The planr workflow for this backlog.
 #
-# No `$schema:` URL yet: the language is still being experimented with, and
-# pinning it to the registry is what freezes it. Add the declaration once the
-# model has survived contact with real work.
+# This file is a program. It declares the kinds of ticket, the states a
+# ticket moves through, and the verbs that move it. Each run of a verb
+# applies it to one ticket.
 #
-# Every verb has the same shape and no ordering:
-#     require  ->  build a tree from BASE  ->  move the TARGET ref
-# `base` is `home` (the integration ref -- trunk today) or `own`
-# (plan/<kind>/<slug>). `effect` is the single ref movement.
+# Terms
+#   ticket  A file in .plan/tickets/, named <slug>.md.
+#   kind    A ticket's type: epic, story, or task. An epic contains stories,
+#           and a story contains tasks.
+#   state   Where a ticket is in its lifecycle, such as `todo` or `done`.
+#           planr computes it from the ticket's commits; no file stores it.
+#   verb    A named operation on a ticket. Each run makes exactly one commit.
+#   trunk   The main branch.
+#   branch  A ticket's own branch, plan/<kind>/<slug>, which holds its work
+#           while the ticket is in progress.
+#
+# Running a verb
+#   1. planr checks that the ticket is in state `from` and that `require`
+#      holds. If either check fails, the verb stops and nothing changes.
+#   2. planr builds one commit on `base`: trunk (`home`) or the ticket's
+#      branch (`own`). The commit holds the verb's `content` edits to the
+#      ticket file, if it has any.
+#   3. planr moves exactly one branch, as `effect` says:
+#        advance      Move the base branch to the new commit.
+#        create       Create the ticket's branch at the new commit.
+#        merge        Merge the ticket's branch into trunk, then delete it.
+#        ticket-only  Merge only the ticket file into trunk, then delete the
+#                     branch. The branch's commits stay reachable in history.
+#                     If the ticket has no branch, commit to trunk instead.
+#   4. planr creates or removes the ticket's worktree, as `worktree` says.
+#   If the verb declares `to`, the ticket is now in that state.
+#
+# A verb without `from` runs from any state except a final one (`done` or
+# `abandoned`).
+#
+# The file declares no `$schema:` URL, because the language may still change.
 
 kinds: [epic, story, task]
 
+# Where planr creates the worktree for a task being worked on.
 worktrees: .plan/worktrees/$kind/$slug
 
 templates:
-  # `initial` is only needed where a rework cycle reaches back to the entry
-  # state: `yield` returns a task to `todo`, so `todo` is both a `from` and a
-  # `to` and can no longer be derived. epic and story have no such cycle, so
-  # theirs stay derived.
+  # The body each new ticket starts with.
   epic:  { body: "## Goal\n\n## Context\n\n## Stories\n" }
   story: { body: "## Goal\n\n## Context\n\n## Tasks\n" }
-  # NOTE: the task template deliberately does NOT scaffold `## Validation`.
-  # `submit` gates on that section existing, and a template that scaffolds a
-  # gated section satisfies the gate at birth -- the gate then checks nothing.
-  # A template must not pre-create any section a verb requires.
+  # A task also names its starting state. planr usually works this out as
+  # the one state that some verb leaves but no verb enters. For tasks, every
+  # state is entered by some verb, because `yield` returns a task to `todo`,
+  # so the starting state must be declared here.
+  #
+  # The task body leaves out `## Validation` on purpose. `submit` checks only
+  # that the section exists, so a body that already had one would pass the
+  # check before any work was done.
   task:  { initial: todo, body: "## Goal\n\n## Acceptance\n" }
 
 verbs:
-  # `todo` is DERIVED as the initial state: it is a `from` that is never a `to`.
+  # Start work on a task: create its branch from trunk, and a worktree to
+  # work in. Every task it depends on must be done first.
   - name: claim
     applies-to: [task]
     from: todo
     to: in_progress
     require: { neighbors: { depends_on: done } }
-    base: home                    # build against the integration ref...
-    effect: create                # ...then cut plan/task/<slug> at that commit
-    worktree: create              # declaring this is what makes `task` the unit
+    base: home
+    effect: create
+    worktree: create
 
-  # The one verb in the default set with no content: "ready for review" is a
-  # pure assertion. Its gate reads content it does not write, which is what
-  # keeps an empty declaration from being a free pass.
+  # Mark a task ready for review. It edits no file; the commit is the whole
+  # record. It first checks that the ticket on the task's branch has a
+  # `## Validation` section.
   - name: submit
     applies-to: [task]
     from: in_progress
@@ -47,6 +77,7 @@ verbs:
     require: { sections: [Validation] }
     base: own
 
+  # A reviewer's verdict. Each adds the message as a `## Review` section.
   - name: approve
     applies-to: [task]
     from: review
@@ -63,8 +94,9 @@ verbs:
     content:
       - annotate: { section: Review, body: $message }
 
-  # Hand back rather than discard: the ref is KEPT, so the partial work and
-  # the record of what was discovered both survive until a supervisor decides.
+  # Stop work on a task without finishing it, and record why in a
+  # `## Blocked` section. The task's branch and worktree stay, so the work is
+  # kept until someone resumes or abandons the task.
   - name: yield
     applies-to: [task]
     from: in_progress
@@ -73,10 +105,8 @@ verbs:
     content:
       - annotate: { section: Blocked, body: $message }
 
-  # The other half of `yield`. A supervisor who decides the ticket is still
-  # worth doing re-dispatches it here. Note the precondition needs no new
-  # operator: `base: own` on a `todo` ticket IS the definition of "yielded",
-  # since a fresh ticket has no ref and a claimed one is not `todo`.
+  # Restart a yielded task. `base: own` requires the task's branch to exist,
+  # which is what separates a yielded `todo` task from one never claimed.
   - name: resume
     applies-to: [task]
     from: todo
@@ -84,15 +114,17 @@ verbs:
     base: own
     worktree: create
 
+  # Finish a task: merge its branch into trunk and remove its worktree.
   - name: close
     applies-to: [task]
     from: approved
     to: done
     require: { self: { status: approved } }
-    base: own                     # build the declaration on the branch tip...
-    effect: merge                 # ...then merge it into home, as one ref move
+    base: own
+    effect: merge
     worktree: remove
 
+  # Finish an epic or story, once every child is done or abandoned.
   - name: close
     applies-to: [epic, story]
     from: todo
@@ -100,13 +132,12 @@ verbs:
     require: { neighbors: { children: terminal } }
     base: home
 
-  # Abandoning is how a supervisor resolves a yielded ticket when replanning
-  # is not worth it. `ticket-only` integrates the ticket -- carrying the
-  # worker's `## Blocked` rationale onto trunk -- while leaving the work
-  # itself unapplied, reachable in history so the ref can be released without
-  # destroying anything. There is no destructive variant: if a branch truly
-  # must be destroyed, delete the ref with git first and there is nothing
-  # left to preserve.
+  # End a ticket without finishing it, for example a yielded task that is no
+  # longer worth doing. The message becomes an `## Abandoned` section.
+  # `ticket-only` merges the ticket file into trunk, with its `## Blocked`
+  # and `## Abandoned` notes, but not the work. The branch's commits stay
+  # reachable in history, so deleting the branch loses nothing. To discard
+  # the work instead, delete the branch with git before abandoning.
   - name: abandon
     applies-to: [task, story, epic]
     to: abandoned
@@ -114,11 +145,14 @@ verbs:
     content:
       - annotate: { section: Abandoned, body: $message }
 
+  # Delete the file of a finished ticket. Its history stays in git.
   - name: archive
     applies-to: [task, story, epic]
     require: { self: { status: terminal } }
     content: [remove]
 
+  # The remaining verbs edit a ticket's links and change no state. $target is
+  # the slug given on the command line.
   - name: reparent
     applies-to: [story, task]
     content:
