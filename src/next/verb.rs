@@ -38,13 +38,13 @@ impl Ctx {
     ///
     /// Use [`Ctx::own_ref_short`] for anything a human reads, and for
     /// `git worktree add`, which wants a branch name rather than a ref path.
-    pub fn own_ref(&self, kind: &str, slug: &str) -> String {
-        events::own_ref(kind, slug)
+    pub fn own_ref(&self, slug: &str) -> String {
+        events::own_ref(slug)
     }
 
     /// The same ref as a branch name, for display and for `worktree add`.
-    pub fn own_ref_short(&self, kind: &str, slug: &str) -> String {
-        format!("plan/{kind}/{slug}")
+    pub fn own_ref_short(&self, slug: &str) -> String {
+        format!("planr/{slug}")
     }
 }
 
@@ -134,14 +134,9 @@ fn terminator<'a>(workflow: &'a Workflow, kind: &'a str) -> impl Fn(&str) -> boo
 pub fn state_of(ctx: &Ctx, slug: &str, bounded: bool) -> Result<(String, events::Walk), String> {
     let ticket = read_ticket_or_archived(ctx, slug)?;
     let walk = if bounded {
-        events::for_ticket(
-            slug,
-            &ticket.kind,
-            &ctx.trunk,
-            terminator(&ctx.workflow, &ticket.kind),
-        )?
+        events::for_ticket(slug, &ctx.trunk, terminator(&ctx.workflow, &ticket.kind))?
     } else {
-        events::for_ticket_unbounded(slug, &ticket.kind, &ctx.trunk)?
+        events::for_ticket_unbounded(slug, &ctx.trunk)?
     };
     let state = fold::fold_state(&ctx.workflow, &ticket.kind, &walk.events)?;
     Ok((state, walk))
@@ -158,7 +153,7 @@ pub fn state_of(ctx: &Ctx, slug: &str, bounded: bool) -> Result<(String, events:
 /// The pathspec is safe here in a way it is NOT for enumeration: an archived
 /// ticket's file was demonstrably created and deleted, so it touches the path.
 /// The lookup only runs on the miss, so a live ticket pays nothing.
-pub fn read_ticket_or_archived(ctx: &Ctx, slug: &str) -> Result<Ticket, String> {
+fn read_ticket_or_archived(ctx: &Ctx, slug: &str) -> Result<Ticket, String> {
     let path = ctx.ticket_path(slug);
     // Present-but-invalid is NOT a miss: a ticket carrying a stored `status`
     // must report that, not be silently searched for in history and then
@@ -186,7 +181,7 @@ pub fn read_ticket_or_archived(ctx: &Ctx, slug: &str) -> Result<Ticket, String> 
 /// fine with because it seeds from `initial_state` and the suffix begins with
 /// a `const`. Any caller that wanted the full event list would not be.
 fn state_at(ctx: &Ctx, slug: &str, kind: &str) -> Result<String, String> {
-    let walk = events::for_ticket(slug, kind, &ctx.trunk, terminator(&ctx.workflow, kind))?;
+    let walk = events::for_ticket(slug, &ctx.trunk, terminator(&ctx.workflow, kind))?;
     fold::fold_state(&ctx.workflow, kind, &walk.events)
 }
 
@@ -400,23 +395,18 @@ fn apply_edge(blob: &str, op: &str, field: &str, target: &str) -> Result<String,
     Ok(format!("---\n{}\n---\n{}", lines.join("\n"), split.body))
 }
 
-fn worktree_path(ctx: &Ctx, kind: &str, slug: &str) -> PathBuf {
-    PathBuf::from(
-        ctx.workflow
-            .worktrees
-            .replace("$kind", kind)
-            .replace("$slug", slug),
-    )
+fn worktree_path(ctx: &Ctx, slug: &str) -> PathBuf {
+    PathBuf::from(ctx.workflow.worktrees.replace("$slug", slug))
 }
 
 /// Run one verb. Returns a human-readable report of what it did.
 pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<String, String> {
     let ticket = read_ticket(ctx, &ctx.trunk, slug)?;
     let kind = ticket.kind.clone();
-    let own = ctx.own_ref(&kind, slug);
+    let own = ctx.own_ref(slug);
     // Everything a human reads, and `worktree add`, take the branch name; every
     // resolution takes the qualified one.
-    let own_short = ctx.own_ref_short(&kind, slug);
+    let own_short = ctx.own_ref_short(slug);
 
     let verb = ctx
         .workflow
@@ -425,7 +415,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
         .clone();
 
     // Resolved qualified; displayed short. Keeping the two apart matters more
-    // than it looks: a report that printed `refs/heads/plan/task/foo` was the
+    // than it looks: a report that printed `refs/heads/planr/foo` was the
     // visible tell that the same qualified string was reaching a comparison
     // built for branch names, in `sync_path`.
     let base_ref = match verb.base {
@@ -572,7 +562,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
                 report.push(format!("{base_display} -> {}", &commit[..7]));
             }
             if git::ref_exists(&own) {
-                let path = worktree_path(ctx, &kind, slug);
+                let path = worktree_path(ctx, slug);
                 if path.exists() {
                     git::worktree_remove(&path.to_string_lossy())?;
                     report.push(format!("removed worktree {}", path.display()));
@@ -586,7 +576,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
     // ---- workspace, which is never history ----
     match verb.worktree {
         Some(WorktreeAction::Create) => {
-            let path = worktree_path(ctx, &kind, slug);
+            let path = worktree_path(ctx, slug);
             // Idempotent, as the design says worktree actions are in both
             // directions. It matters for re-dispatch: `yield` leaves the
             // worktree standing, so a `resume` run where the worker never left
@@ -602,7 +592,7 @@ pub fn run(ctx: &Ctx, verb_name: &str, slug: &str, message: &str) -> Result<Stri
             }
         }
         Some(WorktreeAction::Remove) => {
-            let path = worktree_path(ctx, &kind, slug);
+            let path = worktree_path(ctx, slug);
             if path.exists() {
                 git::worktree_remove(&path.to_string_lossy())?;
                 report.push(format!("removed worktree {}", path.display()));

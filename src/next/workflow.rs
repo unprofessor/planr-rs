@@ -39,7 +39,7 @@ pub enum Base {
     /// an open integration branch. Trunk is the base case of that walk.
     #[default]
     Home,
-    /// The ticket's own ref, `plan/<kind>/<slug>`.
+    /// The ticket's own branch, `planr/<slug>`.
     Own,
 }
 
@@ -50,7 +50,7 @@ pub enum Effect {
     /// The commit lands on `base` and the base ref moves.
     #[default]
     Advance,
-    /// Cut `plan/<kind>/<slug>` at the new commit (atomic create-or-fail).
+    /// Cut `planr/<slug>` at the new commit (atomic create-or-fail).
     Create,
     /// Integrate the new commit into `home`.
     Merge,
@@ -182,7 +182,7 @@ pub struct Template {
 }
 
 fn default_worktrees() -> String {
-    ".plan/worktrees/$kind/$slug".to_string()
+    ".plan/worktrees/$slug".to_string()
 }
 
 #[derive(Debug, Clone)]

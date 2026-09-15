@@ -9,7 +9,8 @@
   verbs come from `.plan/workflow.yml`, and a ticket's state is read from the
   commits that declare it rather than stored in the file. Commands: `new`,
   `state`, `board`, `lifecycle`, and `do <verb>`. Every classic command is
-  unchanged.
+  unchanged. A claimed ticket works on a `planr/<slug>` branch, kept apart
+  from classic planr's `plan/<slug>` claims.
 
 - **`planr next check`** reports ticket histories `planr next` cannot read
   reliably -- a slug created twice by two clones, events whose creation is

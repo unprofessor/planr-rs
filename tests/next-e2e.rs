@@ -93,7 +93,7 @@ fn the_five_verb_loop_completes() {
     assert!(err.contains("Validation"), "unexpected refusal: {err}");
 
     // Satisfy the gate on the ticket's own branch, as a worker would.
-    let wt = dir.join(".plan/worktrees/task/wire-runner");
+    let wt = dir.join(".plan/worktrees/wire-runner");
     let ticket = wt.join(".plan/tickets/wire-runner.md");
     let body = std::fs::read_to_string(&ticket).unwrap();
     std::fs::write(&ticket, format!("{body}\n## Validation\n\ncargo test\n")).unwrap();
@@ -149,7 +149,7 @@ fn empty_declarations_are_still_found() {
     );
     ok(dir, &["next", "do", "claim", "empty-decl"]);
 
-    let wt = dir.join(".plan/worktrees/task/empty-decl");
+    let wt = dir.join(".plan/worktrees/empty-decl");
     let ticket = wt.join(".plan/tickets/empty-decl.md");
     let body = std::fs::read_to_string(&ticket).unwrap();
     std::fs::write(&ticket, format!("{body}\n## Validation\n\nnone\n")).unwrap();
@@ -160,7 +160,7 @@ fn empty_declarations_are_still_found() {
 
     // Prove the submit commit really is empty, and still counted.
     let diff = Command::new("git")
-        .args(["show", "--stat", "--format=", "plan/task/empty-decl"])
+        .args(["show", "--stat", "--format=", "planr/empty-decl"])
         .current_dir(dir)
         .output()
         .unwrap();
@@ -189,7 +189,7 @@ fn dependency_gate_blocks_claim() {
     let (found, _, _) = planr(dir, &["next", "state", "second"]);
     assert!(found);
     let refs = Command::new("git")
-        .args(["branch", "--list", "plan/task/second"])
+        .args(["branch", "--list", "planr/second"])
         .current_dir(dir)
         .output()
         .unwrap();
@@ -293,7 +293,7 @@ fn a_later_trunk_declaration_outranks_an_earlier_branch_one() {
 fn yield_with_work(dir: &Path, slug: &str) {
     ok(dir, &["next", "new", "task", slug, "Work in flight"]);
     ok(dir, &["next", "do", "claim", slug]);
-    let wt = dir.join(format!(".plan/worktrees/task/{slug}"));
+    let wt = dir.join(format!(".plan/worktrees/{slug}"));
     std::fs::write(wt.join("partial.rs"), "half an implementation\n").unwrap();
     git(&wt, &["add", "-A"]);
     git(&wt, &["commit", "-m", "wip"]);
@@ -345,7 +345,7 @@ fn abandoning_work_in_flight_preserves_the_rationale_and_the_work() {
     assert!(log.contains("wip"), "work not reachable from trunk: {log}");
 
     // 4. The ref is released, safely, because of 3.
-    let refs = show_args(dir, &["branch", "--list", "plan/task/held"]);
+    let refs = show_args(dir, &["branch", "--list", "planr/held"]);
     assert!(refs.trim().is_empty(), "ref survived: {refs}");
 }
 
@@ -381,7 +381,7 @@ fn a_yielded_ticket_can_be_resumed() {
     assert!(ok(dir, &["next", "state", "cache"]).contains("in_progress"));
 
     // The partial work survives -- resuming is not re-claiming.
-    let wt = dir.join(".plan/worktrees/task/cache");
+    let wt = dir.join(".plan/worktrees/cache");
     assert!(wt.join("partial.rs").exists(), "work lost on resume");
 
     // And the loop closes: a resumed ticket goes on through the normal path.
@@ -423,7 +423,7 @@ fn board_reports_every_ticket_in_its_own_state() {
     ok(dir, &["next", "do", "claim", "working"]);
 
     ok(dir, &["next", "do", "claim", "finished"]);
-    let wt = dir.join(".plan/worktrees/task/finished");
+    let wt = dir.join(".plan/worktrees/finished");
     let ticket = wt.join(".plan/tickets/finished.md");
     let body = std::fs::read_to_string(&ticket).unwrap();
     std::fs::write(&ticket, format!("{body}\n## Validation\n\nchecked\n")).unwrap();
