@@ -4,23 +4,17 @@
 > today -- epics, stories and tasks, with status in frontmatter. **`next`**
 > means the model described here, reached through `planr next`. Neither is a
 > release number: `next` ships in whichever release it is ready for, and no
-> other feature waits on it. The **`v1` in the schema URL** versions the schema
-> *language*, and moves only when the key set or a primitive's meaning
-> changes, never with a planr release.
+> other feature waits on it.
 >
-> **Status:** design exploration (pre-1.0). The schema language is pinned:
-> `schemas/planr/v1/1.0.0/planr.schema.json` is published at
-> `https://schemas.columnzero.com/planr/v1/1.0.0/planr.schema.json` and
-> validated in CI against a fixture corpus. A throwaway engine spike lives
-> behind the `next` cargo feature (`src/next/**`); it is reference material for
-> what the model costs in practice, not a foundation.
+> **Status:** design exploration (pre-1.0). planr publishes no schema for the
+> workflow: the engine validates a workflow when it loads, and that is the
+> only validation. The engine lives behind the `next` cargo feature
+> (`src/next/**`) and is reached through `planr next`.
 >
-> **Two documents, two names.** The *workflow* is a project's
-> `.plan/workflow.yml` -- its kinds, verbs, and templates. The *planr schema* is
-> planr's published validator for workflows, `planr.schema.json`. Sections
-> written before the names were separated say "schema" for both; read it as
-> *workflow* unless the text says *published* or cites the JSON document. See
-> [the note](#the-planr-schema-and-the-workflow).
+> **Terms.** The *workflow* is a project's `.plan/workflow.yml` -- its kinds,
+> verbs, and templates. Older sections say "schema" for it, and some describe
+> a published JSON Schema for workflows that planr does not ship; see
+> [the note](#the-workflow-has-no-published-schema).
 >
 > This document says what the model is **for**.
 > [`semantics.md`](semantics.md) says what it **means** -- the well-formedness
@@ -1263,12 +1257,12 @@ known boundary.
 5. ~~Axes schema surface~~ — **resolved by dissolution** (§3.2). Storage-side =
    ownership; all edges are one mechanism differentiated by a semantics tag; a
    new axis is a name + tag. Hook contract nailed in §3.9.
-6. ~~Schema location & loading~~ — **resolved** (§3.5). The schema is
-   `.plan/workflow.yml`, tracked in the same history as the events, declaring its
-   language by URL (`$schema: https://schemas.columnzero.com/planr/v1/planr.schema.json`).
-   Every agent reads the same schema because they read the same *commit*; the
-   published document is a JSON Schema 2020-12 validator shipped in-tree and
-   never dereferenced at runtime. Which presets ship is folded into §7.
+6. ~~Schema location & loading~~ — **resolved** (§3.5). The workflow is
+   `.plan/workflow.yml`, tracked in the same history as the events, so every
+   agent reads the same workflow because they read the same *commit*. planr
+   publishes no schema for it; see
+   [the note](#the-workflow-has-no-published-schema). Which presets ship is
+   folded into §7.
 7. ~~`unit` = strictly the terminal kind, or any childless node?~~ —
    **resolved by a third answer** (§3.1). Neither: the unit is a declared *cut*
    across the tree, and it is derived rather than declared — the kind whose
@@ -1306,7 +1300,7 @@ known boundary.
 13. **Workflow evolution and ticket migration** -- see
     [the note below](#workflow-evolution-is-not-yet-designed).
 14. ~~**"Schema" names two different documents**~~ -- **resolved** by naming
-    them apart; see [the note below](#the-planr-schema-and-the-workflow).
+    them apart; see [the note below](#the-workflow-has-no-published-schema).
 
 ### Workflow evolution is not yet designed
 
@@ -1383,44 +1377,41 @@ What remains genuinely open:
   trailers declares its verb for each ticket it names (and one with several
   `Planr-Verb` trailers declares nothing, since it does not say which applies).
   What stays open is which shape `migrate` writes.
-- **Does the workflow need a content version?** There is none today: `$schema` is
-  the published validator's URL, not a version of this project's rules. A
-  migration has nothing to compare against, and no way to say which migration it
-  is.
+- **Does the workflow need a content version?** There is none today, so a
+  migration has nothing to compare against, and no way to say which migration
+  it is.
 - **What declares the mapping?** `done -> complete` has to be written somewhere
-  a tool can read, which is a new workflow key and therefore a change to the
-  planr schema.
+  a tool can read, which means a new workflow key.
 - **Is migration ever automatic?** A rename could in principle be inferred; a
   change of meaning cannot. Inferring the first and not the second is a sharper
   distinction than it looks.
 
-### The planr schema and the workflow
+### The workflow has no published schema
 
-"Schema" named two artifacts with different owners, lifecycles, and migration
-stories. They have different names now:
+planr publishes no schema for `.plan/workflow.yml`. The engine validates a
+workflow when it loads -- `src/next/workflow.rs`, driven by the tables in
+[the semantics](semantics.md#2-well-formedness) -- and that is the only
+validation.
 
-| | **planr schema** | **workflow** |
-| --- | --- | --- |
-| what | a JSON Schema 2020-12 document defining what a valid workflow looks like | `kinds`, `verbs`, `templates` -- the lifecycle this backlog runs |
-| file | `planr.schema.json`, shipped in-tree | `.plan/workflow.yml` |
-| code | `tests/schema.rs` validates against it | `src/next/workflow.rs` loads it as `Workflow` |
-| owner | the planr project | the project using planr |
-| versioned by | planr releases, via the `$schema` URL (`.../planr/v1/planr.schema.json`) | the project's own git history |
-| changes when | the verb language gains or loses a feature | a team changes how it works |
-| migration means | every backlog's `.plan/workflow.yml` may need rewriting | one backlog's tickets may need remapping |
+A hand-written JSON Schema would be a second copy of rules the engine already
+enforces. It cannot express the rules that matter most, such as a verb's
+`applies-to` naming a declared kind, and keeping the two copies in step takes a
+test of its own. What it offers is editor support: validation and completion
+through the YAML language server. If someone wants that, generate the schema
+from the engine's Rust types (for example with `schemars`) rather than writing
+it by hand, so there is one source of truth.
 
-[Workflow evolution](#workflow-evolution-is-not-yet-designed) concerns the
-**workflow** only. A change to the **planr schema** is a tool-upgrade problem,
-and the two move independently: a project can sit on an old verb language
-indefinitely, and a planr release must not silently reinterpret a backlog that
-has not opted in.
+A change to the verb language itself is a planr upgrade, and it moves
+independently of any one project's workflow: a project can stay on an old
+language indefinitely, and a planr release must not silently reinterpret a
+backlog that has not opted in.
 
-`config` was the other candidate for the file's name, and it loses on meaning: a
-config file invites edits made without regard for consequences, and editing
-this one changes what a backlog's history means.
+The project's file is named *workflow*. `config` was the other candidate, and
+it loses on meaning: a config file invites edits made without regard for
+consequences, and editing this one changes what a backlog's history means.
 
-Older sections of this document say "schema" for both. Read it as *workflow*
-unless the text says *published* or cites `planr.schema.json`.
+Older sections of this document say "schema" for the workflow, and some
+describe a published JSON Schema; read them with that in mind.
 
 ## 9. Fresh-eyes review findings (round 1, 2026-08-21)
 
