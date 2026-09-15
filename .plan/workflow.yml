@@ -12,7 +12,7 @@
 #           planr computes it from the ticket's commits; no file stores it.
 #   verb    A named operation on a ticket. Each run makes exactly one commit.
 #   trunk   The main branch.
-#   branch  A ticket's own branch, plan/<kind>/<slug>, which holds its work
+#   branch  A ticket's own branch, planr/<slug>, which holds its work
 #           while the ticket is in progress.
 #
 # Running a verb
@@ -37,7 +37,7 @@
 kinds: [epic, story, task]
 
 # Where planr creates the worktree for a task being worked on.
-worktrees: .plan/worktrees/$kind/$slug
+worktrees: .plan/worktrees/$slug
 
 templates:
   # The body each new ticket starts with.
