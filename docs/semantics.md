@@ -146,8 +146,7 @@ it is the only floor such a ticket has.
 A verb of that name would end every walk at itself, and it would do so
 silently: the runner reads a verb's before and after states through the same
 bounded walk, so even a `to`-less verb would report itself as a transition to
-the initial state. The rule is enforced at load, in the implementation and in
-the published schema alike.
+the initial state. The rule is enforced when the workflow loads.
 
 ### 2.3 Derived properties of a kind
 
@@ -389,10 +388,9 @@ Named so that breaking one is a decision rather than an accident.
    [not yet designed](typed-graph-design.md#workflow-evolution-is-not-yet-designed).
 
    *Workflow* means this project's `.plan/workflow.yml`; *planr schema* means
-   only planr's published validator, `planr.schema.json`. They version
-   independently; see
-   [the note](typed-graph-design.md#the-planr-schema-and-the-workflow).
-5. **Trailers survive.** Events are attributable because commit messages are
+   *Workflow* means this project's `.plan/workflow.yml`. planr publishes no
+   separate schema for it; the engine's own validation is the only one. See
+   [the note](typed-graph-design.md#the-workflow-has-no-published-schema).
    immutable; a history rewrite that drops trailers drops events.
 
 ## 7. What this does not cover

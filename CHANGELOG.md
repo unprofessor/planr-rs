@@ -11,12 +11,6 @@
   `state`, `board`, `lifecycle`, and `do <verb>`. Every classic command is
   unchanged.
 
-- **The planr schema, v1.** `schemas/planr/v1/1.0.0/planr.schema.json` is a
-  JSON Schema document describing the workflow file
-  (`.plan/workflow.yml`), ticket frontmatter, and planr's commit trailers.
-  `cargo test` validates it, a reference workflow, and a fixture corpus. It
-  changes nothing about how planr runs today.
-
 - **`planr serve`** renders the backlog as linked HTML on a loopback web
   server: the board, a page per ticket, and the lint report. Wiki-links in a
   ticket body become navigation, and each ticket page carries the three

@@ -1,2 +1,0 @@
-# A schema with no verbs derives no lifecycle at all.
-kinds: [task]
