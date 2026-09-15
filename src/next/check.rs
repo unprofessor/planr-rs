@@ -44,9 +44,6 @@ pub enum FindingKind {
     /// The authority rule is deciding: a live branch shadows a trunk-lane
     /// declaration. Correct, deliberate, and worth a human's attention.
     Shadowed,
-    /// A branch stands for the slug and its kind cannot be read, so which ref
-    /// answers is not knowable. Reported rather than guessed.
-    Unresolvable,
 }
 
 impl FindingKind {
@@ -56,7 +53,6 @@ impl FindingKind {
             FindingKind::Severed => "severed",
             FindingKind::Divergent => "divergent",
             FindingKind::Shadowed => "shadowed",
-            FindingKind::Unresolvable => "unresolvable",
         }
     }
 
@@ -98,23 +94,13 @@ fn union_by_ticket(
     events::bucket_over(&refs)
 }
 
-/// Each slug's kind, determined the way the READER determines it.
+/// Each ticket's kind, for every ticket that still has a file on trunk.
 ///
-/// A ticket on trunk supplies its own; a ticket archival removed from trunk
-/// still folds, because `read_ticket_or_archived` recovers the kind from the
-/// last commit that had the file -- so a check that stopped at trunk was asking
-/// a narrower question than the fold, and certified a repository whose state
-/// was being read off a branch it never looked at.
-///
-/// The recovery runs only where the answer can differ: a slug with no branch
-/// standing resolves to trunk whatever its kind is. That keeps the cost at two
-/// processes per archived-ticket-with-a-live-branch, which is the anomaly
-/// itself and normally none.
-fn ticket_kinds(
-    ctx: &Ctx,
-    slugs: impl Iterator<Item = String>,
-    unintegrated: &BTreeSet<String>,
-) -> Result<BTreeMap<String, String>, String> {
+/// The kind selects which verbs a ticket's declarations resolve against. An
+/// archived ticket has no file and gets no entry, and [`declares`] resolves
+/// its declarations without one. Finding a ticket's branch needs only the
+/// slug.
+fn ticket_kinds(ctx: &Ctx) -> Result<BTreeMap<String, String>, String> {
     let dir = format!("{}/tickets", ctx.plan_dir);
     let files = crate::git::ls_tree_md(&ctx.trunk, &dir)?;
     let specs: Vec<String> = files.iter().map(|f| format!("{}:{f}", ctx.trunk)).collect();
@@ -130,23 +116,10 @@ fn ticket_kinds(
         };
         let Some(blob) = blob else { continue };
         // A ticket that will not parse is not this check's business -- board
-        // already reports it, and guessing a kind here would invent an
-        // authority ref that names nothing.
+        // already reports it, and guessing a kind here would resolve its
+        // verbs against the wrong machine.
         if let Ok(t) = super::verb::parse_ticket(slug, &blob) {
             kinds.insert(slug.to_string(), t.kind);
-        }
-    }
-
-    for slug in slugs {
-        if kinds.contains_key(&slug) {
-            continue;
-        }
-        let suffix = format!("/{slug}");
-        if !unintegrated.iter().any(|r| r.ends_with(&suffix)) {
-            continue;
-        }
-        if let Ok(t) = super::verb::read_ticket_or_archived(ctx, &slug) {
-            kinds.insert(slug, t.kind);
         }
     }
     Ok(kinds)
@@ -190,7 +163,7 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
 
     let unintegrated = events::unintegrated(&ctx.trunk)?;
     let buckets = union_by_ticket(&ctx.trunk, &unintegrated)?;
-    let kinds = ticket_kinds(ctx, buckets.keys().cloned(), &unintegrated)?;
+    let kinds = ticket_kinds(ctx)?;
     let mut findings = Vec::new();
 
     // Which of these commits trunk cannot reach, for the whole backlog in one
@@ -245,33 +218,9 @@ pub fn run(ctx: &Ctx) -> Result<Vec<Finding>, String> {
         }
 
         // ---- ordering: is the fold's answer the graph's answer? ----
-        //
-        // A branch stands for this slug and its kind could not be read, so which
-        // ref answers is not knowable: the kind is what names the branch. Say
-        // that, rather than resolving to trunk and reporting trunk as fact --
-        // `authoritative_ref` cannot distinguish "no branch" from "cannot tell",
-        // and only the caller has the evidence.
-        if kind.is_none()
-            && unintegrated
-                .iter()
-                .any(|r| r.ends_with(&format!("/{slug}")))
-        {
-            findings.push(Finding {
-                slug: slug.clone(),
-                kind: FindingKind::Unresolvable,
-                detail:
-                    "a branch stands for this slug and its ticket cannot be read, so its kind is \
-                     unknown -- and the kind is what names the branch the authority rule looks \
-                     for. Which ref answers for this ticket cannot be determined until the ticket \
-                     parses"
-                        .to_string(),
-            });
-            continue;
-        }
 
         // The reader's own authority rule, through the reader's own function.
-        let ref_ =
-            events::authoritative_ref(&ctx.trunk, &unintegrated, kind.map(String::as_str), slug);
+        let ref_ = events::authoritative_ref(&ctx.trunk, &unintegrated, slug);
 
         // What the fold can actually see, in the same one-ref terms it reads.
         let unreachable: BTreeSet<String> = if ref_ == ctx.trunk {

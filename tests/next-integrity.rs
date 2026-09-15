@@ -472,16 +472,11 @@ fn a_declaration_a_live_branch_shadows_is_reported_without_failing() {
 }
 
 /// The check has to resolve authority the way the READER resolves it, including
-/// for a ticket whose file archival deleted.
+/// for a ticket whose file archival deleted. A branch is named by the slug
+/// alone, so neither needs the archived ticket's kind to find it.
 ///
-/// `read_ticket_or_archived` recovers an archived ticket's kind from the last
-/// commit that had the file, precisely so the ticket still folds -- and the kind
-/// is what names its branch. A check that took kinds from trunk alone had no
-/// entry for an archived slug, resolved it to trunk, and certified a repository
-/// whose state the fold was reading off a branch the check never looked at.
-///
-/// Reachable in the workflow the check exists to police: verbs delete the ref on
-/// integration, so a surviving branch means one restored from a reflog or
+/// Reachable in the workflow the check exists to police: verbs delete the branch
+/// on integration, so a surviving one means one restored from a reflog or
 /// re-fetched from a clone that still had it.
 #[test]
 fn an_archived_ticket_whose_branch_survives_is_not_certified_clean() {
@@ -498,17 +493,11 @@ fn an_archived_ticket_whose_branch_survives_is_not_certified_clean() {
     // so a surviving one means a reflog restore or a re-fetch from a clone that
     // still had it. Cut where it was, before the retirement, so trunk's
     // declarations are not reachable from it.
-    git(dir, &["branch", "plan/task/foo", &genesis]);
-    declare(
-        dir,
-        "plan/task/foo",
-        "submit",
-        "foo",
-        "2026-01-01T00:00:00Z",
-    );
+    git(dir, &["branch", "planr/foo", &genesis]);
+    declare(dir, "planr/foo", "submit", "foo", "2026-01-01T00:00:00Z");
 
-    // The reader recovers the kind from history, finds the branch, and folds
-    // from it -- trunk says `abandoned`.
+    // The reader finds the branch by slug and folds from it -- trunk says
+    // `abandoned`.
     assert_eq!(state(dir, "foo"), "review");
 
     // Naming the ref is the assertion: the check has to have resolved the same
@@ -516,43 +505,9 @@ fn an_archived_ticket_whose_branch_survives_is_not_certified_clean() {
     // repository where trunk answers -- which is the wrong repository.
     let (_, report) = check(dir);
     assert!(
-        report.contains("refs/heads/plan/task/foo answers for this ticket"),
+        report.contains("refs/heads/planr/foo answers for this ticket"),
         "the check must resolve the same ref the fold does, or it reports on a state nobody \
          is reading:\n{report}"
-    );
-}
-
-/// When the kind cannot be read, the check says so rather than naming a ref.
-///
-/// The kind is what names a ticket's branch, so a ticket that will not parse
-/// leaves the authority rule with no question to ask. Resolving that to trunk
-/// and reporting trunk as the answering ref states as fact something that is
-/// false whenever a branch is standing -- and the advice that goes with it
-/// ("applied when the two are integrated") is wrong too.
-#[test]
-fn a_ticket_whose_kind_cannot_be_read_is_not_reported_against_trunk() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path();
-    setup(dir);
-    ok(dir, &["next", "new", "task", "foo", "Work"]);
-    ok(dir, &["next", "do", "claim", "foo", ""]);
-
-    // A stored `status` is the one field the model forbids, so the ticket no
-    // longer parses and its kind is unreadable.
-    let path = dir.join(".plan/tickets/foo.md");
-    let blob = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, blob.replacen("---\n", "---\nstatus: todo\n", 1)).unwrap();
-    git(dir, &["add", "-A"]);
-    git(dir, &["commit", "-m", "break it"]);
-
-    let (_, report) = check(dir);
-    assert!(
-        report.contains("unresolvable foo"),
-        "the check cannot name the answering ref without the kind, so it must say that:\n{report}"
-    );
-    assert!(
-        !report.contains("main answers for this ticket"),
-        "trunk does not answer -- refs/heads/plan/task/foo is standing and unintegrated:\n{report}"
     );
 }
 
