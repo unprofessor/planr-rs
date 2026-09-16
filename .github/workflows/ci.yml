@@ -51,6 +51,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          # The `planr next` streaming-log tests walk this repository's own history to
+          # prove a walk stops early. The default `fetch-depth: 1` leaves one
+          # commit, which is not enough history to cut, so those tests skip
+          # themselves and CI covers nothing. fmt and clippy do not read
+          # history and keep the shallow default.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
           toolchain: stable

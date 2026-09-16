@@ -4,6 +4,14 @@
 
 ### Added
 
+- **`planr next`, an experimental typed-graph model**, on by default behind the `next`
+  cargo feature. Tickets live in `.plan/tickets/<slug>.md`, their kinds and
+  verbs come from `.plan/workflow.yml`, and a ticket's state is read from the
+  commits that declare it rather than stored in the file. Commands: `new`,
+  `state`, `board`, `lifecycle`, and `do <verb>`. Every classic command is
+  unchanged. A claimed ticket works on a `planr/<slug>` branch, kept apart
+  from classic planr's `plan/<slug>` claims.
+
 - **`planr serve`** renders the backlog as linked HTML on a loopback web
   server: the board, a page per ticket, and the lint report. Wiki-links in a
   ticket body become navigation, and each ticket page carries the three
