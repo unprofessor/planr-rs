@@ -12,6 +12,12 @@
   unchanged. A claimed ticket works on a `planr/<slug>` branch, kept apart
   from classic planr's `plan/<slug>` claims.
 
+- **`planr next check`** reports ticket histories `planr next` cannot read
+  reliably -- a slug created twice by two clones, events whose creation is
+  missing, and declarations whose order depends on which machine's clock ran
+  later -- and exits non-zero when it finds one. It reports and never
+  repairs.
+
 - **`planr serve`** renders the backlog as linked HTML on a loopback web
   server: the board, a page per ticket, and the lint report. Wiki-links in a
   ticket body become navigation, and each ticket page carries the three

@@ -189,6 +189,28 @@ pub fn for_each_ref(prefix: &str) -> Result<Vec<Ref>, String> {
         .collect())
 }
 
+/// The commits in `commits` that no other commit in `commits` can reach --
+/// `git merge-base --independent`, in one process.
+///
+/// The maximal elements under ancestry. A fold's answer is decided by one of
+/// these and never by anything below them: `--date-order` emits a commit before
+/// all of its ancestors, so the newest state-changing declaration a walk meets
+/// is always maximal. Which of them it meets is a committer clock's choice, so
+/// they are exactly the set that has to agree for a state to be well defined.
+pub fn merge_base_independent(commits: &[String]) -> Result<Vec<String>, String> {
+    if commits.len() < 2 {
+        return Ok(commits.to_vec());
+    }
+    let mut args: Vec<&str> = vec!["merge-base", "--independent"];
+    args.extend(commits.iter().map(String::as_str));
+    Ok(run(&args)?
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect())
+}
+
 /// Bring the invoking worktree in line for the one path a verb authored.
 ///
 /// Verbs build commits with plumbing and move a ref, which never touches a
@@ -448,7 +470,8 @@ pub fn count_unreachable(base: &str, tip: &str) -> Result<usize, String> {
 ///
 /// An empty `includes` returns early to save a process, not for correctness:
 /// `git rev-list --not <ref>` exits 0 with no output. An empty backlog reaches
-/// it on every command.
+/// it on every command. Contrast [`merge_base_independent`], whose guard IS
+/// required -- `merge-base --independent` with no arguments exits 1.
 pub fn rev_list(includes: &[String], excludes: &[String]) -> Result<Vec<String>, String> {
     if includes.is_empty() {
         return Ok(Vec::new());
