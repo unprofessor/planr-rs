@@ -484,7 +484,7 @@ fn main() {
             if ref_.is_none() {
                 warn_if_plan_dir_missing(&cli.plan_dir);
             }
-            if let Err(e) = serve::run(port, ref_, &cli.plan_dir) {
+            if let Err(e) = serve::run(port, ref_, &cli.plan_dir, &cli.trunk) {
                 fail(&e);
             }
         }

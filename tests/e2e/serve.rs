@@ -400,15 +400,36 @@ fn test_e2e_serve_ticket_status_is_one_badge() {
         field.contains("class=\"st st-in_progress\""),
         "the field shows trunk's status rather than the claiming branch's: {field}"
     );
-    // Both sources, each named, each status a real pill -- the same classes
-    // the field uses, so a status reads as a status at a glance.
+    // Both sources named the same way -- a branch column reads as branch names,
+    // with a tag saying which one is trunk rather than the word standing in for
+    // a name. Each status is a real pill, the same classes the field uses.
     assert!(
-        pop.contains("<code>plan/t1</code>") && pop.contains("<code>trunk</code>"),
-        "the hover-over does not name both sources: {pop}"
+        pop.contains("<code>plan/t1</code>"),
+        "the hover-over does not name the claiming branch: {pop}"
+    );
+    assert!(
+        pop.contains("<code>main</code> <span class=\"role\">trunk</span>"),
+        "the hover-over does not name trunk's branch and mark its role: {pop}"
     );
     assert!(
         pop.contains("class=\"st st-in_progress\"") && pop.contains("class=\"st st-todo\""),
         "the hover-over does not badge both reported statuses: {pop}"
+    );
+}
+
+#[test]
+fn test_e2e_serve_names_the_trunk_branch_it_was_given() {
+    let td = tempfile::tempdir().unwrap();
+    seed_serve_repo(td.path());
+    claim_t1_on_a_branch(td.path());
+    // The repo's trunk is still `main`; the flag is what the page reports, so a
+    // backlog whose trunk is called something else says so.
+    let s = start(td.path(), &["--port", "0", "--trunk", "mainline"]);
+
+    let (_, body) = get(s.port, "/t/t1");
+    assert!(
+        body.contains("<code>mainline</code> <span class=\"role\">trunk</span>"),
+        "the hover-over ignores --trunk and hardcodes a name: {body}"
     );
 }
 

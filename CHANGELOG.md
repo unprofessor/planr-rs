@@ -19,7 +19,8 @@
   title, parent, dependencies, status and body all answer what was true before
   anyone started. A ticket page names the branch it read the file from. Where
   the branch and trunk disagree about the status, a hover-over table names
-  every source and what it reports, the branch first and trunk second; the
+  every source and what it reports, the claiming branch first and trunk --
+  named by `--trunk`, and tagged as the trunk branch -- second; the
   board carries the same disagreement in its badge's hover text rather than
   marking the row with an asterisk.
 
