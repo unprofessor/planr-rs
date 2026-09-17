@@ -37,7 +37,7 @@ const WORKERS: usize = 4;
 ///
 /// `port` 0 asks the OS for a free one, which is the default: the port is
 /// printed either way, so a fixed one is only needed to keep a bookmark alive.
-pub fn run(port: u16, ref_: Option<String>, plan_dir: &str) -> Result<(), String> {
+pub fn run(port: u16, ref_: Option<String>, plan_dir: &str, trunk: &str) -> Result<(), String> {
     // Loopback, never 0.0.0.0. The backlog is repository content, and binding
     // it to every interface would publish an unauthenticated copy of it to the
     // network the moment someone runs this on a shared machine. Do not widen
@@ -60,6 +60,7 @@ pub fn run(port: u16, ref_: Option<String>, plan_dir: &str) -> Result<(), String
     let ctx = Arc::new(Context {
         ref_,
         plan_dir: plan_dir.to_string(),
+        trunk: trunk.to_string(),
     });
 
     let mut workers = Vec::new();
@@ -84,6 +85,11 @@ pub fn run(port: u16, ref_: Option<String>, plan_dir: &str) -> Result<(), String
 struct Context {
     ref_: Option<String>,
     plan_dir: String,
+    /// What the trunk branch is called here -- `--trunk`, or `main`.
+    ///
+    /// Read only to name the branch a page is talking about. Nothing here
+    /// checks out or reads a ref by this name.
+    trunk: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +167,8 @@ struct Snapshot {
     /// Only the pages that report the disagreement need it. Do not resolve a
     /// status from here -- `tickets` already holds the resolved one.
     trunk_status: HashMap<String, String>,
+    /// The name trunk goes by here, for the pages that name their source.
+    trunk: String,
     /// Ticket files found, read or not -- see `board::TrunkTickets`.
     ticket_files: usize,
 }
@@ -198,6 +206,7 @@ impl Snapshot {
             tickets,
             branches,
             trunk_status,
+            trunk: ctx.trunk.clone(),
             ticket_files: read.ticket_files,
         }
     }
@@ -432,7 +441,7 @@ fn page_ticket(t: &ParsedTicket, snap: &Snapshot, index: &Index) -> String {
     body.push_str(&format!(
         "<dt>status</dt><dd>{}{}</dd>",
         status_badge(&t.status),
-        status_reports(claimed, trunk)
+        status_reports(claimed, trunk, &snap.trunk)
     ));
     body.push_str(&format!(
         "<dt>parent</dt><dd>{}</dd>",
@@ -777,14 +786,16 @@ fn status_badge_noted(status: &str, note: Option<&str>) -> String {
 /// overwrites when it merges.
 ///
 /// Branch and status are the columns because they are the pair a reader acts
-/// on: which branch to go check out, and what its task file claims there. The
-/// statuses are real badges -- the same pill the field uses, so a reviewing
-/// branch reads as reviewing rather than as anonymous text.
+/// on: which branch to go check out, and what its task file claims there. Both
+/// rows name a branch, trunk included -- a column of branch names with the word
+/// `trunk` in it asks the reader to translate. The tag beside the name says
+/// which role it plays. The statuses are real badges -- the same pill the field
+/// uses, so a reviewing branch reads as reviewing rather than as anonymous text.
 ///
 /// `tabindex` is not decoration: hover is the only other way in, and a hover
 /// nobody can reach on a phone or by keyboard hides the table from half the
 /// readers. Keep it, and keep the `:focus` rules that go with it.
-fn status_reports(claimed: Option<&BranchStatus>, trunk: &str) -> String {
+fn status_reports(claimed: Option<&BranchStatus>, trunk: &str, trunk_branch: &str) -> String {
     let b = match claimed {
         Some(b) => b,
         None => return String::new(),
@@ -793,10 +804,11 @@ fn status_reports(claimed: Option<&BranchStatus>, trunk: &str) -> String {
         " <div class=\"reports\" tabindex=\"0\">2 reports\
          <div class=\"pop\"><table><thead><tr><th>branch</th><th>status</th></tr>\
          </thead><tbody><tr><td><code>{}</code></td><td>{}</td></tr>\
-         <tr><td><code>trunk</code></td><td>{}</td></tr>\
+         <tr><td><code>{}</code> <span class=\"role\">trunk</span></td><td>{}</td></tr>\
          </tbody></table></div></div>",
         escape(&b.branch),
         status_badge(b.status.display()),
+        escape(trunk_branch),
         status_badge(trunk)
     )
 }
@@ -969,6 +981,8 @@ box-shadow:0 4px 14px var(--shadow)}\
 .reports .pop table{display:table;width:auto}\
 .reports .pop th,.reports .pop td{padding:3px 14px 3px 0;white-space:nowrap}\
 .reports .pop tr:last-child td{border-bottom:none}\
+.role{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);\
+border:1px solid var(--line);border-radius:3px;padding:0 4px;vertical-align:1px}\
 dl.meta{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:14px 0}\
 dl.meta dt{color:var(--dim);font-size:12px;text-transform:uppercase;\
 letter-spacing:.05em}\
